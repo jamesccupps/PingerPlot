@@ -5,7 +5,7 @@
 - S2: a session declaring a huge sample list is clamped on load
 All deterministic: no real sockets, threads, or network.
 """
-from pingerplot import icmp
+from pingerplot import icmp, monitor
 from pingerplot.monitor import MAX_LOAD_HISTORY, Monitor
 
 
@@ -51,4 +51,20 @@ def test_load_dict_caps_sample_history():
     assert len(m._hops) == 1
     assert m._hops[0].samples.maxlen == MAX_LOAD_HISTORY
     assert len(m._hops[0].samples) == MAX_LOAD_HISTORY     # truncated, not OOM
+    m.shutdown()
+
+
+def test_probe_log_rotates_at_cap(tmp_path, monkeypatch):
+    monkeypatch.setattr(monitor, "MAX_LOG_BYTES", 200)     # tiny cap to force a roll
+    log = tmp_path / "probe.csv"
+    m = Monitor()
+    m.log_path = str(log)
+    m._open_log()
+    r = icmp.PingResult(icmp.IP_SUCCESS, 5.0, "1.2.3.4", True)
+    for _ in range(60):
+        m._log_probe(1, r)
+    m._close_log()
+    assert (tmp_path / "probe.1.csv").exists()   # rotated backup created
+    assert log.exists()                          # fresh current log re-created
+    assert log.stat().st_size < 5000             # current is small after the roll
     m.shutdown()

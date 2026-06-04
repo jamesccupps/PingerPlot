@@ -44,6 +44,7 @@ GROW_PROBE_SPAN = 8       # extra TTLs to probe when looking for a longer route
 UNREACHED_BEFORE_GROW = 3  # consecutive dest-miss rounds before probing deeper
 FINAL_HOP_TTL = 255        # TTL used to ping the destination directly
 MAX_LOAD_HISTORY = 50_000  # cap a loaded session's per-hop ring buffer (DoS guard)
+MAX_LOG_BYTES = 25 * 1024 * 1024  # roll the probe CSV past ~25 MB (one backup kept)
 
 
 def _build_payload(size: int) -> bytes:
@@ -351,7 +352,31 @@ class Monitor:
             fh.write(f"{now:.3f},{iso},{self._round},{ttl},{r.address or ''},{rtt},{r.status}\n")
             fh.flush()
         except OSError:
+            return
+        self._rotate_log_if_needed()
+
+    def _rotate_log_if_needed(self) -> None:
+        """Roll the probe CSV over once it passes MAX_LOG_BYTES so an unattended
+        multi-week run can't fill the disk. Keeps a single backup
+        (``log.csv`` -> ``log.1.csv``); best-effort, skipped on any error."""
+        fh = self._log_fh
+        if fh is None:
+            return
+        try:
+            if fh.tell() < MAX_LOG_BYTES:
+                return
+        except OSError:
+            return
+        self._close_log()
+        try:
+            root, ext = os.path.splitext(self.log_path)
+            backup = f"{root}.1{ext}"
+            if os.path.exists(backup):
+                os.remove(backup)
+            os.replace(self.log_path, backup)
+        except OSError:
             pass
+        self._open_log()   # reopen fresh (writes a new header)
 
     # --- worker ------------------------------------------------------------
     def _notify(self) -> None:
