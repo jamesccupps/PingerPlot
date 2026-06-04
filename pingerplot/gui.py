@@ -710,6 +710,8 @@ class App:
         self._activate(iid)
         mon = self._monitors[iid]
         menu = tk.Menu(self.summary_tree, tearoff=0)
+        menu.add_command(label="Edit settings…", command=lambda: self._edit_target(iid))
+        menu.add_separator()
         if mon.running and not mon.paused:
             menu.add_command(label="Pause", command=lambda: self._pause_target(iid))
         elif mon.running and mon.paused:
@@ -734,6 +736,36 @@ class App:
         if mon is not None:
             mon.resume()
         self._refresh_once()
+
+    def _load_target_into_controls(self, name: str) -> None:
+        """Load a target's *own* engine/alert settings back into the toolbar so
+        you can see and re-apply them — settings are stored per-target (set when
+        you Add / Start), not shared, so this is how you inspect/change one."""
+        mon = self._monitors.get(name)
+        if mon is None:
+            return
+        self.target_var.set(name)
+        self.interval_var.set(f"{mon.interval:g}")
+        self.maxhops_var.set(str(mon.max_hops))
+        self.timeout_var.set(str(mon.timeout_ms))
+        self.psize_var.set(str(mon.packet_size))
+        self.senddelay_var.set(str(mon.send_delay_ms))
+        self.port_var.set(str(mon.port))
+        self.packettype_var.set(mon.packet_type.upper())
+        self.logpath_var.set(mon.log_path)
+        self.resolve_var.set(mon.resolve_names)
+        self.finalhop_var.set(mon.final_hop_only)
+        self.alerts_var.set(mon.alert_enabled)
+        self.alert_loss_var.set(f"{mon.alert_loss_pct:g}")
+        self.alert_lat_var.set(f"{mon.alert_latency_ms:g}")
+        self.alert_win_var.set(str(mon.alert_window))
+        self.alert_sound_var.set(mon.alert_sound)
+
+    def _edit_target(self, name: str) -> None:
+        """Inspect/change one target's settings: load them into the controls and
+        open the engine dialog. Press Add / Start to re-apply (restarts it)."""
+        self._load_target_into_controls(name)
+        self._open_engine_dialog()
 
     def _on_close(self) -> None:
         self._save_settings()
