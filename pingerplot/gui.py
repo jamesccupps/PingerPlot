@@ -17,7 +17,7 @@ import tkinter as tk
 from tkinter import filedialog, font as tkfont, messagebox, ttk
 from typing import Dict, List, Optional
 
-from . import __version__, appicon, geoip, icmp, tcpudp, worldmap
+from . import __version__, appicon, geoip, icmp, settings, tcpudp, worldmap
 from .model import HopView, Sample, csv_safe, mos, mos_label
 from .monitor import Monitor
 
@@ -101,6 +101,7 @@ class App:
         self._pinned = False                        # True once the user picks a row
         self._last_event_seq = -1
         self._banner_shown = False
+        self._settings = settings.load()             # persisted UI/engine/alert state
 
         self.scale = self._init_scaling()
         root.title(f"PingerPlot {__version__}")
@@ -109,8 +110,14 @@ class App:
         root.minsize(self.s(820), self.s(520))
         root.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        self.theme = "dark"
-        self.theme_var = tk.StringVar(value="dark")
+        saved_theme = self._settings.get("theme", "dark")
+        if saved_theme not in PALETTES:
+            saved_theme = "dark"
+        self.theme = saved_theme
+        COLORS.clear()
+        COLORS.update(PALETTES[saved_theme])
+        self.theme_var = tk.StringVar(value=saved_theme)
+        self.resume_var = tk.BooleanVar(value=True)   # resume last targets on launch
         self.style = ttk.Style(root)
         self._apply_ttk_style()          # theme ttk widgets before they are built
         root.configure(bg=COLORS["win_bg"])
@@ -123,6 +130,7 @@ class App:
         self._build_statusbar()
         self._build_main()
         self._recolor_widgets()          # tk-widget colors + tree tags for the theme
+        self._apply_saved_settings()     # restore last engine/alert/interval values
 
         if not icmp.is_available():
             messagebox.showerror(
@@ -130,6 +138,7 @@ class App:
                 "The ICMP backend uses the Windows IP Helper API and only runs on Windows.",
             )
 
+        self._restore_targets()          # optionally resume the last session's targets
         self.root.after(REFRESH_MS, self._refresh)
 
     @property
@@ -311,6 +320,8 @@ class App:
                                   value="dark", command=lambda: self._apply_theme("dark"))
         view_menu.add_radiobutton(label="Light theme", variable=self.theme_var,
                                   value="light", command=lambda: self._apply_theme("light"))
+        view_menu.add_separator()
+        view_menu.add_checkbutton(label="Resume targets on launch", variable=self.resume_var)
         menubar.add_cascade(label="View", menu=view_menu)
 
         help_menu = tk.Menu(menubar, tearoff=0)
@@ -659,11 +670,71 @@ class App:
         self._draw_graph()
 
     def _on_close(self) -> None:
+        self._save_settings()
         self.geo.stop()
         for mon in self._monitors.values():
             mon.shutdown()
         self._empty.shutdown()
         self.root.destroy()
+
+    # --- settings persistence ---------------------------------------------
+    def _apply_saved_settings(self) -> None:
+        """Push the loaded settings into the toolbar/engine/alert variables so
+        the user's last choices are in effect on launch."""
+        s = self._settings
+        for var, key in (
+            (self.interval_var, "interval"), (self.target_var, "target"),
+            (self.maxhops_var, "max_hops"), (self.timeout_var, "timeout_ms"),
+            (self.psize_var, "packet_size"), (self.senddelay_var, "send_delay_ms"),
+            (self.port_var, "port"), (self.logpath_var, "log_path"),
+            (self.packettype_var, "packet_type"),
+            (self.alert_loss_var, "alert_loss"), (self.alert_lat_var, "alert_latency"),
+            (self.alert_win_var, "alert_window"),
+        ):
+            if s.get(key) is not None:
+                var.set(str(s[key]))
+        for var, key in (
+            (self.resolve_var, "resolve_names"), (self.finalhop_var, "final_hop_only"),
+            (self.alerts_var, "alerts_enabled"), (self.alert_sound_var, "alert_sound"),
+            (self.resume_var, "resume_on_launch"),
+        ):
+            if isinstance(s.get(key), bool):
+                var.set(s[key])
+
+    def _save_settings(self) -> None:
+        """Persist the current UI/engine/alert state and the target list."""
+        settings.save({
+            "theme": self.theme,
+            "interval": self.interval_var.get(),
+            "target": self.target_var.get(),
+            "max_hops": self.maxhops_var.get(),
+            "timeout_ms": self.timeout_var.get(),
+            "packet_size": self.psize_var.get(),
+            "send_delay_ms": self.senddelay_var.get(),
+            "port": self.port_var.get(),
+            "log_path": self.logpath_var.get(),
+            "packet_type": self.packettype_var.get(),
+            "resolve_names": bool(self.resolve_var.get()),
+            "final_hop_only": bool(self.finalhop_var.get()),
+            "alerts_enabled": bool(self.alerts_var.get()),
+            "alert_loss": self.alert_loss_var.get(),
+            "alert_latency": self.alert_lat_var.get(),
+            "alert_window": self.alert_win_var.get(),
+            "alert_sound": bool(self.alert_sound_var.get()),
+            "resume_on_launch": bool(self.resume_var.get()),
+            "targets": list(self._monitors.keys()),
+        })
+
+    def _restore_targets(self) -> None:
+        """If enabled, re-add and start the targets from the last session."""
+        if not self.resume_var.get():
+            return
+        entry = self.target_var.get()
+        for name in self._settings.get("targets", []) or []:
+            if isinstance(name, str) and name.strip():
+                self.target_var.set(name)
+                self._start()
+        self.target_var.set(entry)   # leave the box showing the saved entry text
 
     def _export(self) -> None:
         views, _status, target_ip, target_input = self.monitor.snapshot()
