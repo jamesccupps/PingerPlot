@@ -11,6 +11,7 @@ from __future__ import annotations
 import csv
 import ctypes
 import json
+import os
 import sys
 import time
 import tkinter as tk
@@ -910,8 +911,10 @@ class App:
         if not path:
             return
         try:
-            with open(path, "w", encoding="utf-8") as fh:
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
                 json.dump(data, fh)
+            os.replace(tmp, path)   # atomic: never leave a truncated session file
         except OSError as exc:
             messagebox.showerror("Save failed", str(exc))
             return

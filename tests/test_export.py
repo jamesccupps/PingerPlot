@@ -14,6 +14,8 @@ from pingerplot.monitor import Monitor
     "@SUM(1+1)",
     "\t=1+1",                      # leading tab — some apps still parse it
     "\r=1+1",                      # leading CR
+    "\n=1+1",                      # leading newline
+    " =1+1",                       # leading space
 ])
 def test_csv_safe_defangs_formula_triggers(evil):
     out = csv_safe(evil)
@@ -64,6 +66,16 @@ def test_run_summary_empty_is_safe():
     assert info["samples"] == 0
     assert info["window_start"] is None
     assert info["window_end"] is None
+
+
+def test_load_dict_caps_hop_count():
+    from pingerplot.monitor import MAX_LOAD_HOPS
+    data = {"hops": [{"ttl": i, "samples": []} for i in range(MAX_LOAD_HOPS + 50)],
+            "events": []}
+    m = Monitor()
+    m.load_dict(data)
+    assert len(m._hops) == MAX_LOAD_HOPS    # crafted/huge session is clamped
+    m.shutdown()
 
 
 def test_load_dict_restores_engine_config():

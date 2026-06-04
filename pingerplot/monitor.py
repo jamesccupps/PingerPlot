@@ -47,6 +47,7 @@ UNREACHED_BEFORE_GROW = 3  # consecutive dest-miss rounds before probing deeper
 FINAL_HOP_TTL = 255        # TTL used to ping the destination directly
 MAX_LOAD_HISTORY = 50_000  # cap a loaded session's per-hop ring buffer (DoS guard)
 MAX_LOG_BYTES = 25 * 1024 * 1024  # roll the probe CSV past ~25 MB (one backup kept)
+MAX_LOAD_HOPS = 1024       # cap hops loaded from a session file (defense-in-depth)
 
 
 def _build_payload(size: int) -> bytes:
@@ -333,7 +334,7 @@ class Monitor:
             self.packet_type = str(cfg.get("packet_type", self.packet_type))
             self.port = int(cfg.get("port", self.port))
             self._hops = []
-            for hd in data.get("hops", []):
+            for hd in (data.get("hops", []) or [])[:MAX_LOAD_HOPS]:
                 try:
                     samples = hd.get("samples", []) or []
                     # Clamp the ring buffer so a crafted/corrupt session can't

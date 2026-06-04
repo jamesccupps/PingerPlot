@@ -232,7 +232,7 @@ def mos_label(score: Optional[float]) -> str:
 
 
 # --- CSV hardening ---------------------------------------------------------
-_CSV_TRIGGERS = ("=", "+", "-", "@", "\t", "\r")
+_CSV_TRIGGERS = ("=", "+", "-", "@")
 
 
 def csv_safe(value: str) -> str:
@@ -244,7 +244,8 @@ def csv_safe(value: str) -> str:
     starting ``+ - @``) is run as a formula when the export is opened in
     Excel/Sheets. Prefix any such cell with a single quote, the conventional
     defang; plain values (IPv4 addresses, normal hostnames) pass through
-    untouched. ``csv.writer`` quoting handles delimiters but not this."""
-    if value and value[0] in _CSV_TRIGGERS:
+    untouched. ``csv.writer`` quoting handles delimiters but not this. Leading
+    whitespace is defanged too (some importers strip it before evaluating)."""
+    if value and (value[0] in _CSV_TRIGGERS or value[0].isspace()):
         return "'" + value
     return value

@@ -126,7 +126,7 @@ if _AVAILABLE:
     ]
 
 
-DEFAULT_PAYLOAD = b"PingerPlot-probe.."  # 20 bytes
+DEFAULT_PAYLOAD = b"PingerPlot-probe.."  # 18 bytes (fallback; the monitor builds its own)
 
 
 def _ip_to_uint32(ip: str) -> int:
