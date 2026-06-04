@@ -22,7 +22,7 @@ tool, and contributions that keep it that way are very welcome.
 git clone https://github.com/jamesccupps/PingerPlot
 cd PingerPlot
 python -m pip install pytest
-python -m pytest          # 56 tests, run on any OS
+python -m pytest          # the unit suite, runs on any OS
 ```
 
 To run the app you need Windows (the ICMP backend is the Win32 IP Helper API):

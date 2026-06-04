@@ -216,8 +216,8 @@ python -m pytest
 ```
 
 The pure logic (statistics, address encoding, status handling, MOS, alert state
-machine, TCP/UDP ICMP correlation) is covered — 56 tests. They are
-platform-independent (the Win32 DLL access is guarded behind `sys.platform`), so
+machine, TCP/UDP ICMP correlation) is covered by a focused, platform-independent
+unit suite (the Win32 DLL access is guarded behind `sys.platform`), so
 the suite runs on Linux/macOS too, and CI runs it on both Linux and Windows. The
 raw-socket/Tk layers need real hardware/a display and are exercised by running the
 app or `python -m pingerplot.selftest <host>`.
