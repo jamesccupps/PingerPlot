@@ -210,6 +210,43 @@ registered unless you run that command, and one command removes it.
 For a one-off elevated launch instead, use the **PingerPlot (Admin)** shortcut,
 `Setup.cmd` → option 2, or `.\launch.ps1 -Elevated` (UAC prompts once).
 
+## Headless / service mode (no GUI)
+
+For unattended monitoring on a box with no desktop session, run the same engine
+without the GUI — each target logs to its own crash-safe, size-capped CSV.
+
+```bash
+python -m pingerplot.headless --init monitor.json   # write a starter config, then edit it
+python -m pingerplot.headless monitor.json          # run it (Ctrl-C to stop)
+```
+
+The config is JSON: an optional `status_interval` (seconds between console
+status lines; `0` = silent), a `defaults` block, and a `targets` list where each
+entry may override any default:
+
+```json
+{
+  "status_interval": 60,
+  "defaults": { "interval": 2.5, "alert_loss_pct": 20, "alert_latency_ms": 250 },
+  "targets": [
+    { "target": "8.8.8.8", "log_path": "logs/dns.csv" },
+    { "target": "10.0.0.1", "log_path": "logs/gateway.csv", "final_hop_only": true,
+      "webhook_url": "https://hooks.example/abc" }
+  ]
+}
+```
+
+Relative `log_path`s resolve next to the config file (so it works regardless of
+the working directory), and the log directory is created if missing. To run it
+at logon/boot under **Task Scheduler**, point a task at:
+
+```
+pythonw.exe -m pingerplot.headless C:\path\to\monitor.json
+```
+
+(or `python.exe` if you want the periodic status lines in a redirected log).
+`pip install .` also registers a `pingerplot-headless` console script.
+
 ## Reading the results
 
 - **Loss at an intermediate hop while the final hop stays healthy is normal.**

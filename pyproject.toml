@@ -28,6 +28,9 @@ dev = ["pytest"]
 [project.gui-scripts]
 pingerplot = "pingerplot.gui:main"
 
+[project.scripts]
+pingerplot-headless = "pingerplot.headless:main"
+
 [project.urls]
 Homepage = "https://github.com/jamesccupps/PingerPlot"
 Source = "https://github.com/jamesccupps/PingerPlot"
