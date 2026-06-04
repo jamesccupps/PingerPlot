@@ -24,10 +24,12 @@ Threading model:
 """
 from __future__ import annotations
 
+import json
 import os
 import socket
 import threading
 import time
+import urllib.request
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Deque, Dict, List, Optional, Tuple
@@ -53,6 +55,24 @@ def _build_payload(size: int) -> bytes:
         return b""
     base = b"PingerPlot probe "
     return (base * (size // len(base) + 1))[:size]
+
+
+def _send_webhook(url: str, payload: dict) -> bool:
+    """POST ``payload`` as JSON to ``url`` (http/https only). Best-effort: never
+    raises, returns True on a 2xx/3xx response. Lets the monitor *tell* you when
+    the destination degrades instead of only beeping."""
+    if not url.lower().startswith(("http://", "https://")):
+        return False
+    try:
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            url, data=data, method="POST",
+            headers={"Content-Type": "application/json", "User-Agent": "PingerPlot"},
+        )
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            return 200 <= getattr(resp, "status", 200) < 400
+    except Exception:
+        return False
 
 
 class Monitor:
@@ -81,6 +101,7 @@ class Monitor:
         self.alert_latency_ms = 250.0
         self.alert_window = 20
         self.alert_sound = True
+        self.webhook_url = ""
 
         # live state
         self.status = "Idle"
@@ -130,6 +151,7 @@ class Monitor:
         alert_latency_ms: float = 250.0,
         alert_window: int = 20,
         alert_sound: bool = True,
+        webhook_url: str = "",
     ) -> None:
         self.stop()
         self.target_input = target.strip()
@@ -149,6 +171,7 @@ class Monitor:
         self.alert_latency_ms = max(0.0, float(alert_latency_ms))
         self.alert_window = max(1, int(alert_window))
         self.alert_sound = bool(alert_sound)
+        self.webhook_url = (webhook_url or "").strip()
         with self._lock:
             self._generation += 1
             gen = self._generation
@@ -407,6 +430,8 @@ class Monitor:
             self._events.append(ev)
         if kind == "alert":
             self._beep()
+        if kind in ("alert", "clear"):
+            self._fire_webhook(kind, text)
 
     def _beep(self) -> None:
         if self.alert_sound and winsound is not None:
@@ -414,6 +439,23 @@ class Monitor:
                 winsound.MessageBeep(winsound.MB_ICONHAND)
             except Exception:
                 pass
+
+    def _fire_webhook(self, kind: str, text: str) -> None:
+        """Notify a configured webhook (off the worker thread) when a
+        destination alert raises or clears."""
+        url = self.webhook_url
+        if not url:
+            return
+        payload = {
+            "app": "PingerPlot",
+            "event": kind,            # "alert" | "clear"
+            "target": self.target_input,
+            "target_ip": self.target_ip,
+            "text": text,
+            "time": time.time(),
+        }
+        threading.Thread(target=_send_webhook, args=(url, payload),
+                         name="webhook", daemon=True).start()
 
     def _alive(self, gen: int) -> bool:
         """True while ``gen`` is still the active run (and we haven't stopped).

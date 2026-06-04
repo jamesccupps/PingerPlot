@@ -514,6 +514,7 @@ class App:
         self.packettype_var = tk.StringVar(value="ICMP")
         self.port_var = tk.StringVar(value="443")
         self.logpath_var = tk.StringVar(value="")
+        self.webhook_var = tk.StringVar(value="")
         self._engine_win: Optional[tk.Toplevel] = None
 
     def _open_engine_dialog(self) -> None:
@@ -555,15 +556,19 @@ class App:
         ttk.Entry(logrow, textvariable=self.logpath_var, width=22).pack(side="left")
         ttk.Button(logrow, text="Browse…", command=self._browse_log).pack(side="left", padx=(4, 0))
 
+        ttk.Label(frm, text="Webhook URL (alerts):").grid(row=base + 3, column=0, sticky="w", pady=3, padx=(0, 10))
+        ttk.Entry(frm, textvariable=self.webhook_var, width=30).grid(row=base + 3, column=1, sticky="w")
+
         ttk.Label(frm, text="TCP/UDP modes need Administrator (raw socket); ICMP does not. Send delay throttles the "
-                            "probe rate. Logging is crash-safe (flushed every probe). Changes apply on next Start.",
+                            "probe rate. Logging is crash-safe (flushed every probe). A webhook URL (http/https) gets "
+                            "a JSON POST when the destination alert raises or clears. Changes apply on next Start.",
                   foreground="#888", wraplength=self.s(380)).grid(
-            row=base + 3, column=0, columnspan=2, sticky="w", pady=(8, 2))
+            row=base + 4, column=0, columnspan=2, sticky="w", pady=(8, 2))
         if not tcpudp.is_admin():
             ttk.Label(frm, text="⚠ Not running as Administrator — TCP/UDP will be refused.",
                       foreground=COLORS["fg_bad"], wraplength=self.s(380)).grid(
-                row=base + 4, column=0, columnspan=2, sticky="w", pady=(0, 4))
-        ttk.Button(frm, text="Close", command=win.destroy).grid(row=base + 5, column=1, sticky="e", pady=(4, 0))
+                row=base + 5, column=0, columnspan=2, sticky="w", pady=(0, 4))
+        ttk.Button(frm, text="Close", command=win.destroy).grid(row=base + 6, column=1, sticky="e", pady=(4, 0))
 
     def _on_packettype_change(self, _event: object = None) -> None:
         ptype = self.packettype_var.get().lower()
@@ -620,6 +625,7 @@ class App:
             alert_latency_ms=a_lat,
             alert_window=a_win,
             alert_sound=self.alert_sound_var.get(),
+            webhook_url=self.webhook_var.get(),
         )
         self._activate(target)
 
@@ -753,6 +759,7 @@ class App:
         self.port_var.set(str(mon.port))
         self.packettype_var.set(mon.packet_type.upper())
         self.logpath_var.set(mon.log_path)
+        self.webhook_var.set(mon.webhook_url)
         self.resolve_var.set(mon.resolve_names)
         self.finalhop_var.set(mon.final_hop_only)
         self.alerts_var.set(mon.alert_enabled)
@@ -785,7 +792,7 @@ class App:
             (self.maxhops_var, "max_hops"), (self.timeout_var, "timeout_ms"),
             (self.psize_var, "packet_size"), (self.senddelay_var, "send_delay_ms"),
             (self.port_var, "port"), (self.logpath_var, "log_path"),
-            (self.packettype_var, "packet_type"),
+            (self.webhook_var, "webhook_url"), (self.packettype_var, "packet_type"),
             (self.alert_loss_var, "alert_loss"), (self.alert_lat_var, "alert_latency"),
             (self.alert_win_var, "alert_window"),
         ):
@@ -811,6 +818,7 @@ class App:
             "send_delay_ms": self.senddelay_var.get(),
             "port": self.port_var.get(),
             "log_path": self.logpath_var.get(),
+            "webhook_url": self.webhook_var.get(),
             "packet_type": self.packettype_var.get(),
             "resolve_names": bool(self.resolve_var.get()),
             "final_hop_only": bool(self.finalhop_var.get()),

@@ -78,3 +78,49 @@ def test_probe_log_rotates_at_cap(tmp_path, monkeypatch):
     assert log.exists()                          # fresh current log re-created
     assert log.stat().st_size < 5000             # current is small after the roll
     m.shutdown()
+
+
+def test_send_webhook_rejects_non_http():
+    assert monitor._send_webhook("file:///etc/passwd", {"x": 1}) is False
+    assert monitor._send_webhook("ftp://host/p", {"x": 1}) is False
+    assert monitor._send_webhook("", {"x": 1}) is False
+
+
+def test_send_webhook_posts_json(monkeypatch):
+    seen = {}
+
+    class _Resp:
+        status = 200
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def fake_urlopen(req, timeout=0):
+        seen["url"], seen["data"] = req.full_url, req.data
+        return _Resp()
+
+    monkeypatch.setattr(monitor.urllib.request, "urlopen", fake_urlopen)
+    assert monitor._send_webhook("https://example.com/hook", {"event": "alert"}) is True
+    import json as _json
+    assert seen["url"] == "https://example.com/hook"
+    assert _json.loads(seen["data"]) == {"event": "alert"}
+
+
+def test_log_event_alert_fires_webhook(monkeypatch):
+    import threading as _t
+    fired, captured = _t.Event(), {}
+
+    def fake_send(url, payload):
+        captured["url"], captured["payload"] = url, payload
+        fired.set()
+        return True
+
+    monkeypatch.setattr(monitor, "_send_webhook", fake_send)
+    m = Monitor()
+    m.webhook_url = "https://example.com/hook"
+    m.target_input = "8.8.8.8"
+    m._log_event("alert", "Hop 5: 30% loss")
+    assert fired.wait(timeout=2)
+    assert captured["url"] == "https://example.com/hook"
+    assert captured["payload"]["event"] == "alert"
+    assert captured["payload"]["text"] == "Hop 5: 30% loss"
+    m.shutdown()
