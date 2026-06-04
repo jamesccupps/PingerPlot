@@ -81,3 +81,15 @@ def test_helpers_return_sane_types():
     ip = tcpudp.local_ip_for("8.8.8.8")
     assert isinstance(ip, str) and ip.count(".") == 3
     assert tcpudp.DEFAULT_PORTS["tcp"] == 443
+
+
+def test_tcp_reach_always_returns_a_definite_result():
+    import errno
+    # clean errors (connected / refused = port closed) -> the host answered
+    for e in (0, errno.ECONNREFUSED, 10061):
+        r = tcpudp._tcp_reach(e, 5.0, TARGET)
+        assert r.reached and r.status == tcpudp.IP_SUCCESS
+    # anything else -> a definite timeout result, never a silently dropped ttl
+    for e in (10065, 10051, 10060):   # host unreach, net unreach, timed out
+        r = tcpudp._tcp_reach(e, 5.0, TARGET)
+        assert (not r.reached) and r.status == tcpudp.IP_REQ_TIMED_OUT

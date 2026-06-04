@@ -50,6 +50,16 @@ _CLEAN_REACH_ERRORS = {0, errno.ECONNREFUSED, 10061}  # 10061 = WSAECONNREFUSED
 DEFAULT_PORTS = {"tcp": 443, "udp": 33434}
 
 
+def _tcp_reach(err: int, rtt: float, dest_ip: str) -> PingResult:
+    """Classify a TCP probe socket's SO_ERROR. A clean result (connected, or
+    refused = port closed) proves the destination answered; anything else is no
+    usable reply. Always returns a definite result, so a probed TTL is never
+    silently dropped from a round (the bug this replaces)."""
+    if err in _CLEAN_REACH_ERRORS:
+        return PingResult(IP_SUCCESS, rtt, dest_ip, True)
+    return PingResult(IP_REQ_TIMED_OUT, None, None, False)
+
+
 def is_admin() -> bool:
     """Best-effort check for the elevation raw capture needs on Windows."""
     if sys.platform != "win32":
@@ -166,9 +176,7 @@ def probe(
                 break
             if mode == "tcp" and (w or x):
                 err = probe_sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
-                if err in _CLEAN_REACH_ERRORS:
-                    rtt = (time.perf_counter() - start) * 1000.0
-                    result = PingResult(IP_SUCCESS, rtt, dest_ip, True)
+                result = _tcp_reach(err, (time.perf_counter() - start) * 1000.0, dest_ip)
                 break
             if r:
                 try:
@@ -265,9 +273,7 @@ def probe_path(
                     s = senders[ttl][0]
                     if s in w or s in x:
                         err = s.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
-                        if err in _CLEAN_REACH_ERRORS:
-                            rtt = (now - senders[ttl][1]) * 1000.0
-                            results[ttl] = PingResult(IP_SUCCESS, rtt, dest_ip, True)
+                        results[ttl] = _tcp_reach(err, (now - senders[ttl][1]) * 1000.0, dest_ip)
                         pending.discard(ttl)
             if cap in r:
                 while True:
