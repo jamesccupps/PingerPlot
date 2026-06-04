@@ -43,6 +43,7 @@ from .model import DEFAULT_HISTORY, Event, Hop, HopView, Sample
 GROW_PROBE_SPAN = 8       # extra TTLs to probe when looking for a longer route
 UNREACHED_BEFORE_GROW = 3  # consecutive dest-miss rounds before probing deeper
 FINAL_HOP_TTL = 255        # TTL used to ping the destination directly
+MAX_LOAD_HISTORY = 50_000  # cap a loaded session's per-hop ring buffer (DoS guard)
 
 
 def _build_payload(size: int) -> bytes:
@@ -94,8 +95,19 @@ class Monitor:
 
         self._lock = threading.RLock()
         self._thread: Optional[threading.Thread] = None
-        self._ping_pool = ThreadPoolExecutor(max_workers=16, thread_name_prefix="ping")
-        self._dns_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="dns")
+        self._generation = 0   # bumped each start(); a worker ignores stale gens
+        # Pools are created on start() and torn down on shutdown(); a Monitor
+        # that never starts (e.g. the GUI's placeholder) allocates none.
+        self._ping_pool: Optional[ThreadPoolExecutor] = None
+        self._dns_pool: Optional[ThreadPoolExecutor] = None
+
+    def _ensure_pools(self) -> None:
+        """(Re)create the probe and DNS thread pools if absent. Lets a Monitor
+        be reused after shutdown(), and keeps a never-started one pool-free."""
+        if self._ping_pool is None:
+            self._ping_pool = ThreadPoolExecutor(max_workers=16, thread_name_prefix="ping")
+        if self._dns_pool is None:
+            self._dns_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="dns")
 
     # --- lifecycle ---------------------------------------------------------
     def start(
@@ -136,6 +148,8 @@ class Monitor:
         self.alert_window = max(1, int(alert_window))
         self.alert_sound = bool(alert_sound)
         with self._lock:
+            self._generation += 1
+            gen = self._generation
             self._hops = []
             self._events.clear()
             self._active_alerts.clear()
@@ -145,8 +159,9 @@ class Monitor:
             self.reached_target = False
             self.target_ip = None
         self._open_log()
+        self._ensure_pools()
         self.running = True
-        self._thread = threading.Thread(target=self._run, name="monitor", daemon=True)
+        self._thread = threading.Thread(target=self._run, args=(gen,), name="monitor", daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
@@ -159,8 +174,11 @@ class Monitor:
 
     def shutdown(self) -> None:
         self.stop()
-        self._ping_pool.shutdown(wait=False, cancel_futures=True)
-        self._dns_pool.shutdown(wait=False, cancel_futures=True)
+        for pool in (self._ping_pool, self._dns_pool):
+            if pool is not None:
+                pool.shutdown(wait=False, cancel_futures=True)
+        self._ping_pool = None
+        self._dns_pool = None
 
     # --- snapshots for the UI thread --------------------------------------
     def snapshot(self) -> Tuple[List[HopView], str, Optional[str], str]:
@@ -271,12 +289,15 @@ class Monitor:
             self._hops = []
             for hd in data.get("hops", []):
                 try:
-                    samples = hd.get("samples", [])
-                    hop = Hop(int(hd["ttl"]), history=max(DEFAULT_HISTORY, len(samples)))
+                    samples = hd.get("samples", []) or []
+                    # Clamp the ring buffer so a crafted/corrupt session can't
+                    # blow up memory; keep the most recent samples.
+                    cap = min(MAX_LOAD_HISTORY, max(DEFAULT_HISTORY, len(samples)))
+                    hop = Hop(int(hd["ttl"]), history=cap)
                     hop.address = hd.get("address")
                     hop.hostname = hd.get("hostname")
                     hop.last_status = hd.get("last_status")
-                    for pair in samples:
+                    for pair in samples[-cap:]:
                         rtt = pair[1]
                         hop.samples.append(Sample(float(pair[0]), None if rtt is None else float(rtt)))
                     self._hops.append(hop)
@@ -359,14 +380,21 @@ class Monitor:
             except Exception:
                 pass
 
-    def _run(self) -> None:
+    def _alive(self, gen: int) -> bool:
+        """True while ``gen`` is still the active run (and we haven't stopped).
+        Workers test this instead of ``running`` so a slow worker from a prior
+        start() can't keep mutating state once a new run has begun."""
+        return self.running and gen == self._generation
+
+    def _run(self, gen: int) -> None:
         try:
             self._set_status(f"Resolving {self.target_input}...")
             try:
                 self.target_ip = socket.gethostbyname(self.target_input)
             except OSError as exc:
                 self._set_status(f"Cannot resolve '{self.target_input}': {exc.strerror or exc}")
-                self.running = False
+                if gen == self._generation:
+                    self.running = False
                 return
 
             self._local_ip = tcpudp.local_ip_for(self.target_ip)
@@ -378,7 +406,8 @@ class Monitor:
                     f"{self.packet_type.upper()} traceroute needs Administrator (raw capture). "
                     "Re-run elevated, switch to ICMP, or use TCP with 'Final hop only'."
                 )
-                self.running = False
+                if gen == self._generation:
+                    self.running = False
                 return
 
             if self.final_hop_only:
@@ -388,25 +417,27 @@ class Monitor:
                 route_len = 1
             else:
                 self._set_status(f"Tracing route to {self.target_input} [{self.target_ip}]...")
-                route_len = self._trace()
-                if not self.running:
+                route_len = self._trace(gen)
+                if not self._alive(gen):
                     return
                 if route_len == 0:
                     self._set_status(f"No reply from {self.target_input} - target may block ICMP or be down.")
-                    self.running = False
+                    if gen == self._generation:
+                        self.running = False
                     return
 
-            while self.running:
+            while self._alive(gen):
                 t0 = time.perf_counter()
-                route_len = self._probe_round(route_len)
+                route_len = self._probe_round(route_len, gen)
                 self._evaluate_alerts(route_len)
                 self._set_status(self._monitor_status(route_len))
                 self._notify()
-                self._interruptible_sleep(self.interval - (time.perf_counter() - t0))
+                self._interruptible_sleep(self.interval - (time.perf_counter() - t0), gen)
         except Exception as exc:  # never let the worker die silently
             self._set_status(f"Monitor error: {exc!r}")
         finally:
-            self.running = False
+            if gen == self._generation:   # don't clobber a newer run's flag
+                self.running = False
             self._notify()
 
     def _monitor_status(self, route_len: int) -> str:
@@ -428,9 +459,13 @@ class Monitor:
             self._hops.append(Hop(len(self._hops) + 1))
         return self._hops[ttl - 1]
 
-    def _apply_probe(self, ttl: int, r: icmp.PingResult) -> None:
-        """Record one probe result and react to any route change at this hop."""
+    def _apply_probe(self, ttl: int, r: icmp.PingResult, gen: int) -> None:
+        """Record one probe result and react to any route change at this hop.
+        A result carrying a superseded generation is dropped, so a slow worker
+        from a previous start() cannot corrupt the freshly-reset new run."""
         with self._lock:
+            if gen != self._generation:
+                return
             hop = self._ensure_hop(ttl)
             old = hop.address
             hop.record(r.rtt_ms, r.address, r.status)
@@ -442,7 +477,7 @@ class Monitor:
         if r.address:
             self._maybe_resolve(ttl, r.address)
 
-    def _trace(self) -> int:
+    def _trace(self, gen: int) -> int:
         """Walk TTLs upward until the destination answers. Returns route length
         (the TTL that reached the target), the deepest responding TTL if the
         destination never replies, or 0 if nothing answered at all."""
@@ -450,10 +485,10 @@ class Monitor:
         reached_ttl = 0
         deepest = 0
         for ttl in range(1, self.max_hops + 1):
-            if not self.running:
+            if not self._alive(gen):
                 break
             r = self._do_probe(ttl)
-            self._apply_probe(ttl, r)
+            self._apply_probe(ttl, r, gen)
             if r.address:
                 deepest = ttl
             self._set_status(f"Tracing route... hop {ttl}: {r.address or '*'}")
@@ -486,6 +521,9 @@ class Monitor:
             return tcpudp.probe_path(self.target_ip, range(lo, hi + 1), self.timeout_ms,
                                      self.packet_type, self.port, self._local_ip, self._payload)
         results: Dict[int, icmp.PingResult] = {}
+        if self._ping_pool is None:     # pools torn down (e.g. mid-shutdown)
+            return {ttl: icmp.PingResult(icmp.IP_REQ_TIMED_OUT, None, None, False)
+                    for ttl in range(lo, hi + 1)}
         futures = {}
         for ttl in range(lo, hi + 1):
             if not self.running:        # abort promptly on stop()
@@ -500,24 +538,24 @@ class Monitor:
                 results[ttl] = icmp.PingResult(icmp.IP_REQ_TIMED_OUT, None, None, False)
         return results
 
-    def _probe_round(self, route_len: int) -> int:
+    def _probe_round(self, route_len: int, gen: int) -> int:
         """One monitoring round across all hops. Returns the (possibly adjusted)
         route length so the caller tracks grow/shrink continuously."""
         self._round += 1
         if self.final_hop_only:
             r = self._do_probe(1, ip_ttl=FINAL_HOP_TTL)
-            self._apply_probe(1, r)
+            self._apply_probe(1, r, gen)
             return 1
 
         results = self._gather_range(1, route_len)
         min_reached: Optional[int] = None
         for ttl in range(1, route_len + 1):
-            if not self.running:        # stop() during the round: don't keep
-                break                   # recording (or logging) a stale round
+            if not self._alive(gen):    # stop()/superseded during the round:
+                break                   # don't keep recording a stale round
             r = results.get(ttl)
             if r is None:
                 r = icmp.PingResult(icmp.IP_REQ_TIMED_OUT, None, None, False)
-            self._apply_probe(ttl, r)
+            self._apply_probe(ttl, r, gen)
             if r.reached and min_reached is None:
                 min_reached = ttl
 
@@ -533,7 +571,7 @@ class Monitor:
         if self.reached_target:
             self._unreached += 1
             if self._unreached >= UNREACHED_BEFORE_GROW:
-                grown = self._grow_route(route_len)
+                grown = self._grow_route(route_len, gen)
                 if grown:
                     self._unreached = 0
                     return grown
@@ -546,7 +584,7 @@ class Monitor:
         self._log_event("route", f"Route shortened {old_len} -> {new_len} hops (destination now closer)")
         return new_len
 
-    def _grow_route(self, route_len: int) -> Optional[int]:
+    def _grow_route(self, route_len: int, gen: int) -> Optional[int]:
         """Probe past the current end to find the destination's new distance."""
         upper = min(self.max_hops, route_len + GROW_PROBE_SPAN)
         if upper <= route_len:
@@ -563,7 +601,7 @@ class Monitor:
             r = results.get(ttl)
             if r is None:
                 r = self._do_probe(ttl)
-            self._apply_probe(ttl, r)
+            self._apply_probe(ttl, r, gen)
         with self._lock:
             del self._hops[new_len:]
             self.route_len = new_len
@@ -633,7 +671,7 @@ class Monitor:
 
     # --- reverse DNS (best effort, off the probe path) --------------------
     def _maybe_resolve(self, ttl: int, address: str) -> None:
-        if not self.resolve_names:
+        if not self.resolve_names or self._dns_pool is None:
             return
         with self._lock:
             if ttl > len(self._hops):
@@ -656,9 +694,9 @@ class Monitor:
                     hop.hostname = name
                 hop.resolving = False
 
-    def _interruptible_sleep(self, seconds: float) -> None:
+    def _interruptible_sleep(self, seconds: float, gen: int) -> None:
         end = time.perf_counter() + max(0.0, seconds)
-        while self.running:
+        while self._alive(gen):
             remaining = end - time.perf_counter()
             if remaining <= 0:
                 break
