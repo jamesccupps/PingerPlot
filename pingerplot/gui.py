@@ -418,6 +418,7 @@ class App:
         sb.pack(side="right", fill="y")
         self.summary_tree.pack(side="left", fill="both", expand=True)
         self.summary_tree.bind("<<TreeviewSelect>>", self._on_summary_select)
+        self.summary_tree.bind("<Button-3>", self._on_target_menu)
 
     def _build_notebook(self, parent: ttk.Frame) -> None:
         self.notebook = ttk.Notebook(parent)
@@ -491,6 +492,7 @@ class App:
         self.tree.bind("<ButtonRelease-1>", self._on_user_select)
         self.tree.bind("<KeyRelease-Up>", self._on_user_select)
         self.tree.bind("<KeyRelease-Down>", self._on_user_select)
+        self.tree.bind("<Button-3>", self._on_hop_menu)
         vsb = ttk.Scrollbar(parent, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=vsb.set)
         self.tree.pack(side="left", fill="both", expand=True)
@@ -646,13 +648,16 @@ class App:
             mon.stop()
 
     def _remove_target(self) -> None:
-        name = self._active
+        self._remove_named(self._active)
+
+    def _remove_named(self, name: Optional[str]) -> None:
         if not name or name not in self._monitors:
             return
         self._monitors.pop(name).shutdown()
         if self.summary_tree.exists(name):
             self.summary_tree.delete(name)
-        self._activate(next(iter(self._monitors), None))
+        if self._active == name:
+            self._activate(next(iter(self._monitors), None))
 
     def _on_summary_select(self, _event: object) -> None:
         sel = self.summary_tree.selection()
@@ -668,6 +673,67 @@ class App:
             except ValueError:
                 pass
         self._draw_graph()
+
+    # --- right-click menus (copy a hop; pause/stop a target) --------------
+    def _on_hop_menu(self, event: object) -> None:
+        iid = self.tree.identify_row(event.y)
+        if not iid:
+            return
+        self.tree.selection_set(iid)
+        self._on_user_select(event)
+        vals = self.tree.item(iid, "values")
+        ip = str(vals[1]) if len(vals) > 1 else ""
+        host = str(vals[2]) if len(vals) > 2 else ""
+        menu = tk.Menu(self.tree, tearoff=0)
+        if ip and ip != "*":
+            menu.add_command(label=f"Copy IP   {ip}", command=lambda: self._clip(ip))
+        if host and host not in ("", "(resolving…)"):
+            menu.add_command(label=f"Copy hostname   {host}", command=lambda: self._clip(host))
+        menu.add_command(label="Copy row", command=lambda: self._clip("\t".join(str(v) for v in vals)))
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def _clip(self, text: str) -> None:
+        if not text:
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        self.status_var.set(f"Copied: {text}")
+
+    def _on_target_menu(self, event: object) -> None:
+        iid = self.summary_tree.identify_row(event.y)
+        if not iid or iid not in self._monitors:
+            return
+        self.summary_tree.selection_set(iid)
+        self._activate(iid)
+        mon = self._monitors[iid]
+        menu = tk.Menu(self.summary_tree, tearoff=0)
+        if mon.running and not mon.paused:
+            menu.add_command(label="Pause", command=lambda: self._pause_target(iid))
+        elif mon.running and mon.paused:
+            menu.add_command(label="Resume", command=lambda: self._resume_target(iid))
+        if mon.running:
+            menu.add_command(label="Stop", command=mon.stop)
+        menu.add_separator()
+        menu.add_command(label="Remove", command=lambda: self._remove_named(iid))
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def _pause_target(self, name: str) -> None:
+        mon = self._monitors.get(name)
+        if mon is not None:
+            mon.pause()
+        self._refresh_once()
+
+    def _resume_target(self, name: str) -> None:
+        mon = self._monitors.get(name)
+        if mon is not None:
+            mon.resume()
+        self._refresh_once()
 
     def _on_close(self) -> None:
         self._save_settings()
@@ -862,7 +928,7 @@ class App:
             views, _status, _ip, _in = mon.snapshot()
             dest = views[-1] if views else None
             mscore = mos(dest.avg, dest.jitter, dest.loss_pct) if (dest and mon.reached_target) else None
-            label = name + ("  ▶" if mon.running else "")
+            label = name + ("  ⏸" if (mon.running and mon.paused) else ("  ▶" if mon.running else ""))
             values = (
                 label,
                 len(views) if views else 0,

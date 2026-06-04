@@ -54,6 +54,16 @@ def test_load_dict_caps_sample_history():
     m.shutdown()
 
 
+def test_pause_resume_flags():
+    m = Monitor()
+    assert m.paused is False
+    m.pause()
+    assert m.paused is True
+    m.resume()
+    assert m.paused is False
+    m.shutdown()
+
+
 def test_probe_log_rotates_at_cap(tmp_path, monkeypatch):
     monkeypatch.setattr(monitor, "MAX_LOG_BYTES", 200)     # tiny cap to force a roll
     log = tmp_path / "probe.csv"

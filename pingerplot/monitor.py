@@ -87,6 +87,7 @@ class Monitor:
         self.route_len = 0
         self.reached_target = False
         self.running = False
+        self.paused = False
 
         self._hops: List[Hop] = []
         self._events: Deque[Event] = deque(maxlen=1000)
@@ -159,6 +160,7 @@ class Monitor:
             self.route_len = 0
             self.reached_target = False
             self.target_ip = None
+            self.paused = False
         self._open_log()
         self._ensure_pools()
         self.running = True
@@ -180,6 +182,14 @@ class Monitor:
                 pool.shutdown(wait=False, cancel_futures=True)
         self._ping_pool = None
         self._dns_pool = None
+
+    def pause(self) -> None:
+        """Halt probing but keep the worker thread and accumulated history.
+        resume() continues without the reset a fresh start() would do."""
+        self.paused = True
+
+    def resume(self) -> None:
+        self.paused = False
 
     # --- snapshots for the UI thread --------------------------------------
     def snapshot(self) -> Tuple[List[HopView], str, Optional[str], str]:
@@ -453,6 +463,12 @@ class Monitor:
 
             while self._alive(gen):
                 t0 = time.perf_counter()
+                if self.paused:
+                    self._set_status(f"Paused - {self.target_input} [{self.target_ip}] "
+                                     f"({len(self._hops)} hops, history kept)")
+                    self._notify()
+                    self._interruptible_sleep(self.interval, gen)
+                    continue
                 route_len = self._probe_round(route_len, gen)
                 self._evaluate_alerts(route_len)
                 self._set_status(self._monitor_status(route_len))
