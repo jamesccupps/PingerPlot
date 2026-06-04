@@ -17,7 +17,7 @@ import tkinter as tk
 from tkinter import filedialog, font as tkfont, messagebox, ttk
 from typing import Dict, List, Optional
 
-from . import __version__, geoip, icmp, tcpudp, worldmap
+from . import __version__, appicon, geoip, icmp, tcpudp, worldmap
 from .model import HopView, Sample, csv_safe, mos, mos_label
 from .monitor import Monitor
 
@@ -104,6 +104,7 @@ class App:
 
         self.scale = self._init_scaling()
         root.title(f"PingerPlot {__version__}")
+        self._set_window_icon()
         root.geometry(f"{self.s(1120)}x{self.s(740)}")
         root.minsize(self.s(820), self.s(520))
         root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -163,6 +164,17 @@ class App:
     def s(self, px: float) -> int:
         """Scale a base-96-dpi pixel measurement to the current display."""
         return int(round(px * self.scale))
+
+    def _set_window_icon(self) -> None:
+        """Replace Tk's default feather with the themed 'signal ripples' mark
+        (title bar, taskbar, Alt-Tab). Kept as an instance attribute so Tk does
+        not garbage-collect it. Silently leaves the default if Tk/the platform
+        can't set it (e.g. headless)."""
+        try:
+            self._app_icon = tk.PhotoImage(data=appicon.png_base64(64))
+            self.root.iconphoto(True, self._app_icon)
+        except Exception:
+            pass
 
     # --- theming -----------------------------------------------------------
     def _apply_theme(self, name: str) -> None:
