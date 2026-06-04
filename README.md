@@ -51,7 +51,8 @@ destination).
   for "is this path good enough for voice/video", shown live in the status bar.
 - **Session save / load** to JSON for offline review, plus **crash-safe
   CSV logging** of every probe (with a per-round index, so "did every hop spike
-  in the same round?" is a one-line filter) for unattended overnight runs.
+  in the same round?" is a one-line filter) — size-capped with rollover, so
+  unattended multi-week runs can't fill the disk.
 - **Engine options dialog** — packet type & port, reply timeout, payload size,
   send delay (rate throttle), max hops, name resolution, final-hop-only.
 - **Dark theme by default**, with a light/dark toggle (button, top-right).
@@ -60,6 +61,16 @@ destination).
   self-documenting header that records the interval, timeout, probe mode, packet
   size, sample count, and the exact time window — so two exports can actually be
   compared instead of guessed at.
+- **Pause / Resume & copy** — right-click a target to pause probing without
+  losing its history (resume picks up where it left off); right-click a hop to
+  copy its IP or hostname.
+- **Per-target settings** — engine and alert options are remembered per target;
+  right-click a target → *Edit settings…* to inspect or change just that one.
+- **Webhook alerts** — point the Engine dialog's *Webhook URL* at an http(s)
+  endpoint to get a JSON POST when the destination alert raises or clears.
+- **Persists between launches** — theme, engine options, alert thresholds and
+  your target list save to `%APPDATA%\PingerPlot` and restore on start;
+  *View → Resume targets on launch* re-arms the last session's monitors.
 
 ### Tabs and layout
 
@@ -247,9 +258,9 @@ tests/             pytest for the pure layers
 
 - IPv6 (`Icmp6SendEcho2` — different structs, needs a source address).
 - Sub-millisecond RTT (would require raw sockets + self-timing).
-- Email/webhook alert actions instead of just the banner + beep.
-- Per-monitor engine settings (today the toolbar/Engine options apply to the
-  next target you Add / Start).
+- Email alert actions (webhook POSTs are already built in).
+- A headless / service mode — the engine (`monitor.py`) is already GUI-free, so
+  a config-driven, no-GUI runner under Task Scheduler is the natural next step.
 
 ## Contributing
 
