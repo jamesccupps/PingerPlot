@@ -101,6 +101,7 @@ class App:
         self._pinned = False                        # True once the user picks a row
         self._last_event_seq = -1
         self._banner_shown = False
+        self._draw_ver = None                        # last-drawn (target, round, hop, theme)
         self._settings = settings.load()             # persisted UI/engine/alert state
 
         self.scale = self._init_scaling()
@@ -958,34 +959,40 @@ class App:
         self._update_events()
         self._update_banner()
         self._update_mos(views)
-        self._draw_active_tab()
+        # Redraw the active canvas only when its data actually changed since the
+        # last tick (probes arrive every `interval`, but we tick faster). Resize
+        # and tab-change redraw via their own bindings, so this can't blank them.
+        ver = (self._active, getattr(active, "_round", -1) if active else -1,
+               self._selected_ttl, self.theme)
+        if ver != self._draw_ver:
+            self._draw_ver = ver
+            self._draw_active_tab()
 
     def _update_summary(self) -> None:
         for iid in self.summary_tree.get_children():
             if iid not in self._monitors:
                 self.summary_tree.delete(iid)
         for name, mon in self._monitors.items():
-            views, _status, _ip, _in = mon.snapshot()
-            dest = views[-1] if views else None
-            mscore = mos(dest.avg, dest.jitter, dest.loss_pct) if (dest and mon.reached_target) else None
+            n_hops, d_loss, d_avg, d_jitter, reached = mon.summary()
+            mscore = mos(d_avg, d_jitter, d_loss) if (n_hops and reached) else None
             label = name + ("  ⏸" if (mon.running and mon.paused) else ("  ▶" if mon.running else ""))
             values = (
                 label,
-                len(views) if views else 0,
-                f"{dest.loss_pct:.0f}%" if dest else "—",
-                _ms(dest.avg) if dest else "—",
+                n_hops,
+                f"{d_loss:.0f}%" if d_loss is not None else "—",
+                _ms(d_avg) if n_hops else "—",
                 f"{mscore:.1f}" if mscore is not None else "—",
             )
-            tag = self._summary_tag(dest, mon, name)
+            tag = self._summary_tag(d_loss, d_avg, mon, name)
             if self.summary_tree.exists(name):
                 self.summary_tree.item(name, values=values, tags=(tag,))
             else:
                 self.summary_tree.insert("", "end", iid=name, values=values, tags=(tag,))
 
-    def _summary_tag(self, dest: Optional[HopView], mon: Monitor, name: str) -> str:
-        if mon.active_alerts() or (dest and dest.loss_pct > 25):
+    def _summary_tag(self, loss: Optional[float], avg: Optional[float], mon: Monitor, name: str) -> str:
+        if mon.active_alerts() or (loss is not None and loss > 25):
             return "bad"
-        if dest and (dest.loss_pct > 0 or (dest.avg is not None and dest.avg >= BAD_MS)):
+        if loss is not None and (loss > 0 or (avg is not None and avg >= BAD_MS)):
             return "warn"
         return "dest" if name == self._active else "ok"
 

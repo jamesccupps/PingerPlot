@@ -121,6 +121,43 @@ class Hop:
         mean = sum(r) / len(r)
         return (sum((x - mean) ** 2 for x in r) / len(r)) ** 0.5
 
+    def compute(self):
+        """All window stats in a *single* pass — much cheaper than the
+        individual properties above, each of which re-scans the deque. Returns
+        ``(sent, received, loss_pct, current, avg, best, worst, jitter)``. This
+        is the per-tick hot path (see :meth:`HopView.of`)."""
+        samples = self.samples
+        n = len(samples)
+        if n == 0:
+            return (0, 0, 0.0, None, None, None, None, None)
+        received = 0
+        total = 0.0
+        total_sq = 0.0
+        best: Optional[float] = None
+        worst: Optional[float] = None
+        for s in samples:
+            r = s.rtt
+            if r is None:
+                continue
+            received += 1
+            total += r
+            total_sq += r * r
+            if best is None or r < best:
+                best = r
+            if worst is None or r > worst:
+                worst = r
+        current = samples[-1].rtt
+        loss_pct = 100.0 * (n - received) / n
+        if received:
+            avg = total / received
+            # population variance via E[x^2] - E[x]^2 (one pass); clamp tiny
+            # negative FP results to 0 for the all-equal case.
+            var = total_sq / received - avg * avg
+            jitter = (var ** 0.5 if var > 0 else 0.0) if received >= 2 else None
+        else:
+            avg = jitter = None
+        return (n, received, loss_pct, current, avg, best, worst, jitter)
+
 
 @dataclass(frozen=True)
 class HopView:
@@ -141,19 +178,20 @@ class HopView:
 
     @classmethod
     def of(cls, hop: Hop) -> "HopView":
+        sent, received, loss_pct, current, avg, best, worst, jitter = hop.compute()
         return cls(
             ttl=hop.ttl,
             address=hop.address,
             hostname=hop.hostname,
             last_status=hop.last_status,
-            sent=hop.sent,
-            received=hop.received,
-            loss_pct=hop.loss_pct,
-            current=hop.current,
-            avg=hop.avg,
-            best=hop.best,
-            worst=hop.worst,
-            jitter=hop.jitter,
+            sent=sent,
+            received=received,
+            loss_pct=loss_pct,
+            current=current,
+            avg=avg,
+            best=best,
+            worst=worst,
+            jitter=jitter,
         )
 
 

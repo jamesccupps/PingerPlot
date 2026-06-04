@@ -220,6 +220,18 @@ class Monitor:
             views = [HopView.of(h) for h in self._hops]
             return views, self.status, self.target_ip, self.target_input
 
+    def summary(self) -> Tuple[int, Optional[float], Optional[float], Optional[float], bool]:
+        """Cheap sidebar snapshot: only the destination hop's stats, with no
+        per-hop HopView allocation (the grid doesn't need the intermediate hops).
+        Returns ``(n_hops, dest_loss, dest_avg, dest_jitter, reached)``; the
+        dest values are None when there are no hops yet."""
+        with self._lock:
+            n = len(self._hops)
+            if n == 0:
+                return (0, None, None, None, self.reached_target)
+            _, _, loss, _, avg, _, _, jitter = self._hops[-1].compute()
+            return (n, loss, avg, jitter, self.reached_target)
+
     def samples_for(self, ttl: int) -> List[Sample]:
         with self._lock:
             for h in self._hops:

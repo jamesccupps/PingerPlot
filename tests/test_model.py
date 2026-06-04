@@ -1,4 +1,6 @@
 """Unit tests for the pure data model / statistics (platform-independent)."""
+import pytest
+
 from pingerplot.model import Hop, HopView
 
 
@@ -104,3 +106,27 @@ def test_recent_window_larger_than_history_uses_all():
     _fill(h, [10.0, 20.0])
     assert h.recent_loss_pct(1000) == 0.0
     assert h.recent_avg(1000) == 15.0
+
+
+def test_compute_matches_individual_properties():
+    # the single-pass compute() (per-tick hot path) must agree with the
+    # property-by-property values it replaces in HopView.of
+    h = Hop(1)
+    _fill(h, [10.0, 20.0, 30.0, 50.0])
+    h.record(None, "10.0.0.1", 11010)          # include a loss
+    sent, received, loss, current, avg, best, worst, jitter = h.compute()
+    assert (sent, received, current, best, worst) == \
+        (h.sent, h.received, h.current, h.best, h.worst)
+    assert loss == pytest.approx(h.loss_pct)
+    assert avg == pytest.approx(h.avg)
+    assert jitter == pytest.approx(h.jitter)
+
+
+def test_compute_empty_and_all_loss():
+    assert Hop(1).compute() == (0, 0, 0.0, None, None, None, None, None)
+    h = Hop(2)
+    h.record(None, "10.0.0.1", 11010)
+    h.record(None, "10.0.0.1", 11010)
+    sent, received, loss, current, avg, best, worst, jitter = h.compute()
+    assert (sent, received, loss, current, avg, best, worst, jitter) == \
+        (2, 0, 100.0, None, None, None, None, None)
