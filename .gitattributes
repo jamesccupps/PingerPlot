@@ -1,0 +1,21 @@
+# Normalize line endings deterministically (don't depend on each cloner's
+# core.autocrlf). Text is stored as LF in the repo; the Windows launcher
+# scripts are checked out — and shipped in the release zip — with CRLF so they
+# run cleanly under cmd.exe / WScript whether cloned or downloaded.
+* text=auto
+
+# Windows scripts: CRLF
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+*.vbs   text eol=crlf
+
+# Source, docs, config: LF
+*.py    text eol=lf
+*.md    text eol=lf
+*.toml  text eol=lf
+*.yml   text eol=lf
+*.cfg   text eol=lf
+
+# Binary assets (never line-ending munge)
+*.png   binary

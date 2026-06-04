@@ -1,0 +1,40 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Packaging / build
+build/
+dist/
+*.egg-info/
+*.egg
+*.spec
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# PingerPlot runtime output (never commit captured data).
+# NOTE: .gitignore has no inline comments — a trailing "# ..." becomes part of
+# the pattern and silently matches nothing. Keep each comment on its own line.
+# probe logs and CSV exports
+*.csv
+# saved sessions
+pingerplot_*.json
+# scratch / smoke scripts (single leading underscore) - but NEVER package
+# dunders like __init__.py / __main__.py, or the package silently breaks.
+_*.py
+!__*.py
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini

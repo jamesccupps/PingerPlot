@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pingerplot"
+version = "1.0.0"
+description = "A continuous-traceroute network path monitor for Windows (MTR-style), with a Tkinter GUI."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "James Cupps" }]
+keywords = ["traceroute", "ping", "mtr", "network", "latency", "packet-loss", "monitor", "icmp", "windows"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Win32 (MS Windows)",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Networking :: Monitoring",
+]
+dependencies = []          # standard library only
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.gui-scripts]
+pingerplot = "pingerplot.gui:main"
+
+[project.urls]
+Homepage = "https://github.com/jamesccupps/PingerPlot"
+Source = "https://github.com/jamesccupps/PingerPlot"
+Issues = "https://github.com/jamesccupps/PingerPlot/issues"
+
+[tool.setuptools.packages.find]
+include = ["pingerplot*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--import-mode=importlib"
