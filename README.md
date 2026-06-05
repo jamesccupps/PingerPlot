@@ -111,10 +111,11 @@ driver**. The TTL is set per-probe through `IP_OPTION_INFORMATION`, and an
 intermediate router that drops the packet answers with status
 `IP_TTL_EXPIRED_TRANSIT` plus its own address — that is the whole trick.
 
-IPv4 only, Windows only (by design — it's the Win32 ICMP API). Auto-retrace,
-the timeline, alerts, MOS, multi-target, and save/load are all built on this same
-user-space primitive, so the whole app runs **without administrator rights** in
-ICMP mode.
+IPv4, and the probe **backend** is Windows-only today because it's the Win32 ICMP
+API — but that's the *only* platform-specific module (see [Platform](#platform)).
+Auto-retrace, the timeline, alerts, MOS, multi-target, and save/load are all built
+on this same user-space primitive, so the whole app runs **without administrator
+rights** in ICMP mode.
 
 ## Probe modes
 
@@ -131,6 +132,19 @@ other two modes:
 Without admin, the full TCP/UDP traceroute is refused with a clear message rather
 than showing misleading all-timeout hops. (UDP note: an *open* UDP port stays
 silent, so it reads as a timeout — prefer TCP for a definitive "service is up".)
+
+## Platform
+
+PingerPlot runs on **Windows 10/11** today. The only platform-specific piece is
+the ICMP probe backend (`icmp.py`), which uses the Win32 IP Helper API so it needs
+no admin rights or capture driver. Everything else — the monitor engine, the
+Tkinter GUI, the headless runner, settings, alerts, the map — is pure,
+cross-platform Python, and the test suite runs on both **Linux and Windows** in CI.
+
+**Linux and macOS** are a planned addition: a POSIX backend using unprivileged
+`SOCK_DGRAM`/`IPPROTO_ICMP` sockets (the same technique `mtr` uses) would let the
+same app run on all three. The engine, GUI, and headless mode are already
+platform-independent — only that one module is missing.
 
 ## Requirements
 
@@ -293,11 +307,13 @@ tests/             pytest for the pure layers
 
 ## Possible extensions
 
+- **Linux & macOS** — a POSIX ICMP backend (unprivileged
+  `SOCK_DGRAM`/`IPPROTO_ICMP` + `IP_RECVERR`, the `mtr` technique). The engine,
+  GUI, and headless runner are already cross-platform; only the probe backend is
+  Windows-specific today.
 - IPv6 (`Icmp6SendEcho2` — different structs, needs a source address).
 - Sub-millisecond RTT (would require raw sockets + self-timing).
 - Email alert actions (webhook POSTs are already built in).
-- A headless / service mode — the engine (`monitor.py`) is already GUI-free, so
-  a config-driven, no-GUI runner under Task Scheduler is the natural next step.
 
 ## Contributing
 
