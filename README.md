@@ -8,7 +8,7 @@
 A continuous-traceroute network path monitor for Windows (MTR-style): per-hop
 latency and packet-loss tracking with a live latency graph, multi-target summary,
 MOS scoring, alerts, session save/load, a world map, and ICMP/TCP/UDP probe modes.
-Pure Python, **zero third-party dependencies**, dark-themed, HiDPI-aware.
+Pure Python, **zero third-party dependencies**, dark-themed, HiDPI-aware. Free and Open Source.
 
 ![PingerPlot — dark theme, multi-target sidebar, hop table and latency graph](docs/screenshot.png)
 
