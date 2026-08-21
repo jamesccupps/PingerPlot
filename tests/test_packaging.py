@@ -156,3 +156,22 @@ def test_the_workflow_publishes_checksums():
     wf = (REPO / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
     assert "SHA256SUMS.txt" in wf
     assert "SHA256" in wf
+
+
+def test_the_workflow_creates_the_release_if_absent():
+    """Pushing a tag does not create a release -- GitHub leaves that to you --
+    so on the ordinary path (tag a version, let CI build it) there is nothing
+    to upload to and `gh release upload` alone fails with "release not found".
+    That is exactly what happened on the first v1.3.1 build."""
+    wf = (REPO / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    step = wf[wf.index("Attach to the release"):]
+    assert "gh release create" in step
+    assert "gh release view" in step, "should check before creating"
+    assert "--notes-from-tag" in step, "the annotated tag already holds the notes"
+
+
+def test_the_workflow_refuses_a_tag_without_a_build_recipe():
+    """Dispatching against a tag from before packaging/ existed produced a
+    baffling failure in whichever step first touched a missing file."""
+    wf = (REPO / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    assert "packaging/pingerplot.spec" in wf.split("Check this tag can actually be built")[1][:600]

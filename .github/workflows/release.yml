@@ -122,11 +122,26 @@ jobs:
       - name: Attach to the release
         # gh is preinstalled on the runner, so no third-party action is needed
         # for this and the token stays scoped to this repository.
+        #
+        # Creates the release if it does not exist. Pushing a tag does NOT
+        # create one -- GitHub leaves that to you -- so on the ordinary path
+        # (tag a version, let CI build it) there is nothing to upload to yet,
+        # and `gh release upload` alone fails with "release not found". Notes
+        # come from the annotated tag message, which is written at tag time and
+        # is the right place for them.
         env:
           GH_TOKEN: ${{ github.token }}
-        run: >
-          gh release upload "${{ steps.tag.outputs.name }}"
-          dist/PingerPlot.exe
-          dist/pingerplot-headless.exe
-          dist/SHA256SUMS.txt
-          --clobber
+        shell: bash
+        run: |
+          TAG="${{ steps.tag.outputs.name }}"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            echo "No release for $TAG yet; creating one from the tag message."
+            gh release create "$TAG" --title "PingerPlot ${TAG#v}" --notes-from-tag --verify-tag
+          fi
+          gh release upload "$TAG" \
+            dist/PingerPlot.exe \
+            dist/pingerplot-headless.exe \
+            dist/SHA256SUMS.txt \
+            --clobber
+          echo "Attached to $TAG:"
+          gh release view "$TAG" --json assets --jq '.assets[] | "  \(.name)  \(.size) bytes"'
