@@ -38,7 +38,7 @@ def test_lookup_parses_and_caches(monkeypatch):
     class _Resp:
         def __enter__(self): return self
         def __exit__(self, *a): return False
-        def read(self): return json.dumps(payload).encode("utf-8")
+        def read(self, *_a): return json.dumps(payload).encode("utf-8")
 
     seen = []
 
@@ -65,7 +65,7 @@ def test_lookup_rejects_unsuccessful_body(monkeypatch):
     class _Resp:
         def __enter__(self): return self
         def __exit__(self, *a): return False
-        def read(self): return b'{"success": false}'
+        def read(self, *_a): return b'{"success": false}'
     monkeypatch.setattr(geoip.urllib.request, "urlopen", lambda req, timeout=0: _Resp())
     assert geoip.GeoResolver()._lookup("8.8.8.8") is None
 

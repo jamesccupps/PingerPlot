@@ -105,7 +105,18 @@ def local_ip_for(dest_ip: str) -> str:
 
 def _open_capture(local_ip: str) -> socket.socket:
     """Raw socket in receive-all mode so we see ICMP errors the stack would
-    otherwise swallow. Raises OSError without Administrator rights."""
+    otherwise swallow. Raises OSError without Administrator rights, and
+    likewise on any platform that has no SIO_RCVALL."""
+    if not hasattr(socket, "SIO_RCVALL"):
+        # SIO_RCVALL is a Windows ioctl. Every caller guards this with
+        # `except OSError`, which does not catch the AttributeError that
+        # referencing it elsewhere raises -- so it would sail past
+        # capture_supported() and reach _run's broad handler as an obscure
+        # "Monitor error: AttributeError(...)" instead of the clear "needs
+        # Administrator" message. Unreachable on Linux, where the raw socket
+        # itself fails with EPROTONOSUPPORT first, but not verified on macOS,
+        # which has had an ICMP backend since 1.3.0.
+        raise OSError("raw ICMP capture (SIO_RCVALL) is available only on Windows")
     s = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_IP)
     s.bind((local_ip, 0))
     s.ioctl(socket.SIO_RCVALL, socket.RCVALL_ON)  # type: ignore[attr-defined]
@@ -116,7 +127,7 @@ def _open_capture(local_ip: str) -> socket.socket:
 def _close_capture(s: socket.socket) -> None:
     try:
         s.ioctl(socket.SIO_RCVALL, socket.RCVALL_OFF)  # type: ignore[attr-defined]
-    except OSError:
+    except (OSError, AttributeError):   # AttributeError: not Windows
         pass
     try:
         s.close()
@@ -273,7 +284,10 @@ def probe_path(
                     pass
                 senders[ttl] = [s, start]
             else:  # udp: a distinct destination port per hop correlates the reply
-                key = (port + ttl) & 0xFFFF
+                # Wrapping to 0 makes sendto() fail with EINVAL, and that error
+                # is caught and discarded below -- so the hop vanished from the
+                # round with no trace. Keep the walk inside 1..65535.
+                key = ((port + ttl - 1) % 65535) + 1
                 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 s.setsockopt(socket.IPPROTO_IP, socket.IP_TTL, int(ttl))
                 _set_tos(s, tos)

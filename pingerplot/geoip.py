@@ -17,6 +17,7 @@ from dataclasses import dataclass
 
 _URL = "https://ipwho.is/{ip}?fields=success,latitude,longitude,city,region,country,connection"
 _MIN_INTERVAL = 0.8   # seconds between requests (be polite to the free API)
+_MAX_BODY = 64 * 1024  # a location object is ~300 bytes; anything near this is wrong
 
 
 @dataclass(slots=True)
@@ -109,7 +110,11 @@ class GeoResolver:
             req = urllib.request.Request(_URL.format(ip=ip),
                                          headers={"User-Agent": "PingerPlot"})
             with urllib.request.urlopen(req, timeout=6) as resp:
-                data = json.loads(resp.read().decode("utf-8", "replace"))
+                # Capped: this is one small JSON object from a third party, not
+                # a download. urlopen's timeout applies to socket inactivity
+                # rather than total transfer, so a slow-drip large body would
+                # otherwise be read in full and then handed to json.loads.
+                data = json.loads(resp.read(_MAX_BODY).decode("utf-8", "replace"))
         except (OSError, ValueError):
             return None
         # json.loads returns whatever the body held: a captive portal, a proxy
