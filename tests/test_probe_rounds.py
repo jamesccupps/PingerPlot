@@ -20,7 +20,7 @@ import pytest
 from pingerplot import icmp, tcpudp
 from mock_router import (
     DEST, ICMP_DEST_UNREACH, ICMP_TTL_EXCEEDED, LoopbackService, MockCapture,
-    closed_tcp_port, router_reply,
+    SilentPath, closed_tcp_port, router_reply,
 )
 
 UDP_BASE = 33434
@@ -188,13 +188,45 @@ def test_tcp_parallel_round_runs_when_a_capture_socket_is_available(capture, mon
 
 def test_tcp_parallel_round_marks_unanswered_ttls_as_timeouts(capture, monkeypatch):
     """A destination that never answers must still yield one result per TTL —
-    the round can't silently return a short dict."""
+    the round can't silently return a short dict.
+
+    This used to send real SYNs to 192.0.2.1 and assume that address
+    black-holes. It usually does, but an external audit ran in a container
+    whose own gateway *was* 192.0.2.1 and which refused TCP/443 — and a refusal
+    proves the host answered, so `_tcp_reach` correctly returned IP_SUCCESS and
+    the correct production code failed this test. A suite that depends on what
+    the LAN happens to do is not green, it is lucky. SilentPath makes nothing
+    ever become ready, so the timeout tail is reached deterministically with no
+    packets leaving the machine.
+    """
     capture.install(monkeypatch, tcpudp)
+    silent = SilentPath().install(monkeypatch, tcpudp)
     res = tcpudp.probe_path("192.0.2.1", [1, 2, 3], timeout_ms=300, mode="tcp",
                             port=443, local_ip="0.0.0.0")
     assert set(res) == {1, 2, 3}
     assert all(r.status == icmp.IP_REQ_TIMED_OUT and r.address is None
                for r in res.values())
+    assert len(silent.connects) == 3, "one probe per TTL should still be attempted"
+    assert silent.closed == 3, "every probe socket must be closed"
+
+
+def test_a_refusing_destination_is_not_a_timeout(capture, monkeypatch):
+    """The other side of the same coin, and the behaviour that made the old
+    test environment-dependent: a TCP refusal proves the host is reachable.
+    Pinned here so the distinction is asserted somewhere on purpose rather than
+    depending on which address the test machine's gateway holds. Unlike
+    test_tcp_round_treats_a_refused_port_as_reached, which exercises the serial
+    fallback, this goes through the parallel round's SO_ERROR branch.
+
+    4000 ms, not 2000: Windows does not surface the RST until it has finished
+    retransmitting the SYN, ~2 s measured. That is what TCP_REFUSAL_FLOOR_MS
+    exists for, and a shorter timeout here reads as a timeout, not a refusal."""
+    capture.install(monkeypatch, tcpudp)
+    port = closed_tcp_port()
+    res = tcpudp.probe_path("127.0.0.1", [1], timeout_ms=4000, mode="tcp",
+                            port=port, local_ip="127.0.0.1")
+    assert res[1].status == icmp.IP_SUCCESS
+    assert res[1].reached, "a refusal means the destination answered"
 
 
 def test_probe_path_falls_back_to_serial_without_a_capture_socket(monkeypatch):

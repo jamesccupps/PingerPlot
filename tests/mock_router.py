@@ -166,3 +166,63 @@ def closed_tcp_port() -> int:
     port = s.getsockname()[1]
     s.close()
     return port
+
+
+class SilentPath:
+    """Make every probe socket go unanswered, without depending on the network.
+
+    The test this replaces sent real SYNs to 192.0.2.1 and asserted they timed
+    out -- true on most networks, false on any that routes RFC 5737 space or
+    injects RSTs. The audit ran in a container whose own gateway WAS
+    192.0.2.1 and refused TCP/443, so _tcp_reach correctly returned IP_SUCCESS
+    and the correct production code failed the test.
+
+    Here nothing is ever reported ready, so every TTL falls through to the
+    timeout tail of the round loop -- deterministically, and with no packets
+    leaving the machine at all.
+    """
+
+    def __init__(self) -> None:
+        self.connects: list = []
+        self.closed = 0
+
+    class _Sock:
+        def __init__(self, owner, port):
+            self._owner = owner
+            self._port = port
+
+        def setsockopt(self, *_a):
+            pass
+
+        def setblocking(self, _flag):
+            pass
+
+        def bind(self, _addr):
+            pass
+
+        def getsockname(self):
+            return ("0.0.0.0", self._port)
+
+        def connect_ex(self, addr):
+            self._owner.connects.append(addr)
+            return 115                      # EINPROGRESS; never completes
+
+        def sendto(self, _data, addr):
+            self._owner.connects.append(addr)
+            return 1
+
+        def close(self):
+            self._owner.closed += 1
+
+    def install(self, monkeypatch, module) -> "SilentPath":
+        base = 40000
+        counter = {"n": 0}
+
+        def _factory(_family, _type, *_a):
+            counter["n"] += 1
+            return SilentPath._Sock(self, base + counter["n"])
+
+        monkeypatch.setattr(module.socket, "socket", _factory)
+        monkeypatch.setattr(module.select, "select",
+                            lambda _r, _w, _x, _t=None: ([], [], []))
+        return self
