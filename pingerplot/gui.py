@@ -99,6 +99,7 @@ class App:
         self._monitors: "dict[str, Monitor]" = {}   # target name -> its Monitor
         self._active: Optional[str] = None           # which one the detail tabs show
         self._empty = Monitor()                      # placeholder when nothing selected
+        self._loaded: "set[str]" = set()             # offline sessions, not live targets
         self.geo = geoip.GeoResolver()               # for the Map tab (lazy/opt-in)
         self._geo_started = False
         self._selected_ttl: Optional[int] = None   # hop currently graphed
@@ -705,6 +706,7 @@ class App:
         if not name or name not in self._monitors:
             return
         self._monitors.pop(name).shutdown()
+        self._loaded.discard(name)
         if self.summary_tree.exists(name):
             self.summary_tree.delete(name)
         if self._active == name:
@@ -880,7 +882,13 @@ class App:
             "alert_mos": self.alert_mos_var.get(),
             "alert_sound": bool(self.alert_sound_var.get()),
             "resume_on_launch": bool(self.resume_var.get()),
-            "targets": list(self._monitors.keys()),
+            # Live targets only. A loaded session lives in the same dict so
+            # the detail tabs can render it, but its key is
+            # "<name> (loaded)" -- not a hostname. Saving it meant
+            # _restore_targets called _start() on it next launch, leaving a
+            # permanently-dead row reading "Cannot resolve 'x (loaded)'".
+            # Self-perpetuating, too: every save rewrote it.
+            "targets": [n for n in self._monitors if n not in self._loaded],
         })
 
     def _restore_targets(self) -> None:
@@ -991,6 +999,7 @@ class App:
         if mon is None:
             mon = Monitor()
             self._monitors[name] = mon
+        self._loaded.add(name)
         mon.load_dict(data)
         self._activate(name)
 

@@ -9,3 +9,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from gui_harness import (  # noqa: E402,F401
+    app, isolated_settings, load_session, tk_root,
+)

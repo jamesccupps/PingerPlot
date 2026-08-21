@@ -56,7 +56,21 @@ jobs:
           print('posix backend    :', icmp_posix.is_available());
           print('reason           :', icmp.unavailable_reason() or '(none)')"
 
-      - name: Run tests
+      - name: Install a display and Tk (Linux)
+        # gui.py is 1,470 lines and was untested on the grounds that it imports
+        # tkinter at module level. Tk is testable headlessly: python3-tk plus a
+        # virtual framebuffer is the whole requirement, and it is what lets the
+        # session/settings tests below run at all. Windows runners already have
+        # both.
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq python3-tk xvfb
+
+      - name: Run tests (Linux, under a virtual framebuffer)
         # -rs lists every skipped test with its reason, so a leg of the matrix
         # that quietly covers less than it looks like is visible in the log.
+        if: runner.os == 'Linux'
+        run: xvfb-run -a python -m pytest -q -rs
+
+      - name: Run tests
+        if: runner.os != 'Linux'
         run: python -m pytest -q -rs
