@@ -525,6 +525,8 @@ class App:
         self.finalhop_var = tk.BooleanVar(value=False)
         self.packettype_var = tk.StringVar(value="ICMP")
         self.port_var = tk.StringVar(value="443")
+        self.dscp_var = tk.StringVar(value="0")
+        self.sourceip_var = tk.StringVar(value="")
         self.logpath_var = tk.StringVar(value="")
         self.webhook_var = tk.StringVar(value="")
         self._engine_win: Optional[tk.Toplevel] = None
@@ -552,6 +554,13 @@ class App:
             ("Reply timeout (ms):", ttk.Spinbox(frm, from_=100, to=10000, increment=100, width=9, textvariable=self.timeout_var)),
             ("Payload size (bytes):", ttk.Spinbox(frm, from_=0, to=1472, increment=8, width=9, textvariable=self.psize_var)),
             ("Send delay (ms):", ttk.Spinbox(frm, from_=0, to=1000, increment=5, width=9, textvariable=self.senddelay_var)),
+            # DSCP marks the probe with the traffic class you actually care
+            # about, so a QoS-marked path can be measured as itself instead of
+            # as best-effort.
+            ("DSCP (0-63):", ttk.Spinbox(frm, from_=0, to=63, increment=1, width=9, textvariable=self.dscp_var)),
+            # Pins the outgoing interface on a multi-homed box, so you can ask
+            # what a path looks like from a particular VLAN.
+            ("Source IP (blank = auto):", ttk.Entry(frm, width=18, textvariable=self.sourceip_var)),
         ]
         for i, (label, widget) in enumerate(rows):
             ttk.Label(frm, text=label).grid(row=i, column=0, sticky="w", pady=3, padx=(0, 10))
@@ -571,7 +580,12 @@ class App:
         ttk.Label(frm, text="Webhook URL (alerts):").grid(row=base + 3, column=0, sticky="w", pady=3, padx=(0, 10))
         ttk.Entry(frm, textvariable=self.webhook_var, width=30).grid(row=base + 3, column=1, sticky="w")
 
-        ttk.Label(frm, text="TCP/UDP modes need Administrator (raw socket); ICMP does not. Send delay throttles the "
+        ttk.Label(frm, text="DSCP marks the probe (46 = EF/voice, 34 = AF41/video, 0 = best effort); ICMP mode marks "
+                            "via the IP Helper API, but Windows silently ignores it on TCP/UDP sockets unless "
+                            "DisableUserTOSSetting is cleared - confirm with a capture before trusting a TCP/UDP QoS "
+                            "result. A source IP that this machine does not hold is rejected outright rather than "
+                            "falling back. "
+                            "TCP/UDP modes need Administrator (raw socket); ICMP does not. Send delay throttles the "
                             "probe rate. Logging is crash-safe (flushed every probe). A webhook URL (http/https) gets "
                             "a JSON POST when the destination alert raises or clears. TCP mode raises the reply timeout "
                             f"to at least {monitor.TCP_REFUSAL_FLOOR_MS} ms, because Windows takes about that long to "
@@ -612,6 +626,7 @@ class App:
             psize = int(self.psize_var.get())
             send_delay = int(self.senddelay_var.get())
             port = int(self.port_var.get())
+            dscp = int(self.dscp_var.get())
             a_loss = float(self.alert_loss_var.get())
             a_lat = float(self.alert_lat_var.get())
             a_win = int(self.alert_win_var.get())
@@ -635,6 +650,8 @@ class App:
             final_hop_only=self.finalhop_var.get(),
             packet_type=self.packettype_var.get().lower(),
             port=port,
+            dscp=dscp,
+            source_ip=self.sourceip_var.get(),
             log_path=self.logpath_var.get(),
             alert_enabled=self.alerts_var.get(),
             alert_loss_pct=a_loss,
@@ -775,6 +792,8 @@ class App:
         self.senddelay_var.set(str(mon.send_delay_ms))
         self.port_var.set(str(mon.port))
         self.packettype_var.set(mon.packet_type.upper())
+        self.dscp_var.set(str(mon.dscp))
+        self.sourceip_var.set(mon.source_ip)
         self.logpath_var.set(mon.log_path)
         self.webhook_var.set(mon.webhook_url)
         self.resolve_var.set(mon.resolve_names)
@@ -810,6 +829,7 @@ class App:
             (self.maxhops_var, "max_hops"), (self.timeout_var, "timeout_ms"),
             (self.psize_var, "packet_size"), (self.senddelay_var, "send_delay_ms"),
             (self.port_var, "port"), (self.logpath_var, "log_path"),
+            (self.dscp_var, "dscp"), (self.sourceip_var, "source_ip"),
             (self.webhook_var, "webhook_url"), (self.packettype_var, "packet_type"),
             (self.alert_loss_var, "alert_loss"), (self.alert_lat_var, "alert_latency"),
             (self.alert_win_var, "alert_window"), (self.alert_mos_var, "alert_mos"),
@@ -835,6 +855,8 @@ class App:
             "packet_size": self.psize_var.get(),
             "send_delay_ms": self.senddelay_var.get(),
             "port": self.port_var.get(),
+            "dscp": self.dscp_var.get(),
+            "source_ip": self.sourceip_var.get(),
             "log_path": self.logpath_var.get(),
             "webhook_url": self.webhook_var.get(),
             "packet_type": self.packettype_var.get(),

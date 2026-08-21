@@ -236,3 +236,25 @@ def test_the_flags_are_parsed():
     import argparse
     with pytest.raises(SystemExit):
         headless.main(["--help"])
+
+
+def test_the_table_records_dscp_and_source_when_set():
+    """A marked run measured a different queue from a plain one, and an
+    interface-pinned run measured a different path. Two reports that do not say
+    which are not comparable."""
+    m = _monitor()
+    m.dscp = 46
+    m.source_ip = "10.1.2.3"
+    try:
+        text = "\n".join(headless.format_report("t", m))
+        assert "DSCP 46" in text and "from 10.1.2.3" in text
+    finally:
+        m.shutdown()
+
+
+def test_an_unmarked_report_stays_uncluttered():
+    m = _monitor()
+    try:
+        assert "DSCP" not in "\n".join(headless.format_report("t", m))
+    finally:
+        m.shutdown()

@@ -101,7 +101,10 @@ class Monitor:
         self.final_hop_only = False
         self.packet_type = "icmp"   # "icmp" | "tcp" | "udp"
         self.port = 443
+        self.dscp = 0               # DiffServ code point (0-63); 0 = best effort
+        self.source_ip = ""         # pin the outgoing interface; "" = let the stack pick
         self._local_ip = "0.0.0.0"
+        self._tos = 0               # derived from dscp; the byte that goes on the wire
         self._payload = icmp.DEFAULT_PAYLOAD
         self.log_path = ""
         self.timeout_note = ""   # set when start() raises a too-short timeout
@@ -177,6 +180,8 @@ class Monitor:
         final_hop_only: bool = False,
         packet_type: str = "icmp",
         port: int = 443,
+        dscp: int = 0,
+        source_ip: str = "",
         log_path: str = "",
         alert_enabled: bool = True,
         alert_loss_pct: float = 20.0,
@@ -197,6 +202,9 @@ class Monitor:
         self.final_hop_only = bool(final_hop_only)
         self.packet_type = packet_type if packet_type in ("icmp", "tcp", "udp") else "icmp"
         self.port = max(1, min(int(port), 65535))
+        self.dscp = max(0, min(int(dscp), 63))
+        self._tos = icmp.dscp_to_tos(self.dscp)
+        self.source_ip = (source_ip or "").strip()
         self._payload = _build_payload(self.packet_size)
         self.timeout_note = ""
         if self.packet_type == "tcp" and self.timeout_ms < TCP_REFUSAL_FLOOR_MS:
@@ -318,6 +326,8 @@ class Monitor:
                 "packet_size": self.packet_size,
                 "send_delay_ms": self.send_delay_ms,
                 "max_hops": self.max_hops,
+                "dscp": self.dscp,
+                "source_ip": self.source_ip,
                 "final_hop_only": self.final_hop_only,
                 "samples": max((h.sent for h in self._hops), default=0),
                 "window_start": min(times) if times else None,
@@ -346,6 +356,8 @@ class Monitor:
                     "send_delay_ms": self.send_delay_ms,
                     "packet_type": self.packet_type,
                     "port": self.port,
+                    "dscp": self.dscp,
+                    "source_ip": self.source_ip,
                 },
                 "hops": [
                     {
@@ -379,6 +391,8 @@ class Monitor:
             self.send_delay_ms = int(cfg.get("send_delay_ms", self.send_delay_ms))
             self.packet_type = str(cfg.get("packet_type", self.packet_type))
             self.port = int(cfg.get("port", self.port))
+            self.dscp = int(cfg.get("dscp", self.dscp))
+            self.source_ip = str(cfg.get("source_ip", self.source_ip) or "")
             self._hops = []
             for hd in (data.get("hops", []) or [])[:MAX_LOAD_HOPS]:
                 try:
@@ -544,7 +558,11 @@ class Monitor:
                 # status line, which would repeat it on every round.
                 self._log_event("info", self.timeout_note)
 
-            self._local_ip = tcpudp.local_ip_for(self.target_ip)
+            # An explicit source pins the outgoing interface -- the point of
+            # the setting on a multi-homed box, where the route table would
+            # otherwise decide for you and you could not ask "what does this
+            # path look like from the other VLAN".
+            self._local_ip = self.source_ip or tcpudp.local_ip_for(self.target_ip)
             needs_capture = self.packet_type != "icmp" and not (
                 self.final_hop_only and self.packet_type == "tcp"
             )
@@ -597,6 +615,10 @@ class Monitor:
         proto = self.packet_type.upper()
         if self.packet_type != "icmp":
             proto += f":{self.port}"
+        if self.dscp:
+            proto += f" DSCP {self.dscp}"
+        if self.source_ip:
+            proto += f" from {self.source_ip}"
         scope = "destination only" if self.final_hop_only else f"{route_len} hops"
         base = f"Monitoring {self.target_input} [{self.target_ip}] via {proto} - {scope}"
         if not self.reached_target:
@@ -660,10 +682,11 @@ class Monitor:
         (used for final-hop-only, which pings the destination at full TTL)."""
         actual_ttl = ttl if ip_ttl is None else ip_ttl
         if self.packet_type == "icmp":
-            return icmp.ping(self.target_ip, actual_ttl, self.timeout_ms, self._payload)
+            return icmp.ping(self.target_ip, actual_ttl, self.timeout_ms,
+                             self._payload, self._tos, self.source_ip or None)
         return tcpudp.probe(
             self.target_ip, actual_ttl, self.timeout_ms,
-            self.packet_type, self.port, self._local_ip, self._payload,
+            self.packet_type, self.port, self._local_ip, self._payload, self._tos,
         )
 
     def _gather_range(self, lo: int, hi: int) -> Dict[int, icmp.PingResult]:
@@ -672,7 +695,8 @@ class Monitor:
         (~one timeout total instead of the sum)."""
         if self.packet_type != "icmp":
             return tcpudp.probe_path(self.target_ip, range(lo, hi + 1), self.timeout_ms,
-                                     self.packet_type, self.port, self._local_ip, self._payload)
+                                     self.packet_type, self.port, self._local_ip,
+                                     self._payload, self._tos)
         results: Dict[int, icmp.PingResult] = {}
         if self._ping_pool is None:     # pools torn down (e.g. mid-shutdown)
             return {ttl: icmp.PingResult(icmp.IP_REQ_TIMED_OUT, None, None, False)

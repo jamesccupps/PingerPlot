@@ -37,6 +37,8 @@ SAMPLE_CONFIG = {
         "timeout_ms": 1000,
         "max_hops": 30,
         "packet_type": "icmp",
+        "dscp": 0,
+        "source_ip": "",
         "resolve_names": True,
         "final_hop_only": False,
         "alert_loss_pct": 20,
@@ -87,6 +89,8 @@ def _target_options(defaults: dict, target_cfg: dict) -> Tuple[str, dict]:
         final_hop_only=bool(opts.get("final_hop_only", False)),
         packet_type=str(opts.get("packet_type", "icmp")),
         port=int(opts.get("port", 443)),
+        dscp=int(opts.get("dscp", 0)),
+        source_ip=str(opts.get("source_ip", "")),
         log_path=str(opts.get("log_path", "")),
         alert_enabled=bool(opts.get("alert_enabled", True)),
         alert_loss_pct=float(opts.get("alert_loss_pct", 20)),
@@ -251,6 +255,12 @@ def format_report(name: str, monitor: Monitor) -> List[str]:
     proto = monitor.packet_type.upper()
     if monitor.packet_type != "icmp":
         proto += f":{monitor.port}"
+    # A marked or interface-pinned run measured a different thing from a plain
+    # one; the header has to say so or two reports cannot be compared.
+    if monitor.dscp:
+        proto += f", DSCP {monitor.dscp}"
+    if monitor.source_ip:
+        proto += f", from {monitor.source_ip}"
     lines = [
         "",
         head,

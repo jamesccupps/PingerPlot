@@ -50,6 +50,25 @@ _CLEAN_REACH_ERRORS = {0, errno.ECONNREFUSED, 10061}  # 10061 = WSAECONNREFUSED
 DEFAULT_PORTS = {"tcp": 443, "udp": 33434}
 
 
+def _set_tos(sock: socket.socket, tos: int) -> None:
+    """Mark the probe with an IP ToS byte, best effort.
+
+    Caveat worth knowing before trusting a TCP/UDP QoS test: Windows ignores
+    IP_TOS on an ordinary socket unless the DisableUserTOSSetting registry
+    value is cleared, and it does so *silently* -- setsockopt succeeds either
+    way. ICMP mode does not have this problem, because it marks through
+    IP_OPTION_INFORMATION.Tos in the IP Helper API rather than through a
+    socket. So: prefer ICMP mode for DSCP work on Windows, and confirm with a
+    capture before drawing conclusions from a TCP/UDP run.
+    """
+    if not tos:
+        return
+    try:
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_TOS, int(tos) & 0xFF)
+    except OSError:
+        pass
+
+
 def _tcp_reach(err: int, rtt: float, dest_ip: str) -> PingResult:
     """Classify a TCP probe socket's SO_ERROR. A clean result (connected, or
     refused = port closed) proves the destination answered; anything else is no
@@ -123,6 +142,7 @@ def probe(
     port: int,
     local_ip: str,
     payload: bytes = b"",
+    tos: int = 0,
 ) -> PingResult:
     """One TCP or UDP probe at the given IP TTL. ``mode`` is "tcp" or "udp".
 
@@ -140,6 +160,7 @@ def probe(
         fam = socket.SOCK_STREAM if mode == "tcp" else socket.SOCK_DGRAM
         probe_sock = socket.socket(socket.AF_INET, fam)
         probe_sock.setsockopt(socket.IPPROTO_IP, socket.IP_TTL, int(ip_ttl))
+        _set_tos(probe_sock, tos)
         probe_sock.setblocking(False)
         try:
             probe_sock.bind((local_ip, 0))
@@ -216,6 +237,7 @@ def probe_path(
     port: int,
     local_ip: str,
     payload: bytes = b"",
+    tos: int = 0,
 ) -> dict:
     """Probe all ``ttls`` in one round in parallel, sharing a single capture
     socket — so a round costs ~one timeout instead of the sum (much faster on
@@ -225,7 +247,7 @@ def probe_path(
     try:
         cap = _open_capture(local_ip)
     except OSError:
-        return {ttl: probe(dest_ip, ttl, timeout_ms, mode, port, local_ip, payload)
+        return {ttl: probe(dest_ip, ttl, timeout_ms, mode, port, local_ip, payload, tos)
                 for ttl in ttls}
 
     timeout = max(0.05, timeout_ms / 1000.0)
@@ -237,6 +259,7 @@ def probe_path(
             if mode == "tcp":
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 s.setsockopt(socket.IPPROTO_IP, socket.IP_TTL, int(ttl))
+                _set_tos(s, tos)
                 s.setblocking(False)
                 try:
                     s.bind((local_ip, 0))
@@ -253,6 +276,7 @@ def probe_path(
                 key = (port + ttl) & 0xFFFF
                 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 s.setsockopt(socket.IPPROTO_IP, socket.IP_TTL, int(ttl))
+                _set_tos(s, tos)
                 start = time.perf_counter()
                 try:
                     s.sendto(payload or b"\x00", (dest_ip, key))
