@@ -174,26 +174,31 @@ def probe(
                 r, w, x = select.select(rlist, wlist, wlist, min(0.2, remaining))
             except OSError:
                 break
-            if mode == "tcp" and (w or x):
-                err = probe_sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
-                result = _tcp_reach(err, (time.perf_counter() - start) * 1000.0, dest_ip)
-                break
+            # Drain the capture socket BEFORE consulting the probe socket's
+            # error. When an ICMP error aborts the connect, both become ready
+            # in the same wakeup — and only the captured packet carries the
+            # responder's address. Taking the socket error first threw that
+            # away and recorded a bare timeout, losing exactly the answer the
+            # probe exists to get: *which* box is refusing to forward.
             if r:
                 try:
                     data, _addr = cap.recvfrom(2048)  # type: ignore[union-attr]
                 except OSError:
-                    continue
-                kind = _match(data, src_port, port, dest_ip, mode)
-                if kind is None:
-                    continue
-                responder = socket.inet_ntoa(data[12:16])  # source IP of the ICMP error
-                rtt = (time.perf_counter() - start) * 1000.0
-                if kind == "dest" and responder == dest_ip:
-                    result = PingResult(IP_SUCCESS, rtt, responder, True)   # reached the target
-                else:
-                    # TTL-exceeded router, or an unreachable from a mid-path
-                    # firewall (not the target) — a responding hop, not the end.
-                    result = PingResult(IP_TTL_EXPIRED_TRANSIT, rtt, responder, False)
+                    data = None
+                kind = _match(data, src_port, port, dest_ip, mode) if data else None
+                if kind is not None:
+                    responder = socket.inet_ntoa(data[12:16])  # source of the ICMP error
+                    rtt = (time.perf_counter() - start) * 1000.0
+                    if kind == "dest" and responder == dest_ip:
+                        result = PingResult(IP_SUCCESS, rtt, responder, True)   # reached the target
+                    else:
+                        # TTL-exceeded router, or an unreachable from a mid-path
+                        # firewall (not the target) — a responding hop, not the end.
+                        result = PingResult(IP_TTL_EXPIRED_TRANSIT, rtt, responder, False)
+                    break
+            if mode == "tcp" and (w or x):
+                err = probe_sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+                result = _tcp_reach(err, (time.perf_counter() - start) * 1000.0, dest_ip)
                 break
         return result
     finally:
@@ -268,13 +273,11 @@ def probe_path(
             except OSError:
                 break
             now = time.perf_counter()
-            if mode == "tcp" and (w or x):
-                for ttl in list(pending):
-                    s = senders[ttl][0]
-                    if s in w or s in x:
-                        err = s.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
-                        results[ttl] = _tcp_reach(err, (now - senders[ttl][1]) * 1000.0, dest_ip)
-                        pending.discard(ttl)
+            # Drain the capture socket first. An ICMP error that aborts a
+            # connect makes both ready in the same wakeup, and only the
+            # captured packet names the responder — reading the socket error
+            # first would resolve that TTL as a bare timeout and the `not in
+            # pending` guard below would then discard the router's identity.
             if cap in r:
                 while True:
                     try:
@@ -299,6 +302,13 @@ def probe_path(
                     else:
                         results[ttl] = PingResult(IP_TTL_EXPIRED_TRANSIT, rtt, responder, False)
                     pending.discard(ttl)
+            if mode == "tcp" and (w or x):
+                for ttl in list(pending):
+                    s = senders[ttl][0]
+                    if s in w or s in x:
+                        err = s.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+                        results[ttl] = _tcp_reach(err, (now - senders[ttl][1]) * 1000.0, dest_ip)
+                        pending.discard(ttl)
         for ttl in pending:
             results[ttl] = PingResult(IP_REQ_TIMED_OUT, None, None, False)
         return results
