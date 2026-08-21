@@ -46,6 +46,14 @@ GROW_PROBE_SPAN = 8       # extra TTLs to probe when looking for a longer route
 UNREACHED_BEFORE_GROW = 3  # consecutive dest-miss rounds before probing deeper
 MAX_HOPS_CEILING = 64      # hard cap on max_hops, and so on the probe pool width
 FINAL_HOP_TTL = 255        # TTL used to ping the destination directly
+# Windows does not hand a connecting socket the RST the instant it arrives — it
+# finishes retransmitting the SYN first, then surfaces WSAECONNREFUSED. Measured
+# at ~2.0 s on Windows 11. Below that a *closed* port is indistinguishable from
+# an unreachable host, which is the wrong answer in the most common diagnostic
+# case ("the service is down but the box is fine"). Shortening the window with
+# TCP_MAXRT does not help: it replaces WSAECONNREFUSED with WSAETIMEDOUT and
+# destroys the very distinction the probe exists to draw. So we wait it out.
+TCP_REFUSAL_FLOOR_MS = 3000
 MAX_LOAD_HISTORY = 50_000  # cap a loaded session's per-hop ring buffer (DoS guard)
 MAX_LOG_BYTES = 25 * 1024 * 1024  # roll the probe CSV past ~25 MB (one backup kept)
 MAX_LOAD_HOPS = 1024       # cap hops loaded from a session file (defense-in-depth)
@@ -96,6 +104,7 @@ class Monitor:
         self._local_ip = "0.0.0.0"
         self._payload = icmp.DEFAULT_PAYLOAD
         self.log_path = ""
+        self.timeout_note = ""   # set when start() raises a too-short timeout
         self._log_fh = None
         self._round = 0   # 0 = initial trace; 1,2,3… = monitoring rounds
         self.alert_enabled = True
@@ -187,6 +196,17 @@ class Monitor:
         self.packet_type = packet_type if packet_type in ("icmp", "tcp", "udp") else "icmp"
         self.port = max(1, min(int(port), 65535))
         self._payload = _build_payload(self.packet_size)
+        self.timeout_note = ""
+        if self.packet_type == "tcp" and self.timeout_ms < TCP_REFUSAL_FLOOR_MS:
+            # Raise it rather than let the probe report a closed port as an
+            # unreachable host. Silently overriding a setting the user typed
+            # would be its own bug, so record why for the status line.
+            self.timeout_note = (
+                f"reply timeout raised {self.timeout_ms} -> {TCP_REFUSAL_FLOOR_MS} ms: "
+                f"below that, Windows has not yet surfaced a TCP reset and a closed "
+                f"port is indistinguishable from an unreachable host"
+            )
+            self.timeout_ms = TCP_REFUSAL_FLOOR_MS
         self.log_path = (log_path or "").strip()
         self.alert_enabled = bool(alert_enabled)
         self.alert_loss_pct = max(0.0, float(alert_loss_pct))
@@ -508,6 +528,11 @@ class Monitor:
                 if gen == self._generation:
                     self.running = False
                 return
+
+            if self.timeout_note:
+                # Timestamped in the Events tab rather than appended to the
+                # status line, which would repeat it on every round.
+                self._log_event("info", self.timeout_note)
 
             self._local_ip = tcpudp.local_ip_for(self.target_ip)
             needs_capture = self.packet_type != "icmp" and not (

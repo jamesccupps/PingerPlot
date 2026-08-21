@@ -20,6 +20,7 @@ from typing import Dict, List, Optional
 
 from . import __version__, appicon, geoip, icmp, settings, tcpudp, worldmap
 from .model import HopView, Sample, csv_safe, mos, mos_label
+from . import monitor
 from .monitor import Monitor
 
 REFRESH_MS = 700
@@ -563,7 +564,10 @@ class App:
 
         ttk.Label(frm, text="TCP/UDP modes need Administrator (raw socket); ICMP does not. Send delay throttles the "
                             "probe rate. Logging is crash-safe (flushed every probe). A webhook URL (http/https) gets "
-                            "a JSON POST when the destination alert raises or clears. Changes apply on next Start.",
+                            "a JSON POST when the destination alert raises or clears. TCP mode raises the reply timeout "
+                            f"to at least {monitor.TCP_REFUSAL_FLOOR_MS} ms, because Windows takes about that long to "
+                            "report a closed port and a shorter wait cannot tell one from an unreachable host. "
+                            "Changes apply on next Start.",
                   foreground="#888", wraplength=self.s(380)).grid(
             row=base + 4, column=0, columnspan=2, sticky="w", pady=(8, 2))
         if not tcpudp.is_admin():
