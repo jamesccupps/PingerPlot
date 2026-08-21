@@ -34,6 +34,16 @@ jobs:
       - name: Install dev dependencies
         run: python -m pip install --upgrade pip pytest
 
+      - name: Allow unprivileged ICMP sockets (Linux)
+        # Without this the POSIX backend's live tests skip on every ubuntu leg,
+        # which is how they shipped: the backend had never executed a single
+        # socket operation anywhere. GitHub's runners deny SOCK_DGRAM/ICMP to
+        # the runner's group by default; opening ping_group_range is the same
+        # one-liner the app tells a user to run, and it needs no privilege
+        # beyond the passwordless sudo the runner already grants.
+        if: runner.os == 'Linux'
+        run: sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"
+
       - name: Report ICMP backend availability
         # Printed so a CI log answers "did the live POSIX tests actually run,
         # or did they all skip?" A group that silently skips on half the matrix
