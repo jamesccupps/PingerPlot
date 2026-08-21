@@ -441,11 +441,27 @@ the timeouts are the real code paths. That covers reply-to-hop correlation,
 out-of-order replies, cross-talk rejection, IP options in either header, and
 socket cleanup — none of which any amount of parser testing would have caught.
 
+The Tk layer is tested too, against the real `gui.App` — a withdrawn root on
+Windows, and `xvfb-run -a python -m pytest` on Linux, which is all Tk needs.
+That covers what persists across launches: settings round-trips, which targets
+are resumed, and which are deliberately not (a loaded session is viewable but
+is not a target). Every GUI fixture redirects `%APPDATA%` first, so a test can
+never clobber a real target list.
+
 CI runs `pytest -rs` so every skipped test and its reason appears in the log: a
 group that silently skips on half the matrix isn't covering what it appears to.
+Two rules the suite enforces on itself, both learned the hard way:
 
-The raw-socket and Tk layers need real hardware or a display; exercise them by
-running the app or `python -m pingerplot.selftest <host>`.
+- **No test may depend on what the network happens to do.** One assumed
+  `192.0.2.1` black-holes traffic; it does, until you run in a container whose
+  own gateway *is* `192.0.2.1` and refuses the port — at which point correct
+  code fails the test. A green suite that depends on the LAN isn't green.
+- **No workflow may interpolate `${{ }}` into a `run:` script**, and every
+  action is pinned by commit SHA. Checked by a test, so the next step somebody
+  adds can't quietly reintroduce it.
+
+The raw-socket layer needs real hardware; exercise it by running the app or
+`python -m pingerplot.selftest <host>`.
 
 ### Building the Windows binaries yourself
 

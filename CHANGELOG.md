@@ -4,6 +4,104 @@ All notable changes to PingerPlot are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [1.3.2] — 2026-08-21
+
+Acts on an independent third-party audit of 1.3.1. All fifteen findings are
+addressed. No new features and no behaviour changes you would notice on a
+healthy path — the theme is that several ways the app could stop doing its job
+did so **silently**, and now say so.
+
+### Fixed
+
+- **One malformed reply ended geolocation for the whole session.** `_lookup`
+  wrapped the request and `json.loads` in a `try`, but the first use of the
+  parsed value sat outside it — and `json.loads` returns whatever the body
+  held. A captive portal, proxy error page or CDN interstitial serving a JSON
+  *array* raised `AttributeError`, which propagated out of the worker and
+  killed the thread. That thread is started once and never restarted, so the
+  Map tab silently stopped resolving with no error, no retry and no
+  explanation. The body is now checked by shape, the worker survives anything
+  that still escapes, and the Map header reports the failure count.
+- **A probe log that could not be opened was disabled silently.** The error was
+  reported by assigning `status`, which `_run` overwrites with
+  `Resolving <target>...` milliseconds later, and no Event was logged. The run
+  then looked entirely normal while writing nothing — the exact failure
+  `supervise()`'s docstring rails against. Now a timestamped `warn` Event that
+  stays. Headless also creates the directory for an **absolute** `log_path`,
+  which was one of the ways to hit this.
+- **Headless never checked whether the ICMP backend works.** The GUI does; the
+  headless runner, which is the mode most likely to land on a Linux box, did
+  not. Every probe raised, `_gather_range` swallowed it, and the operator got a
+  clean-looking report saying the destination never answered — pointing them at
+  the network instead of at a one-line `sysctl`. Now warned on stderr, naming
+  the affected targets, and only when a target actually uses ICMP.
+- **`--baseline` could crash a scheduled job after printing its report.**
+  `print_comparison` read the monitor's private hop list with no lock while the
+  probe thread was still running (`run_report` stops waiting, not probing).
+  Iterating a hop's sample deque mid-append raises `RuntimeError`, which
+  `main()`'s `except OSError` did not catch — so the process died with a
+  traceback *after* the tables were printed and never wrote `--report-csv`.
+- **A source IP the machine does not hold behaved differently on POSIX.** The
+  README promises such an address is rejected by name rather than falling back
+  to the default route. The Windows backend does; the POSIX one raised
+  `OSError(EADDRNOTAVAIL)` out of `ping()` — which aborted the trace with a
+  bare errno, or, inside a monitoring round, was swallowed into a timeout, so a
+  pinned interface disappearing mid-run reported **100% loss on a path that was
+  fine**.
+- **Loading a session left a permanently dead row in the Targets grid.** The
+  loaded session was persisted as a target under the key `"<name> (loaded)"`,
+  which the next launch tried to resolve. Self-perpetuating: every save rewrote
+  it.
+- **The UDP port walk could wrap to zero.** With `port=65535` — reachable from
+  the Engine dialog's spinbox — hop 1 computed port 0, `sendto` failed with
+  `EINVAL`, and the error was discarded, so that hop vanished from the round.
+- **`socket.SIO_RCVALL` is Windows-only** and every caller guards
+  `_open_capture` with `except OSError`, which does not catch the resulting
+  `AttributeError`. Unreachable on Linux; unverified on macOS, which has had an
+  ICMP backend since 1.3.0.
+- Alert *clearing* logged inside the monitor's lock, contradicting the rule
+  `_retire_alerts` states in its own docstring — so an outbound webhook POST
+  was started from inside the critical section the UI reads every 700 ms.
+- The geo response body is read with a 64 KB bound. A location object is a few
+  hundred bytes, and `urlopen`'s timeout covers socket inactivity rather than
+  total transfer.
+
+### Changed
+
+- **The release workflow no longer interpolates `${{ }}` into a shell script.**
+  The runner substitutes those into the script *text* before bash sees it, so a
+  dispatch input containing shell metacharacters would execute — in a job
+  holding `contents: write` and a token that can publish releases. Values now
+  arrive via `env:`. The tag is validated by character set *and* shape: a glob's
+  `*` matches a newline, so a tag containing one would otherwise pass the
+  version check and inject an extra step output.
+- **Actions are pinned by commit SHA**, with Dependabot added to keep the pins
+  from going stale silently.
+- `_gather_range` aborts on the run generation like every other loop in the
+  worker, rather than on `running`, which a superseded worker sees flip back to
+  `True`.
+- The Engine dialog now says that UDP traceroute mode walks the destination
+  port upward from *Port*, one per hop. It is the literal port probed only for
+  TCP and for final-hop-only, and nothing said so.
+
+### Notes
+
+- Test suite: 370 → 424. Three of them exist because the fix they cover could
+  otherwise be undone invisibly: no workflow may interpolate into a shell
+  script, the hop list may not be read without the lock, and the tag guard is
+  extracted from the workflow and actually executed.
+- **`gui.py` is now under test.** 1,470 lines at ~10% coverage, skipped on the
+  grounds that it imports `tkinter` at module level. It needs no
+  infrastructure: a withdrawn root on Windows, `python3-tk` and `xvfb-run` on
+  the ubuntu legs, which CI now installs.
+- **One test depended on the LAN.** It assumed `192.0.2.1` black-holes traffic;
+  the audit ran in a container whose own gateway *was* `192.0.2.1` and refused
+  the port, so correct code failed. Replaced with a deterministic stand-in that
+  sends no packets at all.
+- Every fix in this release was verified by reverting it and watching its test
+  go red. Two tests that could not fail were found and rewritten that way — one
+  had spent 30 seconds proving nothing.
+
 ## [1.3.1] — 2026-08-21
 
 Adds downloadable Windows executables, and fixes a config-file bug found while
@@ -163,6 +261,7 @@ have relied on — see **Changed** before comparing old exports with new ones.
 
 - Initial public release.
 
+[1.3.2]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.3.2
 [1.3.1]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.3.1
 [1.3.0]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.3.0
 [1.2.0]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.2.0
