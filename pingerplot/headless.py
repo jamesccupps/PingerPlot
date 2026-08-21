@@ -366,7 +366,15 @@ def print_comparison(targets: List[Target], baseline_path: str,
         log(f"Baseline {baseline_path} has no hop data to compare against.")
         return
     for t in targets:
-        now = [_compare.stats_from_hop(h) for h in t.monitor._hops]
+        # Through snapshot(), not _hops: run_report stops waiting when the
+        # round count is reached but does not stop the monitors, so the probe
+        # thread is still appending here. Reaching into the private list and
+        # iterating a live hop's deque raises "deque mutated during iteration"
+        # -- a RuntimeError, which main()'s `except OSError` does not catch, so
+        # the process died with a traceback AFTER printing the report and never
+        # wrote --report-csv.
+        views, _status, _ip, _input = t.monitor.snapshot()
+        now = _compare.stats_from_views(views)
         if not now:
             log("")
             log(f"{t.name}: nothing to compare (no hops yet)")

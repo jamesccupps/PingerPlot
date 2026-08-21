@@ -126,8 +126,26 @@ class Comparison:
 
 
 def stats_from_hop(hop: Hop) -> HopStats:
+    """Stats from a Hop the caller owns outright.
+
+    Safe for a hop rebuilt from a saved session, which nothing else touches.
+    NOT safe for a hop belonging to a running Monitor -- compute() iterates
+    hop.samples, and iterating a deque another thread is appending to raises
+    "deque mutated during iteration". Use stats_from_views(monitor.snapshot())
+    for anything live.
+    """
     sent, _recv, loss, _cur, avg, _best, _worst, jitter = hop.compute()
     return HopStats(hop.ttl, hop.address, hop.hostname, sent, loss, avg, jitter)
+
+
+def stats_from_views(views) -> List[HopStats]:
+    """Stats from a Monitor.snapshot(), which is taken under the lock.
+
+    The safe way to summarise a monitor that is still probing, and the only
+    construction both the GUI's compare dialog and headless's --baseline use.
+    """
+    return [HopStats(v.ttl, v.address, v.hostname, v.sent, v.loss_pct,
+                     v.avg, v.jitter) for v in views]
 
 
 def stats_from_session(data: dict) -> List[HopStats]:

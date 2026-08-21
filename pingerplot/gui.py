@@ -1039,8 +1039,7 @@ class App:
                     f"target is '{target_input}'.\n\nCompare anyway?"):
                 return
 
-        now = [cmpmod.HopStats(v.ttl, v.address, v.hostname, v.sent,
-                               v.loss_pct, v.avg, v.jitter) for v in views]
+        now = cmpmod.stats_from_views(views)
         self._show_comparison(cmpmod.compare(base, now, target=target_input),
                               base_target)
 
