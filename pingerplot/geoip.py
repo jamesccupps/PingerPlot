@@ -41,6 +41,7 @@ def _is_public(ip: str) -> bool:
 class GeoResolver:
     def __init__(self) -> None:
         self.cache: dict[str, GeoInfo | None] = {}   # None == looked up, no data
+        self.failures = 0                            # lookups that raised, not just missed
         self._q: queue.Queue[str] = queue.Queue()
         self._seen: set[str] = set()
         self._lock = threading.Lock()
@@ -90,7 +91,15 @@ class GeoResolver:
                 ip = self._q.get(timeout=0.5)
             except queue.Empty:
                 continue
-            info = self._lookup(ip)
+            try:
+                info = self._lookup(ip)
+            except Exception:
+                # This thread is started once and never restarted, so anything
+                # that escapes _lookup ends geolocation for the rest of the
+                # session -- silently, because nothing is watching it. One
+                # malformed reply from a third party must not cost the feature.
+                info = None
+                self.failures += 1
             with self._lock:
                 self.cache[ip] = info
             self._stop.wait(_MIN_INTERVAL)
@@ -103,7 +112,10 @@ class GeoResolver:
                 data = json.loads(resp.read().decode("utf-8", "replace"))
         except (OSError, ValueError):
             return None
-        if not data.get("success"):
+        # json.loads returns whatever the body held: a captive portal, a proxy
+        # error page or a CDN interstitial can all be valid JSON that is not an
+        # object. Only an object has the fields below.
+        if not isinstance(data, dict) or not data.get("success"):
             return None
         try:
             conn = data.get("connection") or {}

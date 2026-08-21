@@ -1231,9 +1231,13 @@ class App:
         if not views:
             self.map_header.config(text="No data yet — start a target to map its hops.")
         else:
+            # The failure count only appears when the lookup service is actually
+            # misbehaving. Without it, a map that has quietly stopped resolving
+            # looks identical to one whose hops simply have no location.
+            note = f"  [{self.geo.failures} lookup error(s)]" if self.geo.failures else ""
             self.map_header.config(
                 text=f"Geo-located {len(located)} of {public} public hops via ipwho.is  "
-                     f"(private/LAN hops have no location)")
+                     f"(private/LAN hops have no location){note}")
 
     def _update_table(self, views: List[HopView]) -> None:
         desired = {str(v.ttl) for v in views}

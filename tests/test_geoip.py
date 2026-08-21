@@ -1,6 +1,7 @@
 """Tests for the geoip helper: public/private classification and the resolver's
 dedup/caching. urlopen is mocked — no real network."""
 import json
+import time
 
 from pingerplot import geoip
 
@@ -67,3 +68,69 @@ def test_lookup_rejects_unsuccessful_body(monkeypatch):
         def read(self): return b'{"success": false}'
     monkeypatch.setattr(geoip.urllib.request, "urlopen", lambda req, timeout=0: _Resp())
     assert geoip.GeoResolver()._lookup("8.8.8.8") is None
+
+
+def _body(monkeypatch, raw: bytes):
+    class _Resp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self, *a): return raw
+    monkeypatch.setattr(geoip.urllib.request, "urlopen", lambda req, timeout=0: _Resp())
+
+
+def test_lookup_rejects_a_body_that_is_valid_json_but_not_an_object(monkeypatch):
+    """json.loads happily returns a list, a string or a number. A captive
+    portal, a proxy error page or a CDN interstitial can all produce one, and
+    data.get() on it raises AttributeError rather than returning falsey."""
+    for raw in (b"[]", b'"nope"', b"42", b"null", b'[{"success": true}]'):
+        _body(monkeypatch, raw)
+        assert geoip.GeoResolver()._lookup("8.8.8.8") is None, raw
+
+
+def test_a_malformed_body_does_not_kill_the_worker(monkeypatch):
+    """The worker thread is started once and never restarted, so anything that
+    escapes _lookup ends geolocation for the whole session -- with no error, no
+    status change and no retry. The queue just fills up forever."""
+    _body(monkeypatch, b"[]")
+    r = geoip.GeoResolver()
+    r._stop.wait = lambda *_a: None          # don't pay the politeness delay
+    r.start()
+    try:
+        r.request("8.8.8.8")
+        deadline = time.monotonic() + 5.0
+        while "8.8.8.8" not in r.cache and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert "8.8.8.8" in r.cache and r.cache["8.8.8.8"] is None
+        assert r._thread.is_alive(), "worker died on a malformed reply"
+        assert r.failures == 0, "a handled shape is not a crash"
+
+        # And it must still serve the next address rather than sitting dead.
+        _body(monkeypatch, json.dumps({"success": True, "latitude": 1.0,
+                                       "longitude": 2.0}).encode())
+        r.request("1.1.1.1")
+        deadline = time.monotonic() + 5.0
+        while r.get("1.1.1.1") is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert r.get("1.1.1.1") is not None, "worker stopped serving later lookups"
+    finally:
+        r.stop()
+
+
+def test_an_unexpected_exception_is_counted_not_fatal(monkeypatch):
+    """Belt and braces for the shape guard: whatever else a third party finds
+    to do, the thread survives it and says so."""
+    monkeypatch.setattr(geoip.GeoResolver, "_lookup",
+                        lambda self, ip: (_ for _ in ()).throw(RuntimeError("surprise")))
+    r = geoip.GeoResolver()
+    r._stop.wait = lambda *_a: None
+    r.start()
+    try:
+        r.request("8.8.8.8")
+        deadline = time.monotonic() + 5.0
+        while r.failures == 0 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert r.failures == 1
+        assert r._thread.is_alive()
+        assert r.cache["8.8.8.8"] is None
+    finally:
+        r.stop()
