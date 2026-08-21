@@ -19,7 +19,7 @@ from tkinter import filedialog, font as tkfont, messagebox, ttk
 from typing import Dict, List, Optional
 
 from . import __version__, appicon, geoip, icmp, settings, tcpudp, worldmap
-from .model import HopView, Sample, csv_safe, mos, mos_label
+from .model import HopView, Sample, csv_safe, draw_version, mos, mos_label
 from . import monitor
 from .monitor import Monitor
 
@@ -88,6 +88,7 @@ def _ms(v: Optional[float]) -> str:
 
 def _csv_num(v: Optional[float]) -> str:
     return "" if v is None else f"{v:.1f}"
+
 
 
 class App:
@@ -969,8 +970,8 @@ class App:
         # Redraw the active canvas only when its data actually changed since the
         # last tick (probes arrive every `interval`, but we tick faster). Resize
         # and tab-change redraw via their own bindings, so this can't blank them.
-        ver = (self._active, getattr(active, "_round", -1) if active else -1,
-               self._selected_ttl, self.theme)
+        ver = draw_version(self._active, active, self._selected_ttl, self.theme,
+                           self.geo.count())
         if ver != self._draw_ver:
             self._draw_ver = ver
             self._draw_active_tab()

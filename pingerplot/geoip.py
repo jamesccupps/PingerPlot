@@ -73,6 +73,17 @@ class GeoResolver:
         with self._lock:
             return self.cache.get(ip)
 
+    def count(self) -> int:
+        """How many lookups have resolved so far.
+
+        Results arrive on the worker thread, seconds after the Map view asked
+        for them. The GUI folds this into its redraw key so newly-located hops
+        actually appear: nothing else about the app changes when a lookup
+        lands, so without it the map never repaints to show them.
+        """
+        with self._lock:
+            return len(self.cache)
+
     def _worker(self) -> None:
         while not self._stop.is_set():
             try:

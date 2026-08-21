@@ -231,6 +231,25 @@ def mos_label(score: Optional[float]) -> str:
     return "Bad"
 
 
+def draw_version(active_name, monitor, selected_ttl, theme, geo_count: int):
+    """Everything a canvas redraw depends on, as one comparable tuple.
+
+    The GUI's refresh timer ticks faster than probes arrive, so a canvas is
+    only redrawn when this changes. ``geo_count`` belongs in it because geo
+    lookups land asynchronously, roughly a second apart, and touch none of the
+    other four — so without it the Map tab drew its coastlines, fired off the
+    lookups and then never plotted the answers. A live monitor hid that behind
+    the next round's redraw; a *loaded session* has no next round, so its map
+    stayed empty until the window happened to be resized.
+
+    Here rather than in gui.py so it is testable on any platform, like the
+    other pure presentation helpers below.
+    """
+    return (active_name,
+            getattr(monitor, "_round", -1) if monitor is not None else -1,
+            selected_ttl, theme, geo_count)
+
+
 # --- CSV hardening ---------------------------------------------------------
 _CSV_TRIGGERS = ("=", "+", "-", "@")
 
