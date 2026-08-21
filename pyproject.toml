@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pingerplot"
-version = "1.3.0"
+version = "1.3.1"
 description = "A continuous-traceroute network path monitor (MTR-style) with a Tkinter GUI: per-hop latency, loss, jitter and MOS over time."
 readme = "README.md"
 requires-python = ">=3.10"

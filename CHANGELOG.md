@@ -4,6 +4,44 @@ All notable changes to PingerPlot are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [1.3.1] — 2026-08-21
+
+Adds downloadable Windows executables, and fixes a config-file bug found while
+building them.
+
+### Added
+
+- **Windows executables**, attached to each release and built by CI from the
+  tagged commit: `PingerPlot.exe` (GUI, ~13.5 MB) and `pingerplot-headless.exe`
+  (console, ~10.1 MB), with `SHA256SUMS.txt`. Neither needs Python installed.
+  Both are smoke-tested before they are attached — the GUI binary's import
+  graph is verified through a new `--version` flag (which returns before Tk is
+  created, so it works on a machine with no display), and the headless binary
+  runs a real ICMP probe. They are **unsigned**; the README says plainly what
+  SmartScreen and antivirus heuristics will make of that, and why this binary
+  is a worse-than-average case for the latter.
+- `main.py --version` / `pingerplot --version`.
+
+### Fixed
+
+- **A byte-order mark made a config unreadable.** Writing `monitor.json` with
+  PowerShell's `Set-Content -Encoding utf8` — the shell that ships with Windows
+  — produced a file the app refused outright with `Unexpected UTF-8 BOM`, exit
+  1. Files a person may have authored are now read as `utf-8-sig`, which
+  tolerates a BOM and is otherwise identical: the headless config, a baseline
+  session, a loaded session, and `settings.json`. The settings case was the
+  quietest — `load()` swallows the decode error and returns `{}`, so a BOM
+  there silently reset the theme, engine options, alert thresholds and target
+  list to defaults with no message at all. Writes remain BOM-free.
+
+### Changed
+
+- CI opens `net.ipv4.ping_group_range` on the Linux runners. Without it the
+  POSIX backend's live tests skipped on every ubuntu leg — so the backend
+  shipped in 1.3.0 having never executed a single socket operation anywhere.
+  They now run against real sockets on real Linux. A real multi-hop path is
+  still untested; the README caveat stands.
+
 ## [1.3.0] — 2026-08-21
 
 A full audit pass plus four features. Two of the fixes change results you may
@@ -41,12 +79,6 @@ have relied on — see **Changed** before comparing old exports with new ones.
 - **Automatic restart of a stopped target** in headless mode, with backoff from
   30 s to 5 minutes. A target whose name did not resolve at boot used to stay
   dead for the life of the service.
-- **Windows executables** attached to each release, built by CI from the tagged
-  commit: `PingerPlot.exe` (GUI) and `pingerplot-headless.exe` (console), with
-  `SHA256SUMS.txt`. Both are smoke-tested before they are attached -- the GUI
-  binary's import graph is verified via a new `--version` flag and the headless
-  one runs a real probe. They are unsigned; see the README for what SmartScreen
-  and antivirus will make of that.
 - A **mock router** test fixture (`tests/mock_router.py`) that stands in for the
   `SIO_RCVALL` capture socket, so the TCP/UDP round loops run against real
   sockets and real `select()` calls.
@@ -131,6 +163,7 @@ have relied on — see **Changed** before comparing old exports with new ones.
 
 - Initial public release.
 
+[1.3.1]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.3.1
 [1.3.0]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.3.0
 [1.2.0]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.2.0
 [1.1.1]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.1.1
