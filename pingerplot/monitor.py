@@ -855,21 +855,26 @@ class Monitor:
         )
 
     def _set_alert(self, key: Tuple[int, str], active: bool, text: str) -> None:
+        fire = False
+        cleared: Optional[str] = None
         with self._lock:
             present = key in self._active_alerts
-            if active and not present:
-                self._active_alerts[key] = text
-                fire = True
-            elif active and present:
-                self._active_alerts[key] = text  # refresh the live value
-                fire = False
-            elif (not active) and present:
+            if active:
+                self._active_alerts[key] = text   # set, or refresh the live value
+                fire = not present
+            elif present:
                 cleared = self._active_alerts.pop(key)
-                self._log_event("clear", f"Cleared: {cleared}")
-                return
             else:
                 return
-        if fire:
+        # Outside the lock, both ways. _log_event beeps and starts a webhook
+        # thread, and neither should happen holding it -- the rule
+        # _retire_alerts states in its own docstring. The clear branch used to
+        # break it, which was not a deadlock (the lock is an RLock and neither
+        # call blocks) but left the next person to add work to _log_event
+        # reasonably assuming an invariant that did not hold everywhere.
+        if cleared is not None:
+            self._log_event("clear", f"Cleared: {cleared}")
+        elif fire:
             self._log_event("alert", f"ALERT: {text}")
 
     def _clear_all_alerts(self) -> None:
