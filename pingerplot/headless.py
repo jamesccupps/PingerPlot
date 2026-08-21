@@ -13,6 +13,7 @@ Pure standard library (json + argparse + signal), like the rest of the app.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 import signal
@@ -23,7 +24,7 @@ from pathlib import Path
 from typing import Callable, List, Tuple
 
 from . import __version__
-from .model import mos
+from .model import csv_safe, mos, mos_label
 from .monitor import Monitor
 
 RESTART_DELAY_S = 30.0       # wait this long before restarting a stopped target
@@ -209,6 +210,127 @@ def print_status(targets: List[Target], log: Callable[[str], None] = print) -> N
     sys.stdout.flush()
 
 
+def report_rows(monitor: Monitor) -> List[dict]:
+    """The per-hop summary a report prints, as plain data.
+
+    Kept separate from the formatting so the same numbers feed the console
+    table, the CSV, and the tests, instead of each growing its own version.
+    """
+    views, _status, _ip, _in = monitor.snapshot()
+    last_ttl = views[-1].ttl if views else None
+    rows = []
+    for v in views:
+        rows.append({
+            "hop": v.ttl,
+            "ip": v.address or "*",
+            "hostname": v.hostname or "",
+            "loss_pct": v.loss_pct,
+            "sent": v.sent,
+            "last": v.current,
+            "avg": v.avg,
+            "best": v.best,
+            "worst": v.worst,
+            "jitter": v.jitter,
+            # MOS describes the end-to-end path. On an intermediate router it
+            # would be measuring how eagerly that box answers ICMP, not how
+            # the path performs, so only the destination gets one.
+            "mos": mos(v.avg, v.jitter, v.loss_pct) if v.ttl == last_ttl else None,
+            "is_dest": v.ttl == last_ttl,
+        })
+    return rows
+
+
+def _num(v, width=6, places=1) -> str:
+    return f"{'-':>{width}}" if v is None else f"{v:>{width}.{places}f}"
+
+
+def format_report(name: str, monitor: Monitor) -> List[str]:
+    """An MTR-style table for one target, ready to print or paste in a ticket."""
+    rows = report_rows(monitor)
+    head = f"{name}  [{monitor.target_ip or '?'}]"
+    proto = monitor.packet_type.upper()
+    if monitor.packet_type != "icmp":
+        proto += f":{monitor.port}"
+    lines = [
+        "",
+        head,
+        f"  {proto}, {monitor.interval:g}s interval, {monitor.timeout_ms}ms timeout"
+        f"{'' if monitor.reached_target else '   *** destination never answered ***'}",
+        f"  {'Hop':>3}  {'Address':<16} {'Loss':>6} {'Sent':>5} {'Last':>6} "
+        f"{'Avg':>6} {'Best':>6} {'Wrst':>6} {'Jitr':>6}  Hostname",
+        "  " + "-" * 92,
+    ]
+    for r in rows:
+        marker = "*" if r["is_dest"] else " "
+        lines.append(
+            f" {marker}{r['hop']:>3}  {r['ip']:<16} {r['loss_pct']:>5.1f}% "
+            f"{r['sent']:>5} {_num(r['last'])} {_num(r['avg'])} {_num(r['best'])} "
+            f"{_num(r['worst'])} {_num(r['jitter'])}  {r['hostname']}"
+        )
+    dest = rows[-1] if rows else None
+    if dest and dest["mos"] is not None:
+        lines.append(f"  destination MOS {dest['mos']:.2f} ({mos_label(dest['mos'])})")
+    elif not rows:
+        lines.append("  (no hops - nothing answered)")
+    return lines
+
+
+def write_report_csv(path: str, targets: List[Target]) -> None:
+    """All targets' rows in one CSV, with a target column so several runs can
+    be concatenated and filtered."""
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh)
+        w.writerow(["target", "target_ip", "hop", "ip", "hostname", "loss_pct",
+                    "sent", "last_ms", "avg_ms", "best_ms", "worst_ms",
+                    "jitter_ms", "mos"])
+        for t in targets:
+            for r in report_rows(t.monitor):
+                w.writerow([
+                    csv_safe(t.name), t.monitor.target_ip or "",
+                    r["hop"], csv_safe(r["ip"]), csv_safe(r["hostname"]),
+                    f"{r['loss_pct']:.1f}", r["sent"],
+                    *[("" if r[k] is None else f"{r[k]:.1f}")
+                      for k in ("last", "avg", "best", "worst", "jitter")],
+                    "" if r["mos"] is None else f"{r['mos']:.2f}",
+                ])
+
+
+def run_report(targets: List[Target], rounds: int, log: Callable[[str], None] = print,
+               poll: float = 0.25, deadline: float = 0.0) -> int:
+    """Collect ``rounds`` monitoring rounds, print a table per target, exit.
+
+    The counterpart to the run-forever loop: something a scheduled job or a
+    person writing up a ticket can invoke, get a fixed amount of evidence from,
+    and have exit. Returns 0 only if every target reached its destination, so a
+    script can branch on it.
+
+    The deadline exists because a target that cannot resolve never advances a
+    round at all; without one, a single bad hostname would hang the report
+    forever. Anything collected by then is still reported.
+    """
+    for t in targets:
+        t.monitor._round = 0
+    if deadline <= 0.0:
+        slowest = max((t.monitor.interval for t in targets), default=1.0)
+        longest = max((t.monitor.timeout_ms for t in targets), default=1000) / 1000.0
+        deadline = rounds * (slowest + longest) + longest * 2 + 15.0
+    log(f"Collecting {rounds} round(s) from {len(targets)} target(s)...")
+
+    end = time.monotonic() + deadline
+    while not should_stop() and time.monotonic() < end:
+        if all(t.monitor._round >= rounds or not t.monitor.running for t in targets):
+            break
+        _STOP.wait(poll)
+
+    incomplete = [t.name for t in targets if t.monitor._round < rounds]
+    if incomplete:
+        log(f"  (short of {rounds} rounds: {', '.join(incomplete)})")
+    for t in targets:
+        for line in format_report(t.name, t.monitor):
+            log(line)
+    return 0 if all(t.monitor.reached_target for t in targets) else 1
+
+
 def _install_signal_handlers() -> None:
     def _handle(_signum, _frame):
         request_stop()
@@ -228,6 +350,12 @@ def main(argv=None) -> int:
                     help="write a starter config to CONFIG and exit")
     ap.add_argument("--status-interval", type=float, default=None,
                     help="seconds between status lines (overrides config; 0 = silent)")
+    ap.add_argument("--report", type=int, metavar="N", default=None,
+                    help="collect N rounds, print a summary table per target, then "
+                         "exit. Exit status is 0 only if every target reached its "
+                         "destination, so a script can branch on it.")
+    ap.add_argument("--report-csv", metavar="PATH", default=None,
+                    help="with --report, also write the tables to a CSV file")
     args = ap.parse_args(argv)
     cfg_path = Path(args.config)
 
@@ -260,6 +388,26 @@ def main(argv=None) -> int:
 
     reset_stop()                 # a previous run in this process must not linger
     _install_signal_handlers()
+
+    if args.report is not None:
+        if args.report < 1:
+            print("--report needs a round count of at least 1", file=sys.stderr)
+            for t in targets:
+                t.monitor.shutdown()
+            return 2
+        try:
+            rc = run_report(targets, args.report)
+            if args.report_csv:
+                write_report_csv(args.report_csv, targets)
+                print(f"\nWrote {args.report_csv}")
+        except OSError as exc:
+            print(f"Report failed: {exc}", file=sys.stderr)
+            rc = 1
+        finally:
+            for t in targets:
+                t.monitor.shutdown()
+        return rc
+
     last_status = 0.0
     try:
         while not should_stop():
