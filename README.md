@@ -234,7 +234,37 @@ Bug reports from a real Linux or macOS box are very welcome.
 
 ## Get it
 
-**Download (no Git needed)** — the easiest way:
+**Download the Windows executable** — nothing to install, not even Python:
+
+1. Grab `PingerPlot.exe` from the
+   [**Releases**](https://github.com/jamesccupps/PingerPlot/releases/latest) page.
+2. Double-click it.
+
+`pingerplot-headless.exe` is there too, for [service mode](#headless--service-mode-no-gui)
+on a box with no desktop. Both are built by CI from the tagged commit and
+smoke-tested before they are attached — the GUI binary's import graph is
+verified and the headless one runs a real probe against loopback.
+
+> **They are unsigned, and you should know what that means.** Windows
+> SmartScreen will show *"Windows protected your PC"* on first run — *More
+> info* → *Run anyway*. Some antivirus engines also flag PyInstaller binaries
+> heuristically, and this one is a worse-than-average case for that: it calls
+> into `iphlpapi` through `ctypes`, opens raw capture sockets, and enumerates
+> network paths, which is a fair description of both a diagnostic tool and
+> something you would not want running unasked. A code-signing certificate
+> would fix the SmartScreen half; this is a hobby project and doesn't have one.
+>
+> `SHA256SUMS.txt` is published with each release so you can check what you
+> downloaded is what CI built:
+>
+> ```powershell
+> Get-FileHash .\PingerPlot.exe -Algorithm SHA256
+> ```
+>
+> If you would rather not run an unsigned binary at all — a reasonable
+> position — use the source route below. It is the same program.
+
+**Or run from source** (needs Python 3.10+):
 
 1. Grab the latest `Source code (zip)` from the
    [**Releases**](https://github.com/jamesccupps/PingerPlot/releases/latest) page.
@@ -417,6 +447,20 @@ group that silently skips on half the matrix isn't covering what it appears to.
 The raw-socket and Tk layers need real hardware or a display; exercise them by
 running the app or `python -m pingerplot.selftest <host>`.
 
+### Building the Windows binaries yourself
+
+CI does this on every tag, but the recipe is in the repo and reproducible:
+
+```powershell
+python -m pip install pyinstaller
+python packaging/make_icon.py build/pingerplot.ico
+python -m PyInstaller --noconfirm --clean packaging/pingerplot.spec
+```
+
+`main.py --version` exits before Tk is created, which is how a windowed build
+gets verified without a display — the whole import graph is walked, so a
+missing module fails there instead of in a message box on somebody's desktop.
+
 ## Project layout
 
 ```
@@ -438,6 +482,10 @@ pingerplot/
   geoip.py         lazy IP geolocation via ipwho.is (Map tab only)
   worldmap.py      baked Natural Earth coastlines (zero-dependency backdrop)
   selftest.py      headless trace/monitor for the console
+packaging/
+  pingerplot.spec  PyInstaller recipe for both Windows binaries
+  make_icon.py     builds a multi-size .ico from the procedural app icon
+  headless_entry.py  console entry point for the frozen headless runner
 tests/             pytest for the pure layers + a mock router for the socket layer
 ```
 

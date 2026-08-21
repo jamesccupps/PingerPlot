@@ -1,0 +1,118 @@
+name: Release binaries
+
+# Build the Windows executables and attach them to the release for a tag.
+#
+# Runs on a tag push, and can be dispatched by hand against a tag that already
+# exists (which is how v1.3.0 got its binaries after the fact).
+#
+# The binaries are built here rather than on somebody's laptop so that what
+# people download is reproducible from a commit, and so the verification below
+# is not optional. An early hand-built attempt shipped an exe that died at
+# import because of an over-eager --exclude-module; the smoke tests in this
+# workflow are the thing that makes that a red build instead of a download.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and attach to (e.g. v1.3.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write   # uploading release assets needs write; nothing else does
+
+jobs:
+  windows:
+    name: Windows executables
+    runs-on: windows-latest
+
+    steps:
+      - name: Work out which tag we are building
+        id: tag
+        shell: bash
+        run: echo "name=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.tag.outputs.name }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install build tooling
+        run: python -m pip install --upgrade pip pyinstaller pytest
+
+      - name: Test the source before freezing it
+        # Freezing a broken tree just produces a broken binary more slowly.
+        run: python -m pytest -q -rs
+
+      - name: Generate the application icon
+        # Drawn from the same code as the in-app icon, so the two cannot drift.
+        run: python packaging/make_icon.py build/pingerplot.ico
+
+      - name: Build
+        run: python -m PyInstaller --noconfirm --clean packaging/pingerplot.spec
+
+      - name: Smoke-test the frozen GUI binary
+        # --version exits before Tk is created, so this runs without a display
+        # while still importing the whole graph: gui -> geoip -> urllib.request
+        # -> email. A bad exclude fails right here.
+        #
+        # Start-Process -Wait -PassThru, NOT $LASTEXITCODE: PingerPlot.exe is a
+        # GUI-subsystem binary, so PowerShell does not wait for it and
+        # $LASTEXITCODE keeps whatever the previous command left behind. The
+        # first version of this step read a stale 0 and would have passed a
+        # broken build. Verified the other way too -- a deliberately broken
+        # build (--exclude-module email) exits 1 here and prints its traceback.
+        run: |
+          $p = Start-Process .\dist\PingerPlot.exe -ArgumentList '--version' -Wait -PassThru -NoNewWindow
+          if ($p.ExitCode -ne 0) { throw "frozen GUI exited $($p.ExitCode)" }
+          Write-Host "GUI binary import graph OK"
+
+      - name: Smoke-test the frozen headless binary
+        # Goes further: a real ICMP probe to loopback through the frozen
+        # backend, so the ctypes/iphlpapi path is exercised too, not just
+        # imported.
+        run: |
+          .\dist\pingerplot-headless.exe --help
+          if ($LASTEXITCODE -ne 0) { throw "frozen headless exited $LASTEXITCODE" }
+          $cfg = "smoke.json"
+          $json = '{ "status_interval": 0, "defaults": { "interval": 0.5, "timeout_ms": 1000, "max_hops": 4 }, "targets": [ { "target": "127.0.0.1", "final_hop_only": true } ] }'
+          [IO.File]::WriteAllText("$PWD\$cfg", $json, (New-Object Text.UTF8Encoding $false))
+          .\dist\pingerplot-headless.exe $cfg --report 2
+          if ($LASTEXITCODE -ne 0) { throw "frozen headless probe exited $LASTEXITCODE" }
+          Write-Host "headless binary probed loopback OK"
+
+      - name: Checksums
+        # Published alongside the binaries: they are unsigned, so a hash a
+        # reader can compare is the only integrity story on offer.
+        run: |
+          cd dist
+          Get-FileHash *.exe -Algorithm SHA256 |
+            ForEach-Object { "{0}  {1}" -f $_.Hash.ToLower(), (Split-Path $_.Path -Leaf) } |
+            Tee-Object -FilePath SHA256SUMS.txt
+        shell: pwsh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pingerplot-windows-${{ steps.tag.outputs.name }}
+          path: |
+            dist/PingerPlot.exe
+            dist/pingerplot-headless.exe
+            dist/SHA256SUMS.txt
+
+      - name: Attach to the release
+        # gh is preinstalled on the runner, so no third-party action is needed
+        # for this and the token stays scoped to this repository.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release upload "${{ steps.tag.outputs.name }}"
+          dist/PingerPlot.exe
+          dist/pingerplot-headless.exe
+          dist/SHA256SUMS.txt
+          --clobber

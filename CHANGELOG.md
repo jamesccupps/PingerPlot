@@ -41,6 +41,12 @@ have relied on — see **Changed** before comparing old exports with new ones.
 - **Automatic restart of a stopped target** in headless mode, with backoff from
   30 s to 5 minutes. A target whose name did not resolve at boot used to stay
   dead for the life of the service.
+- **Windows executables** attached to each release, built by CI from the tagged
+  commit: `PingerPlot.exe` (GUI) and `pingerplot-headless.exe` (console), with
+  `SHA256SUMS.txt`. Both are smoke-tested before they are attached -- the GUI
+  binary's import graph is verified via a new `--version` flag and the headless
+  one runs a real probe. They are unsigned; see the README for what SmartScreen
+  and antivirus will make of that.
 - A **mock router** test fixture (`tests/mock_router.py`) that stands in for the
   `SIO_RCVALL` capture socket, so the TCP/UDP round loops run against real
   sockets and real `select()` calls.

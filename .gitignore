@@ -18,7 +18,10 @@ build/
 dist/
 *.egg-info/
 *.egg
+# PyInstaller writes a .spec next to whatever you point it at, and those are
+# throwaway. The one under packaging/ is authored and reviewed, so it is not.
 *.spec
+!packaging/*.spec
 
 # Virtual environments
 .venv/

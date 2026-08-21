@@ -1452,6 +1452,15 @@ def _enable_windows_dpi_awareness() -> None:
 
 
 def main() -> None:
+    if "--version" in sys.argv[1:]:
+        # Exits before Tk is touched, which makes this the one way to run the
+        # windowed build without a display -- and therefore the way CI proves a
+        # frozen binary's import graph is intact. gui imports geoip imports
+        # urllib.request imports email, so a bad PyInstaller exclude fails here
+        # rather than in a message box on a user's desktop. That is not
+        # hypothetical: it is exactly how the first build of this was broken.
+        print(f"PingerPlot {__version__}")
+        return
     _enable_windows_dpi_awareness()
     root = tk.Tk()
     App(root)
