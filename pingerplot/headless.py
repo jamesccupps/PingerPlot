@@ -23,7 +23,7 @@ import time
 from pathlib import Path
 from typing import Callable, List, Tuple
 
-from . import __version__, compare as _compare
+from . import __version__, compare as _compare, icmp
 from .model import csv_safe, mos, mos_label
 from .monitor import Monitor
 
@@ -376,6 +376,33 @@ def print_comparison(targets: List[Target], baseline_path: str,
             log(line)
 
 
+def _warn_if_icmp_unusable(targets: List[Target], out=None) -> bool:
+    """Say so when ICMP targets are configured and the backend cannot probe.
+
+    The GUI puts this in a dialog. A headless box is where it matters more,
+    because nobody is watching one -- every probe raises inside icmp.ping, gets
+    swallowed by _gather_range and is recorded as a timeout, so the operator
+    gets a clean-looking report saying the destination never answered and an
+    exit status of 1. That points them at the network when the actual fix, on
+    Linux, is one sysctl.
+
+    Only fires when a target actually needs the backend: TCP and UDP modes do
+    not use it, and warning a TCP-only config would be noise.
+    """
+    if icmp.is_available():
+        return False
+    using = [t.name for t in targets if t.monitor.packet_type == "icmp"]
+    if not using:
+        return False
+    out = out if out is not None else sys.stderr
+    print(f"WARNING: ICMP backend unavailable - {icmp.unavailable_reason()}",
+          file=out)
+    print(f"         {len(using)} ICMP target(s) will report no replies: "
+          f"{', '.join(using)}", file=out)
+    print("         TCP and UDP probe modes do not use this backend.", file=out)
+    return True
+
+
 def _install_signal_handlers() -> None:
     def _handle(_signum, _frame):
         request_stop()
@@ -441,6 +468,7 @@ def main(argv=None) -> int:
     if not targets:
         print("No valid targets to monitor.", file=sys.stderr)
         return 1
+    _warn_if_icmp_unusable(targets)
 
     reset_stop()                 # a previous run in this process must not linger
     _install_signal_handlers()
