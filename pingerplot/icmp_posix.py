@@ -40,6 +40,7 @@ import time
 from typing import Optional, Tuple
 
 from .icmp import (
+    ERROR_INVALID_NETNAME,
     IP_DEST_HOST_UNREACHABLE,
     IP_DEST_NET_UNREACHABLE,
     IP_DEST_PORT_UNREACHABLE,
@@ -226,7 +227,18 @@ def ping(
             except OSError:
                 pass          # without it intermediate hops read as timeouts
         if source_ip:
-            sock.bind((source_ip, 0))
+            try:
+                sock.bind((source_ip, 0))
+            except OSError:
+                # Same contract as the Windows backend, which fails an address
+                # the machine does not hold with ERROR_INVALID_NETNAME rather
+                # than falling back to the default route. Raising instead would
+                # abort the trace with a bare errno 99, and inside a monitoring
+                # round _gather_range would swallow it into a timeout -- so a
+                # pinned interface going away mid-run would report 100% loss on
+                # a path that is fine. That silent-wrong-numbers outcome is the
+                # exact thing the setting exists to prevent.
+                return PingResult(ERROR_INVALID_NETNAME, None, None, False)
         sock.setblocking(False)
 
         start = time.perf_counter()

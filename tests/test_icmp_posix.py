@@ -266,3 +266,111 @@ def test_a_ttl_of_one_does_not_reach_a_distant_host():
 def test_the_engine_reaches_the_same_backend():
     """icmp.ping dispatches, so the whole app follows without knowing."""
     assert icmp.ping("127.0.0.1", ttl=64, timeout_ms=2000).reached
+
+
+# --- the source-IP contract ------------------------------------------------
+#
+# The README makes an explicit promise about this setting: "An address the
+# machine doesn't hold is rejected with ERROR_INVALID_NETNAME rather than
+# silently falling back to the default route — a silent fallback is the
+# dangerous outcome, because the numbers look fine and describe a path you
+# didn't ask about."
+#
+# The Windows backend keeps it (tests/test_dscp_and_source.py). This backend
+# called sock.bind((source_ip, 0)) with no guard, so the same input raised
+# OSError(EADDRNOTAVAIL) straight out of ping() -- two different wrong
+# behaviours depending on when it happened. During _trace the exception reaches
+# _run's broad handler and the monitor stops with a raw "Monitor error:
+# OSError(99, 'Cannot assign requested address')". During a monitoring round
+# _gather_range swallows it into a timeout, so a pinned interface disappearing
+# mid-run reports 100% packet loss on a path that is fine -- the
+# silent-wrong-numbers failure the setting exists to prevent, one step removed.
+#
+# The socket is faked so these run on every platform including Windows, which
+# is where this backend cannot execute at all and where it would otherwise go
+# untested. The live pair below covers the real kernel.
+
+
+class _BindRefusingSocket:
+    def __init__(self, *_a, **_kw):
+        self.closed = False
+
+    def setsockopt(self, *_a):
+        pass
+
+    def bind(self, _addr):
+        raise OSError(errno.EADDRNOTAVAIL, "Cannot assign requested address")
+
+    def setblocking(self, _flag):
+        raise AssertionError("reached setblocking: bind() failure was not handled")
+
+    def close(self):
+        self.closed = True
+
+
+@pytest.fixture
+def any_platform(monkeypatch):
+    """ping() refuses to run off Linux/macOS. The bind guard is platform-neutral
+    logic, so lift that gate rather than leaving it uncovered on Windows."""
+    monkeypatch.setattr(icmp_posix, "_SUPPORTED_PLATFORM", True)
+
+
+def test_a_source_the_machine_does_not_hold_is_named_not_raised(any_platform, monkeypatch):
+    monkeypatch.setattr(icmp_posix.socket, "socket", _BindRefusingSocket)
+    r = icmp_posix.ping("127.0.0.1", ttl=64, timeout_ms=200,
+                        source_ip="203.0.113.7")
+    assert r.status == icmp.ERROR_INVALID_NETNAME
+    assert not r.reached and r.rtt_ms is None
+    assert "not on this machine" in icmp.status_text(r.status)
+
+
+def test_the_rejection_matches_what_the_windows_backend_returns(any_platform, monkeypatch):
+    """One vocabulary across both backends: the engine and the GUI render the
+    status, so a POSIX-only code would print as a bare number."""
+    monkeypatch.setattr(icmp_posix.socket, "socket", _BindRefusingSocket)
+    r = icmp_posix.ping("127.0.0.1", timeout_ms=200, source_ip="203.0.113.7")
+    assert icmp.status_text(r.status) != str(r.status), "unmapped status code"
+    assert r.status in icmp._STATUS_TEXT
+
+
+def test_the_socket_is_closed_when_bind_fails(any_platform, monkeypatch):
+    made = []
+    monkeypatch.setattr(icmp_posix.socket, "socket",
+                        lambda *a, **kw: made.append(_BindRefusingSocket()) or made[-1])
+    icmp_posix.ping("127.0.0.1", timeout_ms=200, source_ip="203.0.113.7")
+    assert made and made[0].closed, "leaked a socket on the rejection path"
+
+
+def test_no_source_ip_never_touches_bind(any_platform, monkeypatch):
+    """The guard must not have made the ordinary path pay for it."""
+    class _NoBind(_BindRefusingSocket):
+        def bind(self, _addr):
+            raise AssertionError("bind() called without a source_ip")
+
+        def setblocking(self, _flag):
+            raise _Done()
+
+    class _Done(Exception):
+        pass
+
+    monkeypatch.setattr(icmp_posix.socket, "socket", _NoBind)
+    with pytest.raises(_Done):
+        icmp_posix.ping("127.0.0.1", timeout_ms=200)
+
+
+@LIVE
+def test_a_source_the_machine_does_not_hold_is_named_not_raised_live():
+    """The real thing, where a real kernel refuses a real address. 203.0.113.7
+    is RFC 5737 documentation space -- no machine holds it."""
+    r = icmp_posix.ping("127.0.0.1", ttl=64, timeout_ms=500,
+                        source_ip="203.0.113.7")
+    assert r.status == icmp.ERROR_INVALID_NETNAME
+    assert not r.reached
+
+
+@LIVE
+def test_binding_to_an_address_the_machine_does_hold_still_works():
+    """The other half: the guard must not have broken the working case."""
+    r = icmp_posix.ping("127.0.0.1", ttl=64, timeout_ms=2000,
+                        source_ip="127.0.0.1")
+    assert r.reached and r.status == icmp.IP_SUCCESS
