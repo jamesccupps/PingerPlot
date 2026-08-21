@@ -18,7 +18,7 @@ import tkinter as tk
 from tkinter import filedialog, font as tkfont, messagebox, ttk
 from typing import Dict, List, Optional
 
-from . import __version__, appicon, geoip, icmp, settings, tcpudp, worldmap
+from . import __version__, appicon, compare as cmpmod, geoip, icmp, settings, tcpudp, worldmap
 from .model import HopView, Sample, csv_safe, draw_version, mos, mos_label
 from . import monitor
 from .monitor import Monitor
@@ -315,6 +315,9 @@ class App:
         file_menu.add_command(label="Export CSV…", command=self._export)
         file_menu.add_command(label="Save session…", command=self._save_session)
         file_menu.add_command(label="Load session…", command=self._load_session)
+        file_menu.add_separator()
+        file_menu.add_command(label="Compare with saved session…",
+                              command=self._compare_with_baseline)
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self._on_close)
         menubar.add_cascade(label="File", menu=file_menu)
@@ -982,6 +985,119 @@ class App:
             self._monitors[name] = mon
         mon.load_dict(data)
         self._activate(name)
+
+    # --- baseline comparison ----------------------------------------------
+    def _compare_with_baseline(self) -> None:
+        """Diff the active target against a session saved earlier.
+
+        The tool could always say what a path looks like now; this is what says
+        whether that differs from last Tuesday, which is the question people
+        actually turn up with.
+        """
+        views, _status, _ip, target_input = self.monitor.snapshot()
+        if not views:
+            messagebox.showinfo("Nothing to compare",
+                                "Start a target first - there is no current data.")
+            return
+        path = filedialog.askopenfilename(
+            title="Choose a saved session to compare against",
+            filetypes=[("PingerPlot session", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("Compare failed", str(exc))
+            return
+        if not isinstance(data, dict):
+            messagebox.showerror("Compare failed", "Not a PingerPlot session file.")
+            return
+
+        base = cmpmod.stats_from_session(data)
+        if not base:
+            messagebox.showerror("Compare failed",
+                                 "That session has no hop data to compare against.")
+            return
+        base_target = str(data.get("target_input") or os.path.basename(path))
+        if base_target and target_input and base_target != target_input:
+            # Comparing two different destinations is almost always a mis-click,
+            # and the per-hop numbers would be meaningless. Warn, but allow it:
+            # the same host is legitimately reachable under two names.
+            if not messagebox.askyesno(
+                    "Different target",
+                    f"The saved session is for '{base_target}' but the current "
+                    f"target is '{target_input}'.\n\nCompare anyway?"):
+                return
+
+        now = [cmpmod.HopStats(v.ttl, v.address, v.hostname, v.sent,
+                               v.loss_pct, v.avg, v.jitter) for v in views]
+        self._show_comparison(cmpmod.compare(base, now, target=target_input),
+                              base_target)
+
+    def _show_comparison(self, cmp_, baseline_label: str) -> None:
+        win = tk.Toplevel(self.root)
+        win.title(f"Compare - now vs {baseline_label}")
+        win.transient(self.root)
+        win.geometry(f"{self.s(900)}x{self.s(460)}")
+        win.configure(bg=COLORS["win_bg"])
+
+        ttk.Label(win, text=cmp_.summary(), padding=(self.s(10), self.s(8)),
+                  font=("Segoe UI", 9, "bold")).pack(side="top", anchor="w")
+
+        cols = ("ttl", "address", "loss", "d_loss", "avg", "d_avg", "verdict")
+        tree = ttk.Treeview(win, columns=cols, show="headings", selectmode="browse")
+        for key, title, width, anchor in (
+            ("ttl", "Hop", 44, "center"), ("address", "Address", 150, "w"),
+            ("loss", "Loss", 62, "e"), ("d_loss", "Δ Loss", 74, "e"),
+            ("avg", "Avg ms", 70, "e"), ("d_avg", "Δ Avg", 74, "e"),
+            ("verdict", "Change", 260, "w"),
+        ):
+            tree.heading(key, text=title)
+            tree.column(key, width=self.s(width), anchor=anchor,
+                        stretch=(key == "verdict"))
+        for tag, key in (("bad", "bad"), ("warn", "warn"),
+                         ("ok", "ok"), ("dest", "dest")):
+            tree.tag_configure(tag, background=COLORS[key], foreground=COLORS["fg"])
+
+        for r in cmp_.rows:
+            side = r.now or r.base
+            note = r.verdict
+            if r.verdict == cmpmod.REROUTED and r.base and r.now:
+                note = f"rerouted  {r.base.address} → {r.now.address}"
+            tree.insert("", "end", values=(
+                r.ttl,
+                r.address or "*",
+                "—" if side is None else f"{side.loss_pct:.0f}%",
+                "" if r.d_loss is None else f"{r.d_loss:+.0f}%",
+                "—" if side is None or side.avg is None else _ms(side.avg),
+                "" if r.d_avg is None else f"{r.d_avg:+.1f}",
+                note,
+            ), tags=(self._verdict_tag(r.verdict),))
+
+        vsb = ttk.Scrollbar(win, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=vsb.set)
+        footer = ttk.Frame(win, padding=(self.s(8), self.s(6)))
+        footer.pack(side="bottom", fill="x")
+        ttk.Button(footer, text="Copy",
+                   command=lambda: self._clip("\n".join(
+                       cmpmod.format_comparison(cmp_, baseline_label)))).pack(side="left")
+        ttk.Button(footer, text="Close", command=win.destroy).pack(side="right")
+        vsb.pack(side="right", fill="y")
+        tree.pack(side="left", fill="both", expand=True)
+
+    @staticmethod
+    def _verdict_tag(verdict: str) -> str:
+        """Red for a regression, amber for anything that moved, plain for the
+        rest - so the eye lands on the hops that got worse."""
+        if verdict == cmpmod.WORSE:
+            return "bad"
+        if verdict in (cmpmod.REROUTED, cmpmod.NEW, cmpmod.GONE):
+            return "warn"
+        if verdict == cmpmod.BETTER:
+            return "dest"
+        return "ok"
 
     # --- refresh loop ------------------------------------------------------
     def _refresh(self) -> None:

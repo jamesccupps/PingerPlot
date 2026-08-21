@@ -258,3 +258,71 @@ def test_an_unmarked_report_stays_uncluttered():
         assert "DSCP" not in "\n".join(headless.format_report("t", m))
     finally:
         m.shutdown()
+
+
+# --- baseline comparison ---------------------------------------------------
+
+class TestBaselineComparison:
+    """--baseline diffs each target against a saved session, so the report
+    answers 'is this worse than it was' and not only 'what is it now'."""
+
+    def _saved(self, tmp_path, hops):
+        import json
+        m = _monitor(hops=hops)
+        path = tmp_path / "base.json"
+        path.write_text(json.dumps(m.to_dict()), encoding="utf-8")
+        m.shutdown()
+        return str(path)
+
+    def test_it_diffs_against_the_saved_run(self, tmp_path):
+        base = self._saved(tmp_path, (("10.0.0.1", 2.0), ("203.0.113.9", 10.0)))
+        now = _monitor(hops=(("10.0.0.1", 2.0), ("203.0.113.9", 95.0)))
+        lines = []
+        try:
+            headless.print_comparison([_target(now)], base, log=lines.append)
+            text = "\n".join(lines)
+            assert "worse" in text
+            assert "+85.0" in text
+        finally:
+            now.shutdown()
+
+    def test_an_unreadable_baseline_says_so_and_does_not_raise(self, tmp_path):
+        m = _monitor()
+        lines = []
+        try:
+            headless.print_comparison([_target(m)], str(tmp_path / "nope.json"),
+                                      log=lines.append)
+            assert "Cannot read baseline" in "\n".join(lines)
+        finally:
+            m.shutdown()
+
+    def test_a_baseline_with_no_hops_says_so(self, tmp_path):
+        path = tmp_path / "empty.json"
+        path.write_text('{"hops": []}', encoding="utf-8")
+        m = _monitor()
+        lines = []
+        try:
+            headless.print_comparison([_target(m)], str(path), log=lines.append)
+            assert "no hop data" in "\n".join(lines)
+        finally:
+            m.shutdown()
+
+    def test_a_target_with_no_data_yet_is_skipped_not_fatal(self, tmp_path):
+        base = self._saved(tmp_path, (("10.0.0.1", 2.0),))
+        empty = _monitor(hops=(), reached=False)
+        lines = []
+        try:
+            headless.print_comparison([_target(empty)], base, log=lines.append)
+            assert "nothing to compare" in "\n".join(lines)
+        finally:
+            empty.shutdown()
+
+    def test_the_output_survives_a_legacy_console(self, tmp_path):
+        base = self._saved(tmp_path, (("10.0.0.1", 2.0), ("203.0.113.9", 10.0)))
+        now = _monitor(hops=(("10.0.0.1", 2.0), ("203.0.113.9", 95.0)))
+        lines = []
+        try:
+            headless.print_comparison([_target(now)], base, log=lines.append)
+            "\n".join(lines).encode("cp1252")
+        finally:
+            now.shutdown()

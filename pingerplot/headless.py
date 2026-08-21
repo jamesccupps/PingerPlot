@@ -23,7 +23,7 @@ import time
 from pathlib import Path
 from typing import Callable, List, Tuple
 
-from . import __version__
+from . import __version__, compare as _compare
 from .model import csv_safe, mos, mos_label
 from .monitor import Monitor
 
@@ -341,6 +341,36 @@ def run_report(targets: List[Target], rounds: int, log: Callable[[str], None] = 
     return 0 if all(t.monitor.reached_target for t in targets) else 1
 
 
+def print_comparison(targets: List[Target], baseline_path: str,
+                     log: Callable[[str], None] = print) -> None:
+    """Diff each target against a saved session.
+
+    One baseline file against several targets is deliberate: the usual shape is
+    one saved session per path, so a mismatch is normal and quiet -- a target
+    with nothing to compare against simply says so instead of erroring the run.
+    """
+    try:
+        with open(baseline_path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as exc:
+        log(f"Cannot read baseline {baseline_path}: {exc}")
+        return
+    base_stats = _compare.stats_from_session(data)
+    base_name = str(data.get("target_input") or baseline_path)
+    if not base_stats:
+        log(f"Baseline {baseline_path} has no hop data to compare against.")
+        return
+    for t in targets:
+        now = [_compare.stats_from_hop(h) for h in t.monitor._hops]
+        if not now:
+            log("")
+            log(f"{t.name}: nothing to compare (no hops yet)")
+            continue
+        cmp_ = _compare.compare(base_stats, now, target=t.name)
+        for line in _compare.format_comparison(cmp_, base_name):
+            log(line)
+
+
 def _install_signal_handlers() -> None:
     def _handle(_signum, _frame):
         request_stop()
@@ -366,6 +396,11 @@ def main(argv=None) -> int:
                          "destination, so a script can branch on it.")
     ap.add_argument("--report-csv", metavar="PATH", default=None,
                     help="with --report, also write the tables to a CSV file")
+    ap.add_argument("--baseline", metavar="PATH", default=None,
+                    help="with --report, also diff each target against a saved "
+                         "session file (File > Save session in the GUI). Answers "
+                         "'is this path worse than it was' rather than only "
+                         "'what does it look like now'.")
     args = ap.parse_args(argv)
     cfg_path = Path(args.config)
 
@@ -407,6 +442,8 @@ def main(argv=None) -> int:
             return 2
         try:
             rc = run_report(targets, args.report)
+            if args.baseline:
+                print_comparison(targets, args.baseline)
             if args.report_csv:
                 write_report_csv(args.report_csv, targets)
                 print(f"\nWrote {args.report_csv}")
