@@ -44,6 +44,7 @@ from .model import DEFAULT_HISTORY, Event, Hop, HopView, Sample
 
 GROW_PROBE_SPAN = 8       # extra TTLs to probe when looking for a longer route
 UNREACHED_BEFORE_GROW = 3  # consecutive dest-miss rounds before probing deeper
+MAX_HOPS_CEILING = 64      # hard cap on max_hops, and so on the probe pool width
 FINAL_HOP_TTL = 255        # TTL used to ping the destination directly
 MAX_LOAD_HISTORY = 50_000  # cap a loaded session's per-hop ring buffer (DoS guard)
 MAX_LOG_BYTES = 25 * 1024 * 1024  # roll the probe CSV past ~25 MB (one backup kept)
@@ -123,13 +124,33 @@ class Monitor:
         # Pools are created on start() and torn down on shutdown(); a Monitor
         # that never starts (e.g. the GUI's placeholder) allocates none.
         self._ping_pool: Optional[ThreadPoolExecutor] = None
+        self._ping_workers = 0   # width of the live probe pool (see _ensure_pools)
         self._dns_pool: Optional[ThreadPoolExecutor] = None
 
     def _ensure_pools(self) -> None:
         """(Re)create the probe and DNS thread pools if absent. Lets a Monitor
-        be reused after shutdown(), and keeps a never-started one pool-free."""
+        be reused after shutdown(), and keeps a never-started one pool-free.
+
+        The probe pool is sized to ``max_hops`` so a whole route fits in ONE
+        wave. It used to be a flat 16 while max_hops defaults to 30 and may go
+        to 64, so any route past 16 hops silently split into two or more waves
+        — and a wave costs a full reply timeout, because a silent router never
+        answers. That turned the engine's core promise (a round costs about one
+        timeout, not the sum) into a 2x-4x overrun on ordinary internet paths.
+
+        Sizing to the ceiling is free: ThreadPoolExecutor spawns its threads
+        lazily as work is submitted, so a 6-hop route still only ever runs six.
+        """
+        want = max(1, min(int(self.max_hops), MAX_HOPS_CEILING))
+        if self._ping_pool is not None and self._ping_workers < want:
+            # A later start() asked for a longer route than the live pool can
+            # probe at once. Replace it rather than quietly serialising; the
+            # old one drains its in-flight probes and exits.
+            self._ping_pool.shutdown(wait=False)
+            self._ping_pool = None
         if self._ping_pool is None:
-            self._ping_pool = ThreadPoolExecutor(max_workers=16, thread_name_prefix="ping")
+            self._ping_pool = ThreadPoolExecutor(max_workers=want, thread_name_prefix="ping")
+            self._ping_workers = want
         if self._dns_pool is None:
             self._dns_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="dns")
 
@@ -158,7 +179,7 @@ class Monitor:
         self.target_input = target.strip()
         self.interval = max(0.25, float(interval))
         self.timeout_ms = max(100, int(timeout_ms))
-        self.max_hops = max(1, min(int(max_hops), 64))
+        self.max_hops = max(1, min(int(max_hops), MAX_HOPS_CEILING))
         self.resolve_names = bool(resolve_names)
         self.packet_size = max(0, min(int(packet_size), 1472))
         self.send_delay_ms = max(0, min(int(send_delay_ms), 1000))
@@ -205,6 +226,7 @@ class Monitor:
             if pool is not None:
                 pool.shutdown(wait=False, cancel_futures=True)
         self._ping_pool = None
+        self._ping_workers = 0
         self._dns_pool = None
 
     def pause(self) -> None:
