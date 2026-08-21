@@ -39,7 +39,7 @@ def main() -> int:
     args = ap.parse_args()
 
     if not icmp.is_available():
-        print("ICMP backend requires Windows.")
+        print(f"No usable ICMP backend: {icmp.unavailable_reason()}")
         return 2
 
     mon = Monitor()

@@ -185,9 +185,35 @@ def _uint32_to_ip(addr: int) -> str:
     return socket.inet_ntoa(struct.pack("<I", addr & 0xFFFFFFFF))
 
 
+def _posix():
+    """The POSIX backend, imported lazily.
+
+    Deferred rather than imported at module scope because icmp_posix imports
+    names from this module; doing it at the top would be a cycle.
+    """
+    from . import icmp_posix
+    return icmp_posix
+
+
 def is_available() -> bool:
-    """True when the Windows ICMP backend can be used."""
-    return _AVAILABLE
+    """True when an ICMP backend can be used on this machine.
+
+    On Windows that is the IP Helper API and always true. On POSIX it means an
+    unprivileged SOCK_DGRAM ICMP socket can actually be opened, which Linux
+    gates on net.ipv4.ping_group_range -- so the platform being supported is
+    not on its own enough.
+    """
+    if _AVAILABLE:
+        return True
+    return _posix().is_available()
+
+
+def unavailable_reason() -> str:
+    """Why is_available() said no, phrased so it can be acted on. The Linux
+    case has a one-line fix and deserves better than "not available"."""
+    if is_available():
+        return ""
+    return _posix().unavailable_reason()
 
 
 def ping(
@@ -213,7 +239,9 @@ def ping(
     falling back to the default route.
     """
     if not _AVAILABLE:
-        raise RuntimeError("ICMP backend requires Windows (iphlpapi.dll)")
+        # Same signature, same PingResult: the engine above never learns which
+        # backend answered it.
+        return _posix().ping(dest_ip, ttl, timeout_ms, payload, tos, source_ip)
 
     handle = _IcmpCreateFile()
     if not handle or handle == _INVALID_HANDLE_VALUE:

@@ -34,5 +34,17 @@ jobs:
       - name: Install dev dependencies
         run: python -m pip install --upgrade pip pytest
 
+      - name: Report ICMP backend availability
+        # Printed so a CI log answers "did the live POSIX tests actually run,
+        # or did they all skip?" A group that silently skips on half the matrix
+        # is not covering what it appears to.
+        run: >
+          python -c "from pingerplot import icmp, icmp_posix;
+          print('icmp.is_available:', icmp.is_available());
+          print('posix backend    :', icmp_posix.is_available());
+          print('reason           :', icmp.unavailable_reason() or '(none)')"
+
       - name: Run tests
-        run: python -m pytest -q
+        # -rs lists every skipped test with its reason, so a leg of the matrix
+        # that quietly covers less than it looks like is visible in the log.
+        run: python -m pytest -q -rs

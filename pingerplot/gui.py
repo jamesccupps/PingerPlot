@@ -137,9 +137,13 @@ class App:
         self._apply_saved_settings()     # restore last engine/alert/interval values
 
         if not icmp.is_available():
+            # Say what to do about it. On Linux this is one sysctl away, and
+            # "unsupported platform" would send the user looking for a port
+            # that already exists.
             messagebox.showerror(
-                "Unsupported platform",
-                "The ICMP backend uses the Windows IP Helper API and only runs on Windows.",
+                "ICMP backend unavailable",
+                icmp.unavailable_reason() + "\n\n"
+                "TCP and UDP probe modes do not use this backend and may still work.",
             )
 
         self._restore_targets()          # optionally resume the last session's targets
