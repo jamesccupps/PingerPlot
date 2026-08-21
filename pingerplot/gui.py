@@ -366,10 +366,18 @@ class App:
         ttk.Spinbox(bar, from_=2, to=300, increment=1, width=4, textvariable=self.alert_win_var).pack(side="left", padx=(0, gap))
         ttk.Label(bar, text="probes").pack(side="left", padx=(0, group))
 
+        # MOS folds latency, jitter and loss into one score, so it catches the
+        # combination that ruins a call while each part sits under its own
+        # threshold. Lower is worse, hence "<=" rather than the ">=" above.
+        ttk.Label(bar, text="MOS ≤").pack(side="left", padx=(0, gap))
+        self.alert_mos_var = tk.StringVar(value="0")
+        ttk.Spinbox(bar, from_=0, to=5, increment=0.1, format="%.1f", width=4,
+                    textvariable=self.alert_mos_var).pack(side="left", padx=(0, group))
+
         self.alert_sound_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(bar, text="Sound", variable=self.alert_sound_var).pack(side="left", padx=(0, group))
 
-        ttk.Label(bar, text="(alerts evaluated on the destination hop)",
+        ttk.Label(bar, text="(0 disables a threshold; alerts use the destination hop)",
                   foreground="#8a9099").pack(side="left")
 
     def _build_banner(self) -> None:
@@ -607,6 +615,7 @@ class App:
             a_loss = float(self.alert_loss_var.get())
             a_lat = float(self.alert_lat_var.get())
             a_win = int(self.alert_win_var.get())
+            a_mos = float(self.alert_mos_var.get())
         except ValueError:
             messagebox.showwarning("Invalid input", "Interval, engine and alert fields must be numbers.")
             return
@@ -632,6 +641,7 @@ class App:
             alert_latency_ms=a_lat,
             alert_window=a_win,
             alert_sound=self.alert_sound_var.get(),
+            alert_mos=a_mos,
             webhook_url=self.webhook_var.get(),
         )
         self._activate(target)
@@ -773,6 +783,7 @@ class App:
         self.alert_loss_var.set(f"{mon.alert_loss_pct:g}")
         self.alert_lat_var.set(f"{mon.alert_latency_ms:g}")
         self.alert_win_var.set(str(mon.alert_window))
+        self.alert_mos_var.set(f"{mon.alert_mos:g}")
         self.alert_sound_var.set(mon.alert_sound)
 
     def _edit_target(self, name: str) -> None:
@@ -801,7 +812,7 @@ class App:
             (self.port_var, "port"), (self.logpath_var, "log_path"),
             (self.webhook_var, "webhook_url"), (self.packettype_var, "packet_type"),
             (self.alert_loss_var, "alert_loss"), (self.alert_lat_var, "alert_latency"),
-            (self.alert_win_var, "alert_window"),
+            (self.alert_win_var, "alert_window"), (self.alert_mos_var, "alert_mos"),
         ):
             if s.get(key) is not None:
                 var.set(str(s[key]))
@@ -833,6 +844,7 @@ class App:
             "alert_loss": self.alert_loss_var.get(),
             "alert_latency": self.alert_lat_var.get(),
             "alert_window": self.alert_win_var.get(),
+            "alert_mos": self.alert_mos_var.get(),
             "alert_sound": bool(self.alert_sound_var.get()),
             "resume_on_launch": bool(self.resume_var.get()),
             "targets": list(self._monitors.keys()),

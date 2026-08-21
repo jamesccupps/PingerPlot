@@ -41,6 +41,7 @@ SAMPLE_CONFIG = {
         "alert_loss_pct": 20,
         "alert_latency_ms": 250,
         "alert_window": 20,
+        "alert_mos": 0,
         "webhook_url": "",
     },
     "targets": [
@@ -90,6 +91,7 @@ def _target_options(defaults: dict, target_cfg: dict) -> Tuple[str, dict]:
         alert_loss_pct=float(opts.get("alert_loss_pct", 20)),
         alert_latency_ms=float(opts.get("alert_latency_ms", 250)),
         alert_window=int(opts.get("alert_window", 20)),
+        alert_mos=float(opts.get("alert_mos", 0)),
         alert_sound=False,
         webhook_url=str(opts.get("webhook_url", "")),
     )

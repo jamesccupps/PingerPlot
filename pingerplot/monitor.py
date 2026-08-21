@@ -40,7 +40,7 @@ except ImportError:  # pragma: no cover - non-Windows
     winsound = None  # type: ignore[assignment]
 
 from . import __version__, icmp, tcpudp
-from .model import DEFAULT_HISTORY, Event, Hop, HopView, Sample
+from .model import DEFAULT_HISTORY, Event, Hop, HopView, Sample, mos, mos_label
 
 GROW_PROBE_SPAN = 8       # extra TTLs to probe when looking for a longer route
 UNREACHED_BEFORE_GROW = 3  # consecutive dest-miss rounds before probing deeper
@@ -112,6 +112,7 @@ class Monitor:
         self.alert_latency_ms = 250.0
         self.alert_window = 20
         self.alert_sound = True
+        self.alert_mos = 0.0        # 0 disables; MOS alerts BELOW this score
         self.webhook_url = ""
 
         # live state
@@ -182,6 +183,7 @@ class Monitor:
         alert_latency_ms: float = 250.0,
         alert_window: int = 20,
         alert_sound: bool = True,
+        alert_mos: float = 0.0,
         webhook_url: str = "",
     ) -> None:
         self.stop()
@@ -213,6 +215,8 @@ class Monitor:
         self.alert_latency_ms = max(0.0, float(alert_latency_ms))
         self.alert_window = max(1, int(alert_window))
         self.alert_sound = bool(alert_sound)
+        # MOS runs 1.0-5.0; anything above 5 would alert permanently.
+        self.alert_mos = max(0.0, min(float(alert_mos), 5.0))
         self.webhook_url = (webhook_url or "").strip()
         with self._lock:
             self._generation += 1
@@ -768,8 +772,9 @@ class Monitor:
             dest = self._hops[route_len - 1]
             sent_window = min(self.alert_window, dest.sent)
             ever = dest.received
-            r_loss = dest.recent_loss_pct(self.alert_window)
-            r_avg = dest.recent_avg(self.alert_window)
+            # One pass for all three: the MOS alert needs jitter as well, and
+            # the E-model wants latency, jitter and loss from the same window.
+            r_loss, r_avg, r_jitter = dest.recent_stats(self.alert_window)
             ttl = dest.ttl
             name = dest.hostname or dest.address or "?"
 
@@ -798,6 +803,20 @@ class Monitor:
             lat_active,
             f"Hop {ttl} ({name}): avg {r_avg:.0f} ms over last {self.alert_window} probes"
             if r_avg is not None else "",
+        )
+
+        # MOS folds latency, jitter and loss into one number, so it catches the
+        # combination that ruins a call while each ingredient sits under its own
+        # threshold. Note the direction: 1.0-5.0, and *lower* is worse, so this
+        # one fires at or BELOW its threshold. Gated on ever > 0 like the loss
+        # alert — a destination that has never answered has no score to judge.
+        r_mos = mos(r_avg, r_jitter, r_loss) if ever > 0 else None
+        mos_active = self.alert_mos > 0 and r_mos is not None and r_mos <= self.alert_mos
+        self._set_alert(
+            (ttl, "mos"),
+            mos_active,
+            f"Hop {ttl} ({name}): MOS {r_mos:.1f} ({mos_label(r_mos)}) "
+            f"over last {self.alert_window} probes" if r_mos is not None else "",
         )
 
     def _set_alert(self, key: Tuple[int, str], active: bool, text: str) -> None:
