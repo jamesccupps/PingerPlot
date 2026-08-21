@@ -1133,11 +1133,17 @@ class App:
 
     @staticmethod
     def _row_tag(v: HopView, is_dest: bool) -> str:
-        if v.loss_pct > 25:
+        """Row colour: red for a problem, amber for a warning.
+
+        BAD_MS used to be tested one branch too late — `avg >= BAD_MS` returned
+        "warn", and any average clearing 250 ms also clears WARN_MS's 120 ms and
+        would have hit the next branch for the same answer. The condition could
+        never change the outcome, so latency alone never turned a row red no
+        matter how bad it got, contradicting BAD_MS's own comment.
+        """
+        if v.loss_pct > 25 or (v.avg is not None and v.avg >= BAD_MS):
             return "bad"
-        if v.loss_pct > 0 or (v.avg is not None and v.avg >= BAD_MS):
-            return "warn"
-        if v.avg is not None and v.avg >= WARN_MS:
+        if v.loss_pct > 0 or (v.avg is not None and v.avg >= WARN_MS):
             return "warn"
         return "dest" if is_dest else "ok"
 
