@@ -6,6 +6,13 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
+# Coverage data. The .coverage database is a build artifact and it bakes in
+# absolute source paths from whoever ran it, so it has no business in a repo.
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
 # Packaging / build
 build/
 dist/
