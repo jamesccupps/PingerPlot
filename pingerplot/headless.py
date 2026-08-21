@@ -13,17 +13,22 @@ Pure standard library (json + argparse + signal), like the rest of the app.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 import signal
 import sys
+import threading
 import time
 from pathlib import Path
-from typing import List, Tuple
+from typing import Callable, List, Tuple
 
-from . import __version__
-from .model import mos
+from . import __version__, compare as _compare
+from .model import csv_safe, mos, mos_label
 from .monitor import Monitor
+
+RESTART_DELAY_S = 30.0       # wait this long before restarting a stopped target
+RESTART_DELAY_MAX_S = 300.0  # ...doubling to this ceiling while it keeps failing
 
 SAMPLE_CONFIG = {
     "status_interval": 60,
@@ -32,11 +37,14 @@ SAMPLE_CONFIG = {
         "timeout_ms": 1000,
         "max_hops": 30,
         "packet_type": "icmp",
+        "dscp": 0,
+        "source_ip": "",
         "resolve_names": True,
         "final_hop_only": False,
         "alert_loss_pct": 20,
         "alert_latency_ms": 250,
         "alert_window": 20,
+        "alert_mos": 0,
         "webhook_url": "",
     },
     "targets": [
@@ -45,7 +53,23 @@ SAMPLE_CONFIG = {
     ],
 }
 
-_STOP = False
+# An Event rather than a bare global: the old flag was set by the signal
+# handler and never cleared, so a second main() in the same process returned
+# immediately. It also lets the run loop wait on it and exit the moment Ctrl-C
+# lands instead of up to a quarter second later.
+_STOP = threading.Event()
+
+
+def request_stop() -> None:
+    _STOP.set()
+
+
+def reset_stop() -> None:
+    _STOP.clear()
+
+
+def should_stop() -> bool:
+    return _STOP.is_set()
 
 
 def _target_options(defaults: dict, target_cfg: dict) -> Tuple[str, dict]:
@@ -65,23 +89,93 @@ def _target_options(defaults: dict, target_cfg: dict) -> Tuple[str, dict]:
         final_hop_only=bool(opts.get("final_hop_only", False)),
         packet_type=str(opts.get("packet_type", "icmp")),
         port=int(opts.get("port", 443)),
+        dscp=int(opts.get("dscp", 0)),
+        source_ip=str(opts.get("source_ip", "")),
         log_path=str(opts.get("log_path", "")),
         alert_enabled=bool(opts.get("alert_enabled", True)),
         alert_loss_pct=float(opts.get("alert_loss_pct", 20)),
         alert_latency_ms=float(opts.get("alert_latency_ms", 250)),
         alert_window=int(opts.get("alert_window", 20)),
+        alert_mos=float(opts.get("alert_mos", 0)),
         alert_sound=False,
         webhook_url=str(opts.get("webhook_url", "")),
     )
     return target, kwargs
 
 
-def _build_monitors(cfg: dict, base_dir: Path) -> List[Tuple[str, Monitor]]:
+class Target:
+    """A configured target, its Monitor, and what is needed to restart it.
+
+    The options are kept because a restart must reproduce the configured run --
+    starting again with defaults would silently drop the log path, the alert
+    thresholds and the probe mode from the config file.
+    """
+
+    __slots__ = ("name", "monitor", "kwargs", "retry_at", "retry_delay", "restarts")
+
+    def __init__(self, name: str, monitor: Monitor, kwargs: dict) -> None:
+        self.name = name
+        self.monitor = monitor
+        self.kwargs = kwargs
+        self.retry_at = 0.0            # 0 == not currently scheduled for a retry
+        self.retry_delay = RESTART_DELAY_S
+        self.restarts = 0
+
+
+def supervise(targets: List[Target], now: float,
+              log: Callable[[str], None] = print) -> None:
+    """Restart any target whose monitor has stopped.
+
+    Monitor._run exits with running = False on a name it cannot resolve, or on
+    a TCP/UDP traceroute refused for want of Administrator. Nothing used to
+    look at that, so a target whose DNS failed at start-up stayed dead for the
+    life of the process -- which is the *normal* case for the documented
+    deployment, a Task Scheduler job at logon or boot that routinely starts
+    before DNS is up. An unattended monitor that silently monitors nothing is
+    worse than one that never started: the CSV it should be filling just stays
+    empty until somebody goes looking for the data.
+
+    A stopped target is not restarted the instant it is noticed. The first pass
+    schedules the retry, the next one past that time performs it, and the delay
+    doubles up to RESTART_DELAY_MAX_S while it keeps failing -- so a genuinely
+    bad hostname settles into a five-minute poll instead of resolving twice a
+    minute forever.
+    """
+    for t in targets:
+        mon = t.monitor
+        if mon.running and mon.route_len > 0:
+            # Actually monitoring: any earlier backoff is history. Resetting on
+            # `running` alone would be wrong, since start() sets it before the
+            # trace has had a chance to fail.
+            t.retry_at = 0.0
+            t.retry_delay = RESTART_DELAY_S
+            continue
+        if mon.running:
+            continue               # started, still tracing -- give it time
+        if t.retry_at == 0.0:
+            log(f"    {t.name}: stopped ({mon.status}); "
+                f"retrying in {t.retry_delay:.0f}s")
+            t.retry_at = now + t.retry_delay
+            continue
+        if now < t.retry_at:
+            continue
+        t.restarts += 1
+        log(f"    {t.name}: restarting (attempt {t.restarts})")
+        try:
+            mon.start(t.name, **t.kwargs)
+        except (OSError, ValueError, TypeError) as exc:
+            # One bad target must never take the others down with it.
+            log(f"    {t.name}: restart failed: {exc}")
+        t.retry_delay = min(t.retry_delay * 2, RESTART_DELAY_MAX_S)
+        t.retry_at = now + t.retry_delay
+
+
+def _build_monitors(cfg: dict, base_dir: Path) -> List[Target]:
     """Start a Monitor per configured target. Relative ``log_path``s resolve
     next to the config file (so it works regardless of the working directory).
     A malformed target is skipped with a warning rather than killing the run."""
     defaults = cfg.get("defaults", {}) or {}
-    monitors: List[Tuple[str, Monitor]] = []
+    targets: List[Target] = []
     for tcfg in cfg.get("targets", []):
         try:
             target, kwargs = _target_options(defaults, tcfg)
@@ -93,30 +187,193 @@ def _build_monitors(cfg: dict, base_dir: Path) -> List[Tuple[str, Monitor]]:
                 os.makedirs(os.path.dirname(kwargs["log_path"]) or ".", exist_ok=True)
             m = Monitor()
             m.start(target, **kwargs)
-            monitors.append((target, m))
+            targets.append(Target(target, m, kwargs))
         except (ValueError, TypeError, OSError) as exc:
             print(f"Skipping target {tcfg!r}: {exc}", file=sys.stderr)
-    return monitors
+    return targets
 
 
-def _print_status(monitors: List[Tuple[str, Monitor]]) -> None:
-    """One console line per target — reuses the cheap Monitor.summary()."""
-    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {len(monitors)} target(s):")
-    for name, m in monitors:
+def print_status(targets: List[Target], log: Callable[[str], None] = print) -> None:
+    """One console line per target - reuses the cheap Monitor.summary()."""
+    log(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {len(targets)} target(s):")
+    for t in targets:
+        m = t.monitor
         n_hops, loss, avg, jitter, reached = m.summary()
         score = mos(avg, jitter, loss) if (n_hops and reached) else None
         loss_s = f"{loss:.0f}%" if loss is not None else "-"
         avg_s = f"{avg:.0f}ms" if avg is not None else "-"
         mos_s = f"{score:.1f}" if score is not None else "-"
-        tail = "" if reached else "  (no reply yet)"
-        print(f"    {name:<24} hops={n_hops:<3} loss={loss_s:<5} avg={avg_s:<8} MOS={mos_s}{tail}")
+        if not m.running:
+            tail = f"  (stopped: {m.status})"
+        elif not reached:
+            tail = "  (no reply yet)"
+        else:
+            tail = f"  (restarted {t.restarts}x)" if t.restarts else ""
+        log(f"    {t.name:<24} hops={n_hops:<3} loss={loss_s:<5} "
+            f"avg={avg_s:<8} MOS={mos_s}{tail}")
     sys.stdout.flush()
+
+
+def report_rows(monitor: Monitor) -> List[dict]:
+    """The per-hop summary a report prints, as plain data.
+
+    Kept separate from the formatting so the same numbers feed the console
+    table, the CSV, and the tests, instead of each growing its own version.
+    """
+    views, _status, _ip, _in = monitor.snapshot()
+    last_ttl = views[-1].ttl if views else None
+    rows = []
+    for v in views:
+        rows.append({
+            "hop": v.ttl,
+            "ip": v.address or "*",
+            "hostname": v.hostname or "",
+            "loss_pct": v.loss_pct,
+            "sent": v.sent,
+            "last": v.current,
+            "avg": v.avg,
+            "best": v.best,
+            "worst": v.worst,
+            "jitter": v.jitter,
+            # MOS describes the end-to-end path. On an intermediate router it
+            # would be measuring how eagerly that box answers ICMP, not how
+            # the path performs, so only the destination gets one.
+            "mos": mos(v.avg, v.jitter, v.loss_pct) if v.ttl == last_ttl else None,
+            "is_dest": v.ttl == last_ttl,
+        })
+    return rows
+
+
+def _num(v, width=6, places=1) -> str:
+    return f"{'-':>{width}}" if v is None else f"{v:>{width}.{places}f}"
+
+
+def format_report(name: str, monitor: Monitor) -> List[str]:
+    """An MTR-style table for one target, ready to print or paste in a ticket."""
+    rows = report_rows(monitor)
+    head = f"{name}  [{monitor.target_ip or '?'}]"
+    proto = monitor.packet_type.upper()
+    if monitor.packet_type != "icmp":
+        proto += f":{monitor.port}"
+    # A marked or interface-pinned run measured a different thing from a plain
+    # one; the header has to say so or two reports cannot be compared.
+    if monitor.dscp:
+        proto += f", DSCP {monitor.dscp}"
+    if monitor.source_ip:
+        proto += f", from {monitor.source_ip}"
+    lines = [
+        "",
+        head,
+        f"  {proto}, {monitor.interval:g}s interval, {monitor.timeout_ms}ms timeout"
+        f"{'' if monitor.reached_target else '   *** destination never answered ***'}",
+        f"  {'Hop':>3}  {'Address':<16} {'Loss':>6} {'Sent':>5} {'Last':>6} "
+        f"{'Avg':>6} {'Best':>6} {'Wrst':>6} {'Jitr':>6}  Hostname",
+        "  " + "-" * 92,
+    ]
+    for r in rows:
+        marker = "*" if r["is_dest"] else " "
+        lines.append(
+            f" {marker}{r['hop']:>3}  {r['ip']:<16} {r['loss_pct']:>5.1f}% "
+            f"{r['sent']:>5} {_num(r['last'])} {_num(r['avg'])} {_num(r['best'])} "
+            f"{_num(r['worst'])} {_num(r['jitter'])}  {r['hostname']}"
+        )
+    dest = rows[-1] if rows else None
+    if dest and dest["mos"] is not None:
+        lines.append(f"  destination MOS {dest['mos']:.2f} ({mos_label(dest['mos'])})")
+    elif not rows:
+        lines.append("  (no hops - nothing answered)")
+    return lines
+
+
+def write_report_csv(path: str, targets: List[Target]) -> None:
+    """All targets' rows in one CSV, with a target column so several runs can
+    be concatenated and filtered."""
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh)
+        w.writerow(["target", "target_ip", "hop", "ip", "hostname", "loss_pct",
+                    "sent", "last_ms", "avg_ms", "best_ms", "worst_ms",
+                    "jitter_ms", "mos"])
+        for t in targets:
+            for r in report_rows(t.monitor):
+                w.writerow([
+                    csv_safe(t.name), t.monitor.target_ip or "",
+                    r["hop"], csv_safe(r["ip"]), csv_safe(r["hostname"]),
+                    f"{r['loss_pct']:.1f}", r["sent"],
+                    *[("" if r[k] is None else f"{r[k]:.1f}")
+                      for k in ("last", "avg", "best", "worst", "jitter")],
+                    "" if r["mos"] is None else f"{r['mos']:.2f}",
+                ])
+
+
+def run_report(targets: List[Target], rounds: int, log: Callable[[str], None] = print,
+               poll: float = 0.25, deadline: float = 0.0) -> int:
+    """Collect ``rounds`` monitoring rounds, print a table per target, exit.
+
+    The counterpart to the run-forever loop: something a scheduled job or a
+    person writing up a ticket can invoke, get a fixed amount of evidence from,
+    and have exit. Returns 0 only if every target reached its destination, so a
+    script can branch on it.
+
+    The deadline exists because a target that cannot resolve never advances a
+    round at all; without one, a single bad hostname would hang the report
+    forever. Anything collected by then is still reported.
+    """
+    for t in targets:
+        t.monitor._round = 0
+    if deadline <= 0.0:
+        slowest = max((t.monitor.interval for t in targets), default=1.0)
+        longest = max((t.monitor.timeout_ms for t in targets), default=1000) / 1000.0
+        deadline = rounds * (slowest + longest) + longest * 2 + 15.0
+    log(f"Collecting {rounds} round(s) from {len(targets)} target(s)...")
+
+    end = time.monotonic() + deadline
+    while not should_stop() and time.monotonic() < end:
+        if all(t.monitor._round >= rounds or not t.monitor.running for t in targets):
+            break
+        _STOP.wait(poll)
+
+    incomplete = [t.name for t in targets if t.monitor._round < rounds]
+    if incomplete:
+        log(f"  (short of {rounds} rounds: {', '.join(incomplete)})")
+    for t in targets:
+        for line in format_report(t.name, t.monitor):
+            log(line)
+    return 0 if all(t.monitor.reached_target for t in targets) else 1
+
+
+def print_comparison(targets: List[Target], baseline_path: str,
+                     log: Callable[[str], None] = print) -> None:
+    """Diff each target against a saved session.
+
+    One baseline file against several targets is deliberate: the usual shape is
+    one saved session per path, so a mismatch is normal and quiet -- a target
+    with nothing to compare against simply says so instead of erroring the run.
+    """
+    try:
+        with open(baseline_path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as exc:
+        log(f"Cannot read baseline {baseline_path}: {exc}")
+        return
+    base_stats = _compare.stats_from_session(data)
+    base_name = str(data.get("target_input") or baseline_path)
+    if not base_stats:
+        log(f"Baseline {baseline_path} has no hop data to compare against.")
+        return
+    for t in targets:
+        now = [_compare.stats_from_hop(h) for h in t.monitor._hops]
+        if not now:
+            log("")
+            log(f"{t.name}: nothing to compare (no hops yet)")
+            continue
+        cmp_ = _compare.compare(base_stats, now, target=t.name)
+        for line in _compare.format_comparison(cmp_, base_name):
+            log(line)
 
 
 def _install_signal_handlers() -> None:
     def _handle(_signum, _frame):
-        global _STOP
-        _STOP = True
+        request_stop()
     signal.signal(signal.SIGINT, _handle)
     try:
         signal.signal(signal.SIGTERM, _handle)   # not deliverable on every platform
@@ -133,6 +390,17 @@ def main(argv=None) -> int:
                     help="write a starter config to CONFIG and exit")
     ap.add_argument("--status-interval", type=float, default=None,
                     help="seconds between status lines (overrides config; 0 = silent)")
+    ap.add_argument("--report", type=int, metavar="N", default=None,
+                    help="collect N rounds, print a summary table per target, then "
+                         "exit. Exit status is 0 only if every target reached its "
+                         "destination, so a script can branch on it.")
+    ap.add_argument("--report-csv", metavar="PATH", default=None,
+                    help="with --report, also write the tables to a CSV file")
+    ap.add_argument("--baseline", metavar="PATH", default=None,
+                    help="with --report, also diff each target against a saved "
+                         "session file (File > Save session in the GUI). Answers "
+                         "'is this path worse than it was' rather than only "
+                         "'what does it look like now'.")
     args = ap.parse_args(argv)
     cfg_path = Path(args.config)
 
@@ -158,26 +426,52 @@ def main(argv=None) -> int:
 
     print(f"PingerPlot {__version__} headless - starting "
           f"{len(cfg['targets'])} target(s). Ctrl-C to stop.")
-    monitors = _build_monitors(cfg, cfg_path.resolve().parent)
-    if not monitors:
+    targets = _build_monitors(cfg, cfg_path.resolve().parent)
+    if not targets:
         print("No valid targets to monitor.", file=sys.stderr)
         return 1
 
+    reset_stop()                 # a previous run in this process must not linger
     _install_signal_handlers()
+
+    if args.report is not None:
+        if args.report < 1:
+            print("--report needs a round count of at least 1", file=sys.stderr)
+            for t in targets:
+                t.monitor.shutdown()
+            return 2
+        try:
+            rc = run_report(targets, args.report)
+            if args.baseline:
+                print_comparison(targets, args.baseline)
+            if args.report_csv:
+                write_report_csv(args.report_csv, targets)
+                print(f"\nWrote {args.report_csv}")
+        except OSError as exc:
+            print(f"Report failed: {exc}", file=sys.stderr)
+            rc = 1
+        finally:
+            for t in targets:
+                t.monitor.shutdown()
+        return rc
+
     last_status = 0.0
     try:
-        while not _STOP:
+        while not should_stop():
             now = time.monotonic()
+            # Bring back anything that stopped -- a target whose name did not
+            # resolve at boot would otherwise stay dead for the whole run.
+            supervise(targets, now)
             if status_interval > 0 and now - last_status >= status_interval:
-                _print_status(monitors)
+                print_status(targets)
                 last_status = now
-            time.sleep(0.25)
+            _STOP.wait(0.25)     # exits the moment Ctrl-C lands
     except KeyboardInterrupt:
         pass
     finally:
         print("Stopping...")
-        for _name, m in monitors:
-            m.shutdown()
+        for t in targets:
+            t.monitor.shutdown()
         print("Stopped.")
     return 0
 

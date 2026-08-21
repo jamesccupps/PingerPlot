@@ -4,11 +4,16 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows-0078D6)
+![Linux/macOS](https://img.shields.io/badge/Linux%20%2F%20macOS-beta-yellow)
 
-A continuous-traceroute network path monitor for Windows (MTR-style): per-hop
-latency and packet-loss tracking with a live latency graph, multi-target summary,
-MOS scoring, alerts, session save/load, a world map, and ICMP/TCP/UDP probe modes.
-Pure Python, **zero third-party dependencies**, dark-themed, HiDPI-aware. Free and Open Source.
+A continuous-traceroute network path monitor (MTR-style): per-hop latency and
+packet-loss tracking with a live latency graph, multi-target summary, MOS scoring
+and MOS alerts, DSCP marking, baseline comparison, session save/load, a world map,
+and ICMP/TCP/UDP probe modes. Pure Python, **zero third-party dependencies**,
+dark-themed, HiDPI-aware. Free and Open Source.
+
+Windows is the tested platform. A Linux/macOS ICMP backend landed in 1.3.0 and is
+unit-tested but not yet field-tested — see [Platform](#platform).
 
 ![PingerPlot — dark theme, multi-target sidebar, hop table and latency graph](docs/screenshot.png)
 
@@ -68,6 +73,23 @@ destination).
   right-click a target → *Edit settings…* to inspect or change just that one.
 - **Webhook alerts** — point the Engine dialog's *Webhook URL* at an http(s)
   endpoint to get a JSON POST when the destination alert raises or clears.
+- **Baseline comparison** — *File → Compare with saved session…* diffs the
+  live path against one you saved earlier and shows what actually changed, per
+  hop. A hop whose responding address changed is reported as **rerouted** with
+  no latency delta, because subtracting one router's latency from another's is
+  a meaningless number. Also available headless with `--baseline`.
+- **DSCP marking** — probe as the traffic class you care about (46 = EF/voice,
+  34 = AF41/video) instead of always as best-effort, so a QoS-marked path can be
+  measured as itself. See [DSCP and source interface](#dscp-and-source-interface).
+- **Source-interface binding** — pin the outgoing NIC on a multi-homed box, to
+  ask what a path looks like *from a particular VLAN*. An address the machine
+  doesn't hold is rejected outright rather than quietly falling back.
+- **MOS alerts** — alert on the score itself, not just loss and latency
+  separately. The E-model folds latency, jitter and loss together, so a path can
+  sit under every individual threshold and still be unusable for voice.
+- **One-shot report mode** — `--report N` collects N rounds, prints an MTR-style
+  table per target and exits, with the exit status saying whether every target
+  was reachable. For tickets and scheduled checks rather than a service.
 - **Persists between launches** — theme, engine options, alert thresholds and
   your target list save to `%APPDATA%\PingerPlot` and restore on start;
   *View → Resume targets on launch* re-arms the last session's monitors.
@@ -133,22 +155,78 @@ Without admin, the full TCP/UDP traceroute is refused with a clear message rathe
 than showing misleading all-timeout hops. (UDP note: an *open* UDP port stays
 silent, so it reads as a timeout — prefer TCP for a definitive "service is up".)
 
+> **TCP reply timeout.** Windows doesn't hand a connecting socket the RST the
+> moment it arrives — it finishes retransmitting the SYN first, about 2 s.
+> Below that, a *closed* port is indistinguishable from an unreachable host,
+> which is the wrong answer in the commonest case of all ("the service is down
+> but the box is fine"). TCP mode therefore raises the reply timeout to at
+> least 3000 ms and says so in the Events tab. Shortening the window with
+> `TCP_MAXRT` doesn't help: it replaces `WSAECONNREFUSED` with `WSAETIMEDOUT`
+> and destroys the very distinction the probe exists to draw.
+
+### DSCP and source interface
+
+**DSCP** (Engine… → *DSCP*) marks each probe with a DiffServ code point, so a
+path with QoS can be measured as the class you actually care about rather than
+as best-effort. 46 is EF (voice), 34 is AF41 (video), 26 is AF31 (signalling),
+0 is best-effort. The low two bits of the ToS byte are ECN and are never touched.
+
+> ICMP mode marks via the IP Helper API and is the mode to use for this. Windows
+> **silently ignores** `IP_TOS` on an ordinary socket unless the
+> `DisableUserTOSSetting` registry value is cleared, so a TCP/UDP run may go out
+> unmarked while `setsockopt` reports success — confirm with a capture before
+> drawing a conclusion from one. That the byte reaches the wire has not been
+> verified here; every code point is accepted without error, which is a
+> weaker claim.
+
+**Source IP** (Engine… → *Source IP*) pins the outgoing interface on a
+multi-homed host. An address the machine doesn't hold is rejected with
+`ERROR_INVALID_NETNAME` rather than silently falling back to the default
+route — a silent fallback is the dangerous outcome, because the numbers look
+fine and describe a path you didn't ask about.
+
+Both are recorded in the status line, the report header, the CSV export header
+and the saved session: a marked or pinned run measured a different thing from a
+plain one, and two runs that don't say which aren't comparable.
+
 ## Platform
 
-PingerPlot runs on **Windows 10/11** today. The only platform-specific piece is
-the ICMP probe backend (`icmp.py`), which uses the Win32 IP Helper API so it needs
-no admin rights or capture driver. Everything else — the monitor engine, the
-Tkinter GUI, the headless runner, settings, alerts, the map — is pure,
-cross-platform Python, and the test suite runs on both **Linux and Windows** in CI.
+**Windows 10/11 — tested.** The ICMP backend (`icmp.py`) uses the Win32 IP
+Helper API, so it needs no admin rights and no capture driver.
 
-**Linux and macOS** are a planned addition: a POSIX backend using unprivileged
-`SOCK_DGRAM`/`IPPROTO_ICMP` sockets (the same technique `mtr` uses) would let the
-same app run on all three. The engine, GUI, and headless mode are already
-platform-independent — only that one module is missing.
+**Linux and macOS — implemented in 1.3.0, not yet field-tested.**
+`icmp_posix.py` uses unprivileged `SOCK_DGRAM`/`IPPROTO_ICMP` sockets, the same
+technique `mtr` uses. `icmp.ping()` dispatches, so the engine, GUI and headless
+runner follow without knowing which backend answered.
+
+Getting a traceroute out of POSIX takes two mechanisms where Windows takes one.
+The echo reply arrives on the socket; the router's "TTL exceeded" does **not**,
+because on Linux it's an *error* about the datagram we sent rather than a
+message addressed to us — it goes to the socket's error queue (`IP_RECVERR` +
+`recvmsg(MSG_ERRQUEUE)`). macOS has neither and delivers it as an ordinary
+readable message. Both paths are implemented.
+
+On Linux the unprivileged socket is gated by a sysctl. If PingerPlot reports the
+backend unavailable, it will name this:
+
+```bash
+sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"
+```
+
+Honest status: the packet building, error-queue decoding, IP-header detection
+and status mapping are unit-tested on every platform in CI, and the live socket
+path runs wherever CI permits it — but it has **not** been run against a real
+multi-hop path on real hardware. Smoke-test it before trusting a trace:
+
+```bash
+python -m pingerplot.selftest 8.8.8.8
+```
+
+Bug reports from a real Linux or macOS box are very welcome.
 
 ## Requirements
 
-- Windows 10/11
+- Windows 10/11 (tested), or Linux/macOS (beta — see [Platform](#platform))
 - Python 3.10+ (tested on 3.12). Tkinter ships with the python.org installer.
 - Nothing to `pip install`.
 - ICMP and TCP-final-hop work as a normal user. **Full TCP/UDP traceroute needs
@@ -261,6 +339,50 @@ pythonw.exe -m pingerplot.headless C:\path\to\monitor.json
 (or `python.exe` if you want the periodic status lines in a redirected log).
 `pip install .` also registers a `pingerplot-headless` console script.
 
+A target whose name doesn't resolve at start-up — the normal case for a task
+that runs at boot, before DNS is up — is **restarted automatically**, with the
+delay backing off from 30 s to 5 minutes while it keeps failing. Restarts are
+logged and shown in the status lines, because a target flapping every few
+minutes is something you want to see.
+
+### One-shot report mode
+
+For a ticket, a scheduled check, or a before/after around a change — collect a
+fixed number of rounds, print a table, and exit:
+
+```bash
+python -m pingerplot.headless monitor.json --report 20
+python -m pingerplot.headless monitor.json --report 20 --report-csv out.csv
+```
+
+The exit status is `0` only if every target reached its destination, so a
+scheduled job can branch on it without parsing the output. The table names the
+probe mode, interval, timeout and any DSCP or source binding — a report that
+doesn't say how it was produced can't be compared with another one.
+
+Add `--baseline` to diff against a session saved earlier (*File → Save
+session…* in the GUI), which turns "what does this path look like" into "is it
+worse than it was":
+
+```bash
+python -m pingerplot.headless monitor.json --report 20 --baseline last-week.json
+```
+
+```
+example.net: now vs last-week
+  route 3 -> 4 hops; 1 hop rerouted; 1 worse
+  Hop  Address            Loss%     +/-   Avg ms     +/-  Verdict
+  --------------------------------------------------------------------------
+    1  192.168.1.1          0.0    +0.0      1.2    +0.0  same
+    2  203.0.113.14         0.0    +0.0     18.4   +16.9  worse
+    3  203.0.113.71        12.5              9.7          rerouted 203.0.113.9 -> 203.0.113.71
+    4  198.51.100.20        0.0              9.9          new
+```
+
+A *rerouted* row deliberately shows no delta: hop 3 is a different box than it
+was, so the difference between its latency and the old one's would not be a
+number that means anything.
+
 ## Reading the results
 
 - **Loss at an intermediate hop while the final hop stays healthy is normal.**
@@ -278,11 +400,22 @@ python -m pytest
 ```
 
 The pure logic (statistics, address encoding, status handling, MOS, alert state
-machine, TCP/UDP ICMP correlation) is covered by a focused, platform-independent
-unit suite (the Win32 DLL access is guarded behind `sys.platform`), so
-the suite runs on Linux/macOS too, and CI runs it on both Linux and Windows. The
-raw-socket/Tk layers need real hardware/a display and are exercised by running the
-app or `python -m pingerplot.selftest <host>`.
+machine, ICMP-error decoding, baseline comparison) is covered by a
+platform-independent unit suite — the Win32 DLL access is guarded behind
+`sys.platform`, so it runs on Linux/macOS too, and CI runs the matrix on both.
+
+The TCP/UDP round loops are exercised against a **mock router**
+(`tests/mock_router.py`): a loopback socket standing in for the `SIO_RCVALL`
+capture socket, fed router-shaped ICMP errors, so `select()`, `recvfrom()` and
+the timeouts are the real code paths. That covers reply-to-hop correlation,
+out-of-order replies, cross-talk rejection, IP options in either header, and
+socket cleanup — none of which any amount of parser testing would have caught.
+
+CI runs `pytest -rs` so every skipped test and its reason appears in the log: a
+group that silently skips on half the matrix isn't covering what it appears to.
+
+The raw-socket and Tk layers need real hardware or a display; exercise them by
+running the app or `python -m pingerplot.selftest <host>`.
 
 ## Project layout
 
@@ -294,23 +427,24 @@ Setup.cmd          menu front-end for launch.ps1
 run.bat            console launcher (for debugging)
 pyproject.toml     packaging metadata + pytest config
 pingerplot/
-  icmp.py          Windows ICMP via ctypes (IcmpSendEcho), TTL control
+  icmp.py          Windows ICMP via ctypes (IcmpSendEcho/Echo2Ex); dispatches to icmp_posix
+  icmp_posix.py    Linux/macOS ICMP: unprivileged SOCK_DGRAM + IP_RECVERR (the mtr technique)
   tcpudp.py        TCP/UDP probes via raw SIO_RCVALL capture (admin), parallel per round
-  model.py         Hop / Sample / stats / MOS (pure, tested)
+  model.py         Hop / Sample / stats / MOS / CSV hardening (pure, tested)
+  compare.py       baseline diff: this run vs a saved one (pure, tested)
   monitor.py       trace + continuous monitor engine, alerts, logging, save/load
-  gui.py           Tkinter UI: summary grid, hop table, graphs, events, map
+  headless.py      no-GUI runner, target supervision, report mode
+  gui.py           Tkinter UI: summary grid, hop table, graphs, events, map, compare
   geoip.py         lazy IP geolocation via ipwho.is (Map tab only)
   worldmap.py      baked Natural Earth coastlines (zero-dependency backdrop)
   selftest.py      headless trace/monitor for the console
-tests/             pytest for the pure layers
+tests/             pytest for the pure layers + a mock router for the socket layer
 ```
 
 ## Possible extensions
 
-- **Linux & macOS** — a POSIX ICMP backend (unprivileged
-  `SOCK_DGRAM`/`IPPROTO_ICMP` + `IP_RECVERR`, the `mtr` technique). The engine,
-  GUI, and headless runner are already cross-platform; only the probe backend is
-  Windows-specific today.
+- Field-testing the POSIX backend on real Linux/macOS hardware, and adding a
+  live multi-hop trace to CI if a runner can be made to allow it.
 - IPv6 (`Icmp6SendEcho2` — different structs, needs a source address).
 - Sub-millisecond RTT (would require raw sockets + self-timing).
 - Email alert actions (webhook POSTs are already built in).

@@ -18,8 +18,9 @@ import tkinter as tk
 from tkinter import filedialog, font as tkfont, messagebox, ttk
 from typing import Dict, List, Optional
 
-from . import __version__, appicon, geoip, icmp, settings, tcpudp, worldmap
-from .model import HopView, Sample, csv_safe, mos, mos_label
+from . import __version__, appicon, compare as cmpmod, geoip, icmp, settings, tcpudp, worldmap
+from .model import HopView, Sample, csv_safe, draw_version, mos, mos_label
+from . import monitor
 from .monitor import Monitor
 
 REFRESH_MS = 700
@@ -89,6 +90,7 @@ def _csv_num(v: Optional[float]) -> str:
     return "" if v is None else f"{v:.1f}"
 
 
+
 class App:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
@@ -135,9 +137,13 @@ class App:
         self._apply_saved_settings()     # restore last engine/alert/interval values
 
         if not icmp.is_available():
+            # Say what to do about it. On Linux this is one sysctl away, and
+            # "unsupported platform" would send the user looking for a port
+            # that already exists.
             messagebox.showerror(
-                "Unsupported platform",
-                "The ICMP backend uses the Windows IP Helper API and only runs on Windows.",
+                "ICMP backend unavailable",
+                icmp.unavailable_reason() + "\n\n"
+                "TCP and UDP probe modes do not use this backend and may still work.",
             )
 
         self._restore_targets()          # optionally resume the last session's targets
@@ -314,6 +320,9 @@ class App:
         file_menu.add_command(label="Save session…", command=self._save_session)
         file_menu.add_command(label="Load session…", command=self._load_session)
         file_menu.add_separator()
+        file_menu.add_command(label="Compare with saved session…",
+                              command=self._compare_with_baseline)
+        file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self._on_close)
         menubar.add_cascade(label="File", menu=file_menu)
 
@@ -364,10 +373,18 @@ class App:
         ttk.Spinbox(bar, from_=2, to=300, increment=1, width=4, textvariable=self.alert_win_var).pack(side="left", padx=(0, gap))
         ttk.Label(bar, text="probes").pack(side="left", padx=(0, group))
 
+        # MOS folds latency, jitter and loss into one score, so it catches the
+        # combination that ruins a call while each part sits under its own
+        # threshold. Lower is worse, hence "<=" rather than the ">=" above.
+        ttk.Label(bar, text="MOS ≤").pack(side="left", padx=(0, gap))
+        self.alert_mos_var = tk.StringVar(value="0")
+        ttk.Spinbox(bar, from_=0, to=5, increment=0.1, format="%.1f", width=4,
+                    textvariable=self.alert_mos_var).pack(side="left", padx=(0, group))
+
         self.alert_sound_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(bar, text="Sound", variable=self.alert_sound_var).pack(side="left", padx=(0, group))
 
-        ttk.Label(bar, text="(alerts evaluated on the destination hop)",
+        ttk.Label(bar, text="(0 disables a threshold; alerts use the destination hop)",
                   foreground="#8a9099").pack(side="left")
 
     def _build_banner(self) -> None:
@@ -515,6 +532,8 @@ class App:
         self.finalhop_var = tk.BooleanVar(value=False)
         self.packettype_var = tk.StringVar(value="ICMP")
         self.port_var = tk.StringVar(value="443")
+        self.dscp_var = tk.StringVar(value="0")
+        self.sourceip_var = tk.StringVar(value="")
         self.logpath_var = tk.StringVar(value="")
         self.webhook_var = tk.StringVar(value="")
         self._engine_win: Optional[tk.Toplevel] = None
@@ -542,6 +561,13 @@ class App:
             ("Reply timeout (ms):", ttk.Spinbox(frm, from_=100, to=10000, increment=100, width=9, textvariable=self.timeout_var)),
             ("Payload size (bytes):", ttk.Spinbox(frm, from_=0, to=1472, increment=8, width=9, textvariable=self.psize_var)),
             ("Send delay (ms):", ttk.Spinbox(frm, from_=0, to=1000, increment=5, width=9, textvariable=self.senddelay_var)),
+            # DSCP marks the probe with the traffic class you actually care
+            # about, so a QoS-marked path can be measured as itself instead of
+            # as best-effort.
+            ("DSCP (0-63):", ttk.Spinbox(frm, from_=0, to=63, increment=1, width=9, textvariable=self.dscp_var)),
+            # Pins the outgoing interface on a multi-homed box, so you can ask
+            # what a path looks like from a particular VLAN.
+            ("Source IP (blank = auto):", ttk.Entry(frm, width=18, textvariable=self.sourceip_var)),
         ]
         for i, (label, widget) in enumerate(rows):
             ttk.Label(frm, text=label).grid(row=i, column=0, sticky="w", pady=3, padx=(0, 10))
@@ -561,9 +587,17 @@ class App:
         ttk.Label(frm, text="Webhook URL (alerts):").grid(row=base + 3, column=0, sticky="w", pady=3, padx=(0, 10))
         ttk.Entry(frm, textvariable=self.webhook_var, width=30).grid(row=base + 3, column=1, sticky="w")
 
-        ttk.Label(frm, text="TCP/UDP modes need Administrator (raw socket); ICMP does not. Send delay throttles the "
+        ttk.Label(frm, text="DSCP marks the probe (46 = EF/voice, 34 = AF41/video, 0 = best effort); ICMP mode marks "
+                            "via the IP Helper API, but Windows silently ignores it on TCP/UDP sockets unless "
+                            "DisableUserTOSSetting is cleared - confirm with a capture before trusting a TCP/UDP QoS "
+                            "result. A source IP that this machine does not hold is rejected outright rather than "
+                            "falling back. "
+                            "TCP/UDP modes need Administrator (raw socket); ICMP does not. Send delay throttles the "
                             "probe rate. Logging is crash-safe (flushed every probe). A webhook URL (http/https) gets "
-                            "a JSON POST when the destination alert raises or clears. Changes apply on next Start.",
+                            "a JSON POST when the destination alert raises or clears. TCP mode raises the reply timeout "
+                            f"to at least {monitor.TCP_REFUSAL_FLOOR_MS} ms, because Windows takes about that long to "
+                            "report a closed port and a shorter wait cannot tell one from an unreachable host. "
+                            "Changes apply on next Start.",
                   foreground="#888", wraplength=self.s(380)).grid(
             row=base + 4, column=0, columnspan=2, sticky="w", pady=(8, 2))
         if not tcpudp.is_admin():
@@ -599,9 +633,11 @@ class App:
             psize = int(self.psize_var.get())
             send_delay = int(self.senddelay_var.get())
             port = int(self.port_var.get())
+            dscp = int(self.dscp_var.get())
             a_loss = float(self.alert_loss_var.get())
             a_lat = float(self.alert_lat_var.get())
             a_win = int(self.alert_win_var.get())
+            a_mos = float(self.alert_mos_var.get())
         except ValueError:
             messagebox.showwarning("Invalid input", "Interval, engine and alert fields must be numbers.")
             return
@@ -621,12 +657,15 @@ class App:
             final_hop_only=self.finalhop_var.get(),
             packet_type=self.packettype_var.get().lower(),
             port=port,
+            dscp=dscp,
+            source_ip=self.sourceip_var.get(),
             log_path=self.logpath_var.get(),
             alert_enabled=self.alerts_var.get(),
             alert_loss_pct=a_loss,
             alert_latency_ms=a_lat,
             alert_window=a_win,
             alert_sound=self.alert_sound_var.get(),
+            alert_mos=a_mos,
             webhook_url=self.webhook_var.get(),
         )
         self._activate(target)
@@ -760,6 +799,8 @@ class App:
         self.senddelay_var.set(str(mon.send_delay_ms))
         self.port_var.set(str(mon.port))
         self.packettype_var.set(mon.packet_type.upper())
+        self.dscp_var.set(str(mon.dscp))
+        self.sourceip_var.set(mon.source_ip)
         self.logpath_var.set(mon.log_path)
         self.webhook_var.set(mon.webhook_url)
         self.resolve_var.set(mon.resolve_names)
@@ -768,6 +809,7 @@ class App:
         self.alert_loss_var.set(f"{mon.alert_loss_pct:g}")
         self.alert_lat_var.set(f"{mon.alert_latency_ms:g}")
         self.alert_win_var.set(str(mon.alert_window))
+        self.alert_mos_var.set(f"{mon.alert_mos:g}")
         self.alert_sound_var.set(mon.alert_sound)
 
     def _edit_target(self, name: str) -> None:
@@ -794,9 +836,10 @@ class App:
             (self.maxhops_var, "max_hops"), (self.timeout_var, "timeout_ms"),
             (self.psize_var, "packet_size"), (self.senddelay_var, "send_delay_ms"),
             (self.port_var, "port"), (self.logpath_var, "log_path"),
+            (self.dscp_var, "dscp"), (self.sourceip_var, "source_ip"),
             (self.webhook_var, "webhook_url"), (self.packettype_var, "packet_type"),
             (self.alert_loss_var, "alert_loss"), (self.alert_lat_var, "alert_latency"),
-            (self.alert_win_var, "alert_window"),
+            (self.alert_win_var, "alert_window"), (self.alert_mos_var, "alert_mos"),
         ):
             if s.get(key) is not None:
                 var.set(str(s[key]))
@@ -819,6 +862,8 @@ class App:
             "packet_size": self.psize_var.get(),
             "send_delay_ms": self.senddelay_var.get(),
             "port": self.port_var.get(),
+            "dscp": self.dscp_var.get(),
+            "source_ip": self.sourceip_var.get(),
             "log_path": self.logpath_var.get(),
             "webhook_url": self.webhook_var.get(),
             "packet_type": self.packettype_var.get(),
@@ -828,6 +873,7 @@ class App:
             "alert_loss": self.alert_loss_var.get(),
             "alert_latency": self.alert_lat_var.get(),
             "alert_window": self.alert_win_var.get(),
+            "alert_mos": self.alert_mos_var.get(),
             "alert_sound": bool(self.alert_sound_var.get()),
             "resume_on_launch": bool(self.resume_var.get()),
             "targets": list(self._monitors.keys()),
@@ -944,6 +990,119 @@ class App:
         mon.load_dict(data)
         self._activate(name)
 
+    # --- baseline comparison ----------------------------------------------
+    def _compare_with_baseline(self) -> None:
+        """Diff the active target against a session saved earlier.
+
+        The tool could always say what a path looks like now; this is what says
+        whether that differs from last Tuesday, which is the question people
+        actually turn up with.
+        """
+        views, _status, _ip, target_input = self.monitor.snapshot()
+        if not views:
+            messagebox.showinfo("Nothing to compare",
+                                "Start a target first - there is no current data.")
+            return
+        path = filedialog.askopenfilename(
+            title="Choose a saved session to compare against",
+            filetypes=[("PingerPlot session", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("Compare failed", str(exc))
+            return
+        if not isinstance(data, dict):
+            messagebox.showerror("Compare failed", "Not a PingerPlot session file.")
+            return
+
+        base = cmpmod.stats_from_session(data)
+        if not base:
+            messagebox.showerror("Compare failed",
+                                 "That session has no hop data to compare against.")
+            return
+        base_target = str(data.get("target_input") or os.path.basename(path))
+        if base_target and target_input and base_target != target_input:
+            # Comparing two different destinations is almost always a mis-click,
+            # and the per-hop numbers would be meaningless. Warn, but allow it:
+            # the same host is legitimately reachable under two names.
+            if not messagebox.askyesno(
+                    "Different target",
+                    f"The saved session is for '{base_target}' but the current "
+                    f"target is '{target_input}'.\n\nCompare anyway?"):
+                return
+
+        now = [cmpmod.HopStats(v.ttl, v.address, v.hostname, v.sent,
+                               v.loss_pct, v.avg, v.jitter) for v in views]
+        self._show_comparison(cmpmod.compare(base, now, target=target_input),
+                              base_target)
+
+    def _show_comparison(self, cmp_, baseline_label: str) -> None:
+        win = tk.Toplevel(self.root)
+        win.title(f"Compare - now vs {baseline_label}")
+        win.transient(self.root)
+        win.geometry(f"{self.s(900)}x{self.s(460)}")
+        win.configure(bg=COLORS["win_bg"])
+
+        ttk.Label(win, text=cmp_.summary(), padding=(self.s(10), self.s(8)),
+                  font=("Segoe UI", 9, "bold")).pack(side="top", anchor="w")
+
+        cols = ("ttl", "address", "loss", "d_loss", "avg", "d_avg", "verdict")
+        tree = ttk.Treeview(win, columns=cols, show="headings", selectmode="browse")
+        for key, title, width, anchor in (
+            ("ttl", "Hop", 44, "center"), ("address", "Address", 150, "w"),
+            ("loss", "Loss", 62, "e"), ("d_loss", "Δ Loss", 74, "e"),
+            ("avg", "Avg ms", 70, "e"), ("d_avg", "Δ Avg", 74, "e"),
+            ("verdict", "Change", 260, "w"),
+        ):
+            tree.heading(key, text=title)
+            tree.column(key, width=self.s(width), anchor=anchor,
+                        stretch=(key == "verdict"))
+        for tag, key in (("bad", "bad"), ("warn", "warn"),
+                         ("ok", "ok"), ("dest", "dest")):
+            tree.tag_configure(tag, background=COLORS[key], foreground=COLORS["fg"])
+
+        for r in cmp_.rows:
+            side = r.now or r.base
+            note = r.verdict
+            if r.verdict == cmpmod.REROUTED and r.base and r.now:
+                note = f"rerouted  {r.base.address} → {r.now.address}"
+            tree.insert("", "end", values=(
+                r.ttl,
+                r.address or "*",
+                "—" if side is None else f"{side.loss_pct:.0f}%",
+                "" if r.d_loss is None else f"{r.d_loss:+.0f}%",
+                "—" if side is None or side.avg is None else _ms(side.avg),
+                "" if r.d_avg is None else f"{r.d_avg:+.1f}",
+                note,
+            ), tags=(self._verdict_tag(r.verdict),))
+
+        vsb = ttk.Scrollbar(win, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=vsb.set)
+        footer = ttk.Frame(win, padding=(self.s(8), self.s(6)))
+        footer.pack(side="bottom", fill="x")
+        ttk.Button(footer, text="Copy",
+                   command=lambda: self._clip("\n".join(
+                       cmpmod.format_comparison(cmp_, baseline_label)))).pack(side="left")
+        ttk.Button(footer, text="Close", command=win.destroy).pack(side="right")
+        vsb.pack(side="right", fill="y")
+        tree.pack(side="left", fill="both", expand=True)
+
+    @staticmethod
+    def _verdict_tag(verdict: str) -> str:
+        """Red for a regression, amber for anything that moved, plain for the
+        rest - so the eye lands on the hops that got worse."""
+        if verdict == cmpmod.WORSE:
+            return "bad"
+        if verdict in (cmpmod.REROUTED, cmpmod.NEW, cmpmod.GONE):
+            return "warn"
+        if verdict == cmpmod.BETTER:
+            return "dest"
+        return "ok"
+
     # --- refresh loop ------------------------------------------------------
     def _refresh(self) -> None:
         self._refresh_once()
@@ -965,8 +1124,8 @@ class App:
         # Redraw the active canvas only when its data actually changed since the
         # last tick (probes arrive every `interval`, but we tick faster). Resize
         # and tab-change redraw via their own bindings, so this can't blank them.
-        ver = (self._active, getattr(active, "_round", -1) if active else -1,
-               self._selected_ttl, self.theme)
+        ver = draw_version(self._active, active, self._selected_ttl, self.theme,
+                           self.geo.count())
         if ver != self._draw_ver:
             self._draw_ver = ver
             self._draw_active_tab()
@@ -1128,11 +1287,17 @@ class App:
 
     @staticmethod
     def _row_tag(v: HopView, is_dest: bool) -> str:
-        if v.loss_pct > 25:
+        """Row colour: red for a problem, amber for a warning.
+
+        BAD_MS used to be tested one branch too late — `avg >= BAD_MS` returned
+        "warn", and any average clearing 250 ms also clears WARN_MS's 120 ms and
+        would have hit the next branch for the same answer. The condition could
+        never change the outcome, so latency alone never turned a row red no
+        matter how bad it got, contradicting BAD_MS's own comment.
+        """
+        if v.loss_pct > 25 or (v.avg is not None and v.avg >= BAD_MS):
             return "bad"
-        if v.loss_pct > 0 or (v.avg is not None and v.avg >= BAD_MS):
-            return "warn"
-        if v.avg is not None and v.avg >= WARN_MS:
+        if v.loss_pct > 0 or (v.avg is not None and v.avg >= WARN_MS):
             return "warn"
         return "dest" if is_dest else "ok"
 

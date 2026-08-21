@@ -43,7 +43,18 @@ def load() -> dict:
 
 
 def save(data: dict) -> bool:
-    """Atomically write ``data``. Returns False on any I/O error (never raises)."""
+    """Atomically write ``data``. Returns False on failure, and never raises.
+
+    TypeError and ValueError are caught alongside OSError because json.dump
+    raises them for a value it cannot encode and for a circular reference —
+    not I/O errors, but just as fatal here. The GUI calls this from its
+    window-close handler, so an escaping exception means the app throws on the
+    way out, after the window has already been asked to close.
+
+    A failed write is a no-op: the temp file is removed rather than left behind
+    forever, and os.replace never runs, so the previous settings survive.
+    """
+    tmp = None
     try:
         d = config_dir()
         d.mkdir(parents=True, exist_ok=True)
@@ -52,5 +63,10 @@ def save(data: dict) -> bool:
             json.dump(data, fh, indent=2)
         os.replace(tmp, d / FILE_NAME)
         return True
-    except OSError:
+    except (OSError, TypeError, ValueError):
+        if tmp is not None:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
         return False

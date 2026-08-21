@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import time
 from collections import deque
+from itertools import islice
 from dataclasses import dataclass
 from typing import Deque, List, Optional
 
@@ -75,6 +76,45 @@ class Hop:
     def recent_avg(self, k: int = 0) -> Optional[float]:
         rtts = [s.rtt for s in self._recent(k) if s.rtt is not None]
         return sum(rtts) / len(rtts) if rtts else None
+
+    def recent_stats(self, k: int = 0) -> "tuple[float, Optional[float], Optional[float]]":
+        """``(loss_pct, avg, jitter)`` over the last ``k`` samples, one pass.
+
+        The window equivalent of :meth:`compute`. Alert evaluation needs all
+        three — jitter because MOS is a function of latency, jitter and loss
+        together — and scanning the deque three times for them would be silly
+        when they come from the same accumulation.
+
+        ``islice`` rather than ``list(...)[-k:]``: the deque holds 600 samples
+        and the window is usually 20, so the slice copied 30x more than it
+        needed. islice also avoids the trap of indexing a deque near its far
+        end, which is O(n) per access.
+        """
+        samples = self.samples
+        n = len(samples)
+        if n == 0:
+            return (0.0, None, None)
+        start = 0 if (not k or k >= n) else n - k
+        window = samples if start == 0 else islice(samples, start, None)
+        count = n - start
+        received = 0
+        total = 0.0
+        total_sq = 0.0
+        for s in window:
+            r = s.rtt
+            if r is None:
+                continue
+            received += 1
+            total += r
+            total_sq += r * r
+        loss_pct = 100.0 * (count - received) / count
+        if not received:
+            return (loss_pct, None, None)
+        avg = total / received
+        if received < 2:
+            return (loss_pct, avg, None)
+        var = total_sq / received - avg * avg
+        return (loss_pct, avg, var ** 0.5 if var > 0 else 0.0)
 
     @property
     def sent(self) -> int:
@@ -229,6 +269,25 @@ def mos_label(score: Optional[float]) -> str:
     if score >= 3.1:
         return "Poor"
     return "Bad"
+
+
+def draw_version(active_name, monitor, selected_ttl, theme, geo_count: int):
+    """Everything a canvas redraw depends on, as one comparable tuple.
+
+    The GUI's refresh timer ticks faster than probes arrive, so a canvas is
+    only redrawn when this changes. ``geo_count`` belongs in it because geo
+    lookups land asynchronously, roughly a second apart, and touch none of the
+    other four — so without it the Map tab drew its coastlines, fired off the
+    lookups and then never plotted the answers. A live monitor hid that behind
+    the next round's redraw; a *loaded session* has no next round, so its map
+    stayed empty until the window happened to be resized.
+
+    Here rather than in gui.py so it is testable on any platform, like the
+    other pure presentation helpers below.
+    """
+    return (active_name,
+            getattr(monitor, "_round", -1) if monitor is not None else -1,
+            selected_ttl, theme, geo_count)
 
 
 # --- CSV hardening ---------------------------------------------------------

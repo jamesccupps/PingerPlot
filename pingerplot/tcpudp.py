@@ -50,6 +50,25 @@ _CLEAN_REACH_ERRORS = {0, errno.ECONNREFUSED, 10061}  # 10061 = WSAECONNREFUSED
 DEFAULT_PORTS = {"tcp": 443, "udp": 33434}
 
 
+def _set_tos(sock: socket.socket, tos: int) -> None:
+    """Mark the probe with an IP ToS byte, best effort.
+
+    Caveat worth knowing before trusting a TCP/UDP QoS test: Windows ignores
+    IP_TOS on an ordinary socket unless the DisableUserTOSSetting registry
+    value is cleared, and it does so *silently* -- setsockopt succeeds either
+    way. ICMP mode does not have this problem, because it marks through
+    IP_OPTION_INFORMATION.Tos in the IP Helper API rather than through a
+    socket. So: prefer ICMP mode for DSCP work on Windows, and confirm with a
+    capture before drawing conclusions from a TCP/UDP run.
+    """
+    if not tos:
+        return
+    try:
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_TOS, int(tos) & 0xFF)
+    except OSError:
+        pass
+
+
 def _tcp_reach(err: int, rtt: float, dest_ip: str) -> PingResult:
     """Classify a TCP probe socket's SO_ERROR. A clean result (connected, or
     refused = port closed) proves the destination answered; anything else is no
@@ -123,6 +142,7 @@ def probe(
     port: int,
     local_ip: str,
     payload: bytes = b"",
+    tos: int = 0,
 ) -> PingResult:
     """One TCP or UDP probe at the given IP TTL. ``mode`` is "tcp" or "udp".
 
@@ -140,6 +160,7 @@ def probe(
         fam = socket.SOCK_STREAM if mode == "tcp" else socket.SOCK_DGRAM
         probe_sock = socket.socket(socket.AF_INET, fam)
         probe_sock.setsockopt(socket.IPPROTO_IP, socket.IP_TTL, int(ip_ttl))
+        _set_tos(probe_sock, tos)
         probe_sock.setblocking(False)
         try:
             probe_sock.bind((local_ip, 0))
@@ -174,26 +195,31 @@ def probe(
                 r, w, x = select.select(rlist, wlist, wlist, min(0.2, remaining))
             except OSError:
                 break
-            if mode == "tcp" and (w or x):
-                err = probe_sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
-                result = _tcp_reach(err, (time.perf_counter() - start) * 1000.0, dest_ip)
-                break
+            # Drain the capture socket BEFORE consulting the probe socket's
+            # error. When an ICMP error aborts the connect, both become ready
+            # in the same wakeup — and only the captured packet carries the
+            # responder's address. Taking the socket error first threw that
+            # away and recorded a bare timeout, losing exactly the answer the
+            # probe exists to get: *which* box is refusing to forward.
             if r:
                 try:
                     data, _addr = cap.recvfrom(2048)  # type: ignore[union-attr]
                 except OSError:
-                    continue
-                kind = _match(data, src_port, port, dest_ip, mode)
-                if kind is None:
-                    continue
-                responder = socket.inet_ntoa(data[12:16])  # source IP of the ICMP error
-                rtt = (time.perf_counter() - start) * 1000.0
-                if kind == "dest" and responder == dest_ip:
-                    result = PingResult(IP_SUCCESS, rtt, responder, True)   # reached the target
-                else:
-                    # TTL-exceeded router, or an unreachable from a mid-path
-                    # firewall (not the target) — a responding hop, not the end.
-                    result = PingResult(IP_TTL_EXPIRED_TRANSIT, rtt, responder, False)
+                    data = None
+                kind = _match(data, src_port, port, dest_ip, mode) if data else None
+                if kind is not None:
+                    responder = socket.inet_ntoa(data[12:16])  # source of the ICMP error
+                    rtt = (time.perf_counter() - start) * 1000.0
+                    if kind == "dest" and responder == dest_ip:
+                        result = PingResult(IP_SUCCESS, rtt, responder, True)   # reached the target
+                    else:
+                        # TTL-exceeded router, or an unreachable from a mid-path
+                        # firewall (not the target) — a responding hop, not the end.
+                        result = PingResult(IP_TTL_EXPIRED_TRANSIT, rtt, responder, False)
+                    break
+            if mode == "tcp" and (w or x):
+                err = probe_sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+                result = _tcp_reach(err, (time.perf_counter() - start) * 1000.0, dest_ip)
                 break
         return result
     finally:
@@ -211,6 +237,7 @@ def probe_path(
     port: int,
     local_ip: str,
     payload: bytes = b"",
+    tos: int = 0,
 ) -> dict:
     """Probe all ``ttls`` in one round in parallel, sharing a single capture
     socket — so a round costs ~one timeout instead of the sum (much faster on
@@ -220,7 +247,7 @@ def probe_path(
     try:
         cap = _open_capture(local_ip)
     except OSError:
-        return {ttl: probe(dest_ip, ttl, timeout_ms, mode, port, local_ip, payload)
+        return {ttl: probe(dest_ip, ttl, timeout_ms, mode, port, local_ip, payload, tos)
                 for ttl in ttls}
 
     timeout = max(0.05, timeout_ms / 1000.0)
@@ -232,6 +259,7 @@ def probe_path(
             if mode == "tcp":
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 s.setsockopt(socket.IPPROTO_IP, socket.IP_TTL, int(ttl))
+                _set_tos(s, tos)
                 s.setblocking(False)
                 try:
                     s.bind((local_ip, 0))
@@ -248,6 +276,7 @@ def probe_path(
                 key = (port + ttl) & 0xFFFF
                 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 s.setsockopt(socket.IPPROTO_IP, socket.IP_TTL, int(ttl))
+                _set_tos(s, tos)
                 start = time.perf_counter()
                 try:
                     s.sendto(payload or b"\x00", (dest_ip, key))
@@ -268,13 +297,11 @@ def probe_path(
             except OSError:
                 break
             now = time.perf_counter()
-            if mode == "tcp" and (w or x):
-                for ttl in list(pending):
-                    s = senders[ttl][0]
-                    if s in w or s in x:
-                        err = s.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
-                        results[ttl] = _tcp_reach(err, (now - senders[ttl][1]) * 1000.0, dest_ip)
-                        pending.discard(ttl)
+            # Drain the capture socket first. An ICMP error that aborts a
+            # connect makes both ready in the same wakeup, and only the
+            # captured packet names the responder — reading the socket error
+            # first would resolve that TTL as a bare timeout and the `not in
+            # pending` guard below would then discard the router's identity.
             if cap in r:
                 while True:
                     try:
@@ -299,6 +326,13 @@ def probe_path(
                     else:
                         results[ttl] = PingResult(IP_TTL_EXPIRED_TRANSIT, rtt, responder, False)
                     pending.discard(ttl)
+            if mode == "tcp" and (w or x):
+                for ttl in list(pending):
+                    s = senders[ttl][0]
+                    if s in w or s in x:
+                        err = s.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+                        results[ttl] = _tcp_reach(err, (now - senders[ttl][1]) * 1000.0, dest_ip)
+                        pending.discard(ttl)
         for ttl in pending:
             results[ttl] = PingResult(IP_REQ_TIMED_OUT, None, None, False)
         return results

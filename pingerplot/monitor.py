@@ -40,11 +40,20 @@ except ImportError:  # pragma: no cover - non-Windows
     winsound = None  # type: ignore[assignment]
 
 from . import __version__, icmp, tcpudp
-from .model import DEFAULT_HISTORY, Event, Hop, HopView, Sample
+from .model import DEFAULT_HISTORY, Event, Hop, HopView, Sample, mos, mos_label
 
 GROW_PROBE_SPAN = 8       # extra TTLs to probe when looking for a longer route
 UNREACHED_BEFORE_GROW = 3  # consecutive dest-miss rounds before probing deeper
+MAX_HOPS_CEILING = 64      # hard cap on max_hops, and so on the probe pool width
 FINAL_HOP_TTL = 255        # TTL used to ping the destination directly
+# Windows does not hand a connecting socket the RST the instant it arrives — it
+# finishes retransmitting the SYN first, then surfaces WSAECONNREFUSED. Measured
+# at ~2.0 s on Windows 11. Below that a *closed* port is indistinguishable from
+# an unreachable host, which is the wrong answer in the most common diagnostic
+# case ("the service is down but the box is fine"). Shortening the window with
+# TCP_MAXRT does not help: it replaces WSAECONNREFUSED with WSAETIMEDOUT and
+# destroys the very distinction the probe exists to draw. So we wait it out.
+TCP_REFUSAL_FLOOR_MS = 3000
 MAX_LOAD_HISTORY = 50_000  # cap a loaded session's per-hop ring buffer (DoS guard)
 MAX_LOG_BYTES = 25 * 1024 * 1024  # roll the probe CSV past ~25 MB (one backup kept)
 MAX_LOAD_HOPS = 1024       # cap hops loaded from a session file (defense-in-depth)
@@ -92,9 +101,13 @@ class Monitor:
         self.final_hop_only = False
         self.packet_type = "icmp"   # "icmp" | "tcp" | "udp"
         self.port = 443
+        self.dscp = 0               # DiffServ code point (0-63); 0 = best effort
+        self.source_ip = ""         # pin the outgoing interface; "" = let the stack pick
         self._local_ip = "0.0.0.0"
+        self._tos = 0               # derived from dscp; the byte that goes on the wire
         self._payload = icmp.DEFAULT_PAYLOAD
         self.log_path = ""
+        self.timeout_note = ""   # set when start() raises a too-short timeout
         self._log_fh = None
         self._round = 0   # 0 = initial trace; 1,2,3… = monitoring rounds
         self.alert_enabled = True
@@ -102,6 +115,7 @@ class Monitor:
         self.alert_latency_ms = 250.0
         self.alert_window = 20
         self.alert_sound = True
+        self.alert_mos = 0.0        # 0 disables; MOS alerts BELOW this score
         self.webhook_url = ""
 
         # live state
@@ -123,13 +137,33 @@ class Monitor:
         # Pools are created on start() and torn down on shutdown(); a Monitor
         # that never starts (e.g. the GUI's placeholder) allocates none.
         self._ping_pool: Optional[ThreadPoolExecutor] = None
+        self._ping_workers = 0   # width of the live probe pool (see _ensure_pools)
         self._dns_pool: Optional[ThreadPoolExecutor] = None
 
     def _ensure_pools(self) -> None:
         """(Re)create the probe and DNS thread pools if absent. Lets a Monitor
-        be reused after shutdown(), and keeps a never-started one pool-free."""
+        be reused after shutdown(), and keeps a never-started one pool-free.
+
+        The probe pool is sized to ``max_hops`` so a whole route fits in ONE
+        wave. It used to be a flat 16 while max_hops defaults to 30 and may go
+        to 64, so any route past 16 hops silently split into two or more waves
+        — and a wave costs a full reply timeout, because a silent router never
+        answers. That turned the engine's core promise (a round costs about one
+        timeout, not the sum) into a 2x-4x overrun on ordinary internet paths.
+
+        Sizing to the ceiling is free: ThreadPoolExecutor spawns its threads
+        lazily as work is submitted, so a 6-hop route still only ever runs six.
+        """
+        want = max(1, min(int(self.max_hops), MAX_HOPS_CEILING))
+        if self._ping_pool is not None and self._ping_workers < want:
+            # A later start() asked for a longer route than the live pool can
+            # probe at once. Replace it rather than quietly serialising; the
+            # old one drains its in-flight probes and exits.
+            self._ping_pool.shutdown(wait=False)
+            self._ping_pool = None
         if self._ping_pool is None:
-            self._ping_pool = ThreadPoolExecutor(max_workers=16, thread_name_prefix="ping")
+            self._ping_pool = ThreadPoolExecutor(max_workers=want, thread_name_prefix="ping")
+            self._ping_workers = want
         if self._dns_pool is None:
             self._dns_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="dns")
 
@@ -146,32 +180,51 @@ class Monitor:
         final_hop_only: bool = False,
         packet_type: str = "icmp",
         port: int = 443,
+        dscp: int = 0,
+        source_ip: str = "",
         log_path: str = "",
         alert_enabled: bool = True,
         alert_loss_pct: float = 20.0,
         alert_latency_ms: float = 250.0,
         alert_window: int = 20,
         alert_sound: bool = True,
+        alert_mos: float = 0.0,
         webhook_url: str = "",
     ) -> None:
         self.stop()
         self.target_input = target.strip()
         self.interval = max(0.25, float(interval))
         self.timeout_ms = max(100, int(timeout_ms))
-        self.max_hops = max(1, min(int(max_hops), 64))
+        self.max_hops = max(1, min(int(max_hops), MAX_HOPS_CEILING))
         self.resolve_names = bool(resolve_names)
         self.packet_size = max(0, min(int(packet_size), 1472))
         self.send_delay_ms = max(0, min(int(send_delay_ms), 1000))
         self.final_hop_only = bool(final_hop_only)
         self.packet_type = packet_type if packet_type in ("icmp", "tcp", "udp") else "icmp"
         self.port = max(1, min(int(port), 65535))
+        self.dscp = max(0, min(int(dscp), 63))
+        self._tos = icmp.dscp_to_tos(self.dscp)
+        self.source_ip = (source_ip or "").strip()
         self._payload = _build_payload(self.packet_size)
+        self.timeout_note = ""
+        if self.packet_type == "tcp" and self.timeout_ms < TCP_REFUSAL_FLOOR_MS:
+            # Raise it rather than let the probe report a closed port as an
+            # unreachable host. Silently overriding a setting the user typed
+            # would be its own bug, so record why for the status line.
+            self.timeout_note = (
+                f"reply timeout raised {self.timeout_ms} -> {TCP_REFUSAL_FLOOR_MS} ms: "
+                f"below that, Windows has not yet surfaced a TCP reset and a closed "
+                f"port is indistinguishable from an unreachable host"
+            )
+            self.timeout_ms = TCP_REFUSAL_FLOOR_MS
         self.log_path = (log_path or "").strip()
         self.alert_enabled = bool(alert_enabled)
         self.alert_loss_pct = max(0.0, float(alert_loss_pct))
         self.alert_latency_ms = max(0.0, float(alert_latency_ms))
         self.alert_window = max(1, int(alert_window))
         self.alert_sound = bool(alert_sound)
+        # MOS runs 1.0-5.0; anything above 5 would alert permanently.
+        self.alert_mos = max(0.0, min(float(alert_mos), 5.0))
         self.webhook_url = (webhook_url or "").strip()
         with self._lock:
             self._generation += 1
@@ -205,6 +258,7 @@ class Monitor:
             if pool is not None:
                 pool.shutdown(wait=False, cancel_futures=True)
         self._ping_pool = None
+        self._ping_workers = 0
         self._dns_pool = None
 
     def pause(self) -> None:
@@ -272,6 +326,8 @@ class Monitor:
                 "packet_size": self.packet_size,
                 "send_delay_ms": self.send_delay_ms,
                 "max_hops": self.max_hops,
+                "dscp": self.dscp,
+                "source_ip": self.source_ip,
                 "final_hop_only": self.final_hop_only,
                 "samples": max((h.sent for h in self._hops), default=0),
                 "window_start": min(times) if times else None,
@@ -300,6 +356,8 @@ class Monitor:
                     "send_delay_ms": self.send_delay_ms,
                     "packet_type": self.packet_type,
                     "port": self.port,
+                    "dscp": self.dscp,
+                    "source_ip": self.source_ip,
                 },
                 "hops": [
                     {
@@ -333,6 +391,8 @@ class Monitor:
             self.send_delay_ms = int(cfg.get("send_delay_ms", self.send_delay_ms))
             self.packet_type = str(cfg.get("packet_type", self.packet_type))
             self.port = int(cfg.get("port", self.port))
+            self.dscp = int(cfg.get("dscp", self.dscp))
+            self.source_ip = str(cfg.get("source_ip", self.source_ip) or "")
             self._hops = []
             for hd in (data.get("hops", []) or [])[:MAX_LOAD_HOPS]:
                 try:
@@ -397,7 +457,13 @@ class Monitor:
         try:
             fh.write(f"{now:.3f},{iso},{self._round},{ttl},{r.address or ''},{rtt},{r.status}\n")
             fh.flush()
-        except OSError:
+        except (OSError, ValueError):
+            # ValueError is "I/O operation on closed file". stop() joins the
+            # worker with a bounded timeout and then closes the log regardless,
+            # so a probe that outlived the join can still be holding this
+            # handle. Losing one line to a shutdown race is fine; letting it
+            # escape is not — it aborts the round and surfaces as
+            # "Monitor error" for what is a benign teardown.
             return
         self._rotate_log_if_needed()
 
@@ -411,8 +477,8 @@ class Monitor:
         try:
             if fh.tell() < MAX_LOG_BYTES:
                 return
-        except OSError:
-            return
+        except (OSError, ValueError):
+            return   # same shutdown race as _log_probe: tell() on a closed file
         self._close_log()
         try:
             root, ext = os.path.splitext(self.log_path)
@@ -487,7 +553,16 @@ class Monitor:
                     self.running = False
                 return
 
-            self._local_ip = tcpudp.local_ip_for(self.target_ip)
+            if self.timeout_note:
+                # Timestamped in the Events tab rather than appended to the
+                # status line, which would repeat it on every round.
+                self._log_event("info", self.timeout_note)
+
+            # An explicit source pins the outgoing interface -- the point of
+            # the setting on a multi-homed box, where the route table would
+            # otherwise decide for you and you could not ask "what does this
+            # path look like from the other VLAN".
+            self._local_ip = self.source_ip or tcpudp.local_ip_for(self.target_ip)
             needs_capture = self.packet_type != "icmp" and not (
                 self.final_hop_only and self.packet_type == "tcp"
             )
@@ -540,6 +615,10 @@ class Monitor:
         proto = self.packet_type.upper()
         if self.packet_type != "icmp":
             proto += f":{self.port}"
+        if self.dscp:
+            proto += f" DSCP {self.dscp}"
+        if self.source_ip:
+            proto += f" from {self.source_ip}"
         scope = "destination only" if self.final_hop_only else f"{route_len} hops"
         base = f"Monitoring {self.target_input} [{self.target_ip}] via {proto} - {scope}"
         if not self.reached_target:
@@ -603,10 +682,11 @@ class Monitor:
         (used for final-hop-only, which pings the destination at full TTL)."""
         actual_ttl = ttl if ip_ttl is None else ip_ttl
         if self.packet_type == "icmp":
-            return icmp.ping(self.target_ip, actual_ttl, self.timeout_ms, self._payload)
+            return icmp.ping(self.target_ip, actual_ttl, self.timeout_ms,
+                             self._payload, self._tos, self.source_ip or None)
         return tcpudp.probe(
             self.target_ip, actual_ttl, self.timeout_ms,
-            self.packet_type, self.port, self._local_ip, self._payload,
+            self.packet_type, self.port, self._local_ip, self._payload, self._tos,
         )
 
     def _gather_range(self, lo: int, hi: int) -> Dict[int, icmp.PingResult]:
@@ -615,7 +695,8 @@ class Monitor:
         (~one timeout total instead of the sum)."""
         if self.packet_type != "icmp":
             return tcpudp.probe_path(self.target_ip, range(lo, hi + 1), self.timeout_ms,
-                                     self.packet_type, self.port, self._local_ip, self._payload)
+                                     self.packet_type, self.port, self._local_ip,
+                                     self._payload, self._tos)
         results: Dict[int, icmp.PingResult] = {}
         if self._ping_pool is None:     # pools torn down (e.g. mid-shutdown)
             return {ttl: icmp.PingResult(icmp.IP_REQ_TIMED_OUT, None, None, False)
@@ -715,10 +796,20 @@ class Monitor:
             dest = self._hops[route_len - 1]
             sent_window = min(self.alert_window, dest.sent)
             ever = dest.received
-            r_loss = dest.recent_loss_pct(self.alert_window)
-            r_avg = dest.recent_avg(self.alert_window)
+            # One pass for all three: the MOS alert needs jitter as well, and
+            # the E-model wants latency, jitter and loss from the same window.
+            r_loss, r_avg, r_jitter = dest.recent_stats(self.alert_window)
             ttl = dest.ttl
             name = dest.hostname or dest.address or "?"
+
+        # Alerts are keyed by TTL, and only the destination's TTL is ever
+        # evaluated. A reroute that changes the path length moves the
+        # destination to a different TTL, orphaning the previous key: nothing
+        # would revisit it, so the banner kept reporting loss on a hop that no
+        # longer exists. Retire those explicitly, before the history check
+        # below — the new destination not having enough history yet is a reason
+        # to say nothing about it, not a reason to keep showing the old one.
+        self._retire_alerts(keep_ttl=ttl, reason="route changed")
 
         if sent_window < self.alert_window:
             return  # not enough history yet to call anything "sustained"
@@ -736,6 +827,20 @@ class Monitor:
             lat_active,
             f"Hop {ttl} ({name}): avg {r_avg:.0f} ms over last {self.alert_window} probes"
             if r_avg is not None else "",
+        )
+
+        # MOS folds latency, jitter and loss into one number, so it catches the
+        # combination that ruins a call while each ingredient sits under its own
+        # threshold. Note the direction: 1.0-5.0, and *lower* is worse, so this
+        # one fires at or BELOW its threshold. Gated on ever > 0 like the loss
+        # alert — a destination that has never answered has no score to judge.
+        r_mos = mos(r_avg, r_jitter, r_loss) if ever > 0 else None
+        mos_active = self.alert_mos > 0 and r_mos is not None and r_mos <= self.alert_mos
+        self._set_alert(
+            (ttl, "mos"),
+            mos_active,
+            f"Hop {ttl} ({name}): MOS {r_mos:.1f} ({mos_label(r_mos)}) "
+            f"over last {self.alert_window} probes" if r_mos is not None else "",
         )
 
     def _set_alert(self, key: Tuple[int, str], active: bool, text: str) -> None:
@@ -757,13 +862,27 @@ class Monitor:
             self._log_event("alert", f"ALERT: {text}")
 
     def _clear_all_alerts(self) -> None:
+        self._retire_alerts(keep_ttl=None)
+
+    def _retire_alerts(self, keep_ttl: Optional[int], reason: str = "") -> None:
+        """Clear active alerts that will never be evaluated again.
+
+        ``keep_ttl=None`` clears everything (alerts switched off, destination
+        no longer reachable). Otherwise only ``keep_ttl`` survives — every
+        other key belongs to a hop that is no longer the destination.
+
+        The lock is released between the pop and the log, because _log_event
+        beeps and fires the webhook and neither should happen holding it.
+        """
         with self._lock:
-            keys = list(self._active_alerts.keys())
-        for key in keys:
+            stale = [k for k in self._active_alerts
+                     if keep_ttl is None or k[0] != keep_ttl]
+        suffix = f" ({reason})" if reason else ""
+        for key in stale:
             with self._lock:
                 cleared = self._active_alerts.pop(key, None)
             if cleared:
-                self._log_event("clear", f"Cleared: {cleared}")
+                self._log_event("clear", f"Cleared{suffix}: {cleared}")
 
     # --- reverse DNS (best effort, off the probe path) --------------------
     def _maybe_resolve(self, ttl: int, address: str) -> None:

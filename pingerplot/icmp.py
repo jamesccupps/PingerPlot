@@ -35,6 +35,10 @@ IP_REQ_TIMED_OUT = 11010
 IP_BAD_ROUTE = 11012
 IP_TTL_EXPIRED_TRANSIT = 11013
 IP_TTL_EXPIRED_REASSEM = 11014
+# Not an IP_STATUS: a Win32 error IcmpSendEcho2Ex returns when SourceAddress is
+# not an address this machine holds. Worth naming, because "status 1214" tells
+# an operator nothing and the cause is a one-line fix.
+ERROR_INVALID_NETNAME = 1214
 
 _STATUS_TEXT = {
     IP_SUCCESS: "ok",
@@ -50,6 +54,7 @@ _STATUS_TEXT = {
     IP_BAD_ROUTE: "bad route",
     IP_TTL_EXPIRED_TRANSIT: "ttl expired (hop)",
     IP_TTL_EXPIRED_REASSEM: "ttl expired (reassembly)",
+    ERROR_INVALID_NETNAME: "source address is not on this machine",
 }
 
 
@@ -125,8 +130,49 @@ if _AVAILABLE:
         wintypes.DWORD,                           # Timeout (ms)
     ]
 
+    # IcmpSendEcho has no source-address parameter, so on a multi-homed box the
+    # stack picks the interface by route and you cannot ask "what does the path
+    # look like *from the BAS VLAN*". IcmpSendEcho2Ex (Vista+) takes one.
+    # Passing NULL for both Event and ApcRoutine makes it synchronous, exactly
+    # like IcmpSendEcho.
+    _IcmpSendEcho2Ex = _iphlpapi.IcmpSendEcho2Ex
+    _IcmpSendEcho2Ex.restype = wintypes.DWORD
+    _IcmpSendEcho2Ex.argtypes = [
+        wintypes.HANDLE,                          # IcmpHandle
+        wintypes.HANDLE,                          # Event (NULL = synchronous)
+        ctypes.c_void_p,                          # ApcRoutine (NULL)
+        ctypes.c_void_p,                          # ApcContext (NULL)
+        ctypes.c_uint32,                          # SourceAddress (IPAddr)
+        ctypes.c_uint32,                          # DestinationAddress (IPAddr)
+        ctypes.c_char_p,                          # RequestData
+        wintypes.WORD,                            # RequestSize
+        ctypes.POINTER(IP_OPTION_INFORMATION),    # RequestOptions
+        ctypes.c_void_p,                          # ReplyBuffer
+        wintypes.DWORD,                           # ReplySize
+        wintypes.DWORD,                           # Timeout (ms)
+    ]
+
 
 DEFAULT_PAYLOAD = b"PingerPlot-probe.."  # 18 bytes (fallback; the monitor builds its own)
+
+# DSCP code points worth having a name for. The wire field is the 8-bit ToS
+# byte, of which DSCP is the top 6 bits — hence the shift in dscp_to_tos.
+DSCP_PRESETS = {
+    "CS0 / default": 0,
+    "AF31 (signalling)": 26,
+    "AF41 (video)": 34,
+    "EF (voice)": 46,
+    "CS6 (network control)": 48,
+}
+
+
+def dscp_to_tos(dscp: int) -> int:
+    """DSCP code point (0-63) -> the ToS byte that carries it (DSCP << 2).
+
+    Network people speak DSCP; the IP header field is ToS. Doing the shift in
+    one place stops a 46 meant as EF from going on the wire as DSCP 11.
+    """
+    return (max(0, min(int(dscp), 63)) << 2) & 0xFC
 
 
 def _ip_to_uint32(ip: str) -> int:
@@ -139,9 +185,35 @@ def _uint32_to_ip(addr: int) -> str:
     return socket.inet_ntoa(struct.pack("<I", addr & 0xFFFFFFFF))
 
 
+def _posix():
+    """The POSIX backend, imported lazily.
+
+    Deferred rather than imported at module scope because icmp_posix imports
+    names from this module; doing it at the top would be a cycle.
+    """
+    from . import icmp_posix
+    return icmp_posix
+
+
 def is_available() -> bool:
-    """True when the Windows ICMP backend can be used."""
-    return _AVAILABLE
+    """True when an ICMP backend can be used on this machine.
+
+    On Windows that is the IP Helper API and always true. On POSIX it means an
+    unprivileged SOCK_DGRAM ICMP socket can actually be opened, which Linux
+    gates on net.ipv4.ping_group_range -- so the platform being supported is
+    not on its own enough.
+    """
+    if _AVAILABLE:
+        return True
+    return _posix().is_available()
+
+
+def unavailable_reason() -> str:
+    """Why is_available() said no, phrased so it can be acted on. The Linux
+    case has a one-line fix and deserves better than "not available"."""
+    if is_available():
+        return ""
+    return _posix().unavailable_reason()
 
 
 def ping(
@@ -149,15 +221,27 @@ def ping(
     ttl: int = 128,
     timeout_ms: int = 1000,
     payload: bytes = DEFAULT_PAYLOAD,
+    tos: int = 0,
+    source_ip: Optional[str] = None,
 ) -> PingResult:
     """Send one ICMP echo to ``dest_ip`` with the given ``ttl``.
 
     ``dest_ip`` must already be a dotted IPv4 literal (resolve hostnames first).
     A short ``ttl`` is how we coax intermediate routers into identifying
     themselves for traceroute.
+
+    ``tos`` is the IP ToS byte (see :func:`dscp_to_tos`), for probing a path as
+    the traffic class you actually care about rather than as best-effort.
+
+    ``source_ip`` picks the outgoing interface on a multi-homed host, which
+    needs IcmpSendEcho2Ex rather than IcmpSendEcho. An address the machine does
+    not hold fails with ERROR_INVALID_NETNAME (1214) rather than quietly
+    falling back to the default route.
     """
     if not _AVAILABLE:
-        raise RuntimeError("ICMP backend requires Windows (iphlpapi.dll)")
+        # Same signature, same PingResult: the engine above never learns which
+        # backend answered it.
+        return _posix().ping(dest_ip, ttl, timeout_ms, payload, tos, source_ip)
 
     handle = _IcmpCreateFile()
     if not handle or handle == _INVALID_HANDLE_VALUE:
@@ -165,23 +249,40 @@ def ping(
     try:
         dest = _ip_to_uint32(dest_ip)
         opts = IP_OPTION_INFORMATION(
-            Ttl=max(1, min(int(ttl), 255)), Tos=0, Flags=0, OptionsSize=0, OptionsData=None
+            Ttl=max(1, min(int(ttl), 255)), Tos=int(tos) & 0xFF,
+            Flags=0, OptionsSize=0, OptionsData=None
         )
         # Reply buffer must hold an ICMP_ECHO_REPLY, the echoed payload, and
         # room for an embedded ICMP error message. Allocate generously.
         reply_size = ctypes.sizeof(ICMP_ECHO_REPLY) + len(payload) + 8 + 128
         reply_buf = ctypes.create_string_buffer(reply_size)
 
-        n = _IcmpSendEcho(
-            handle,
-            dest,
-            payload,
-            len(payload),
-            ctypes.byref(opts),
-            reply_buf,
-            reply_size,
-            int(timeout_ms),
-        )
+        if source_ip:
+            n = _IcmpSendEcho2Ex(
+                handle,
+                None,                 # Event: NULL keeps it synchronous
+                None,                 # ApcRoutine
+                None,                 # ApcContext
+                _ip_to_uint32(source_ip),
+                dest,
+                payload,
+                len(payload),
+                ctypes.byref(opts),
+                reply_buf,
+                reply_size,
+                int(timeout_ms),
+            )
+        else:
+            n = _IcmpSendEcho(
+                handle,
+                dest,
+                payload,
+                len(payload),
+                ctypes.byref(opts),
+                reply_buf,
+                reply_size,
+                int(timeout_ms),
+            )
         if n == 0:
             # No reply at all: timeout or a send-side error. GetLastError holds
             # an IP_STATUS code in the same range as reply.Status.
