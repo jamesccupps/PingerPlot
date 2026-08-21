@@ -10,6 +10,19 @@ name: Release binaries
 # is not optional. An early hand-built attempt shipped an exe that died at
 # import because of an over-eager --exclude-module; the smoke tests in this
 # workflow are the thing that makes that a red build instead of a download.
+#
+# Two hardening rules apply throughout, because this job holds contents:write
+# and a token that can publish releases:
+#
+#   1. No ${{ }} interpolation inside a `run:` script. The runner substitutes
+#      those into the script TEXT before bash ever sees it, so a dispatch input
+#      containing shell metacharacters is executed. Values reach the shell
+#      through `env:` instead, where bash reads them as data.
+#   2. Actions are pinned by commit SHA, not by tag. Tags are mutable; a
+#      retagged or compromised action would otherwise run here with that token.
+#
+# tests/test_packaging.py enforces both, so a later edit cannot quietly undo
+# them.
 
 on:
   push:
@@ -17,7 +30,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to build and attach to (e.g. v1.3.0)"
+        description: "Existing tag to build and attach to (e.g. v1.3.1)"
         required: true
         type: string
 
@@ -33,9 +46,35 @@ jobs:
       - name: Work out which tag we are building
         id: tag
         shell: bash
-        run: echo "name=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+        env:
+          # Via env, not ${{ }} inside run: -- see rule 1 at the top of the
+          # file. `tag` is a free-text dispatch input, and this job can publish
+          # releases.
+          TAG_INPUT: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          TAG="${TAG_INPUT:-$REF_NAME}"
+          # Two checks, and the character-set one is not redundant. A glob's *
+          # matches a newline, so "v1.3.1\ninjected=1" satisfies the version
+          # shape below and then writes TWO lines into $GITHUB_OUTPUT --
+          # inventing a step output that nothing here declared. Restricting the
+          # characters first closes that and every quoting question with it.
+          case "$TAG" in
+            *[!A-Za-z0-9.+_-]*)
+               echo "::error::refusing to build a tag containing characters"\
+                    "outside A-Za-z0-9.+_-"
+               exit 1 ;;
+          esac
+          case "$TAG" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::refusing to build '$TAG': expected a tag like v1.3.1"
+               exit 1 ;;
+          esac
+          echo "name=$TAG" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v5
+      # Pinned by commit SHA, not tag: tags are mutable. Dependabot updates
+      # these and the trailing comment says which version each SHA is.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
         with:
           ref: ${{ steps.tag.outputs.name }}
 
@@ -45,15 +84,17 @@ jobs:
         # step happens to touch a missing file -- which is a confusing way to
         # learn it. Say it plainly instead. (v1.3.0 is exactly this case.)
         shell: bash
+        env:
+          TAG: ${{ steps.tag.outputs.name }}
         run: |
           if [ ! -f packaging/pingerplot.spec ]; then
-            echo "::error::${{ steps.tag.outputs.name }} predates packaging/, which"\
-                 "was added in 1.3.1 — there is no build recipe at that commit."\
-                 "Binaries can only be built for 1.3.1 and later."
+            echo "::error::$TAG predates packaging/, which was added in 1.3.1 --"\
+                 "there is no build recipe at that commit. Binaries can only be"\
+                 "built for 1.3.1 and later."
             exit 1
           fi
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
         with:
           python-version: "3.12"
 
@@ -111,7 +152,7 @@ jobs:
             Tee-Object -FilePath SHA256SUMS.txt
         shell: pwsh
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: pingerplot-windows-${{ steps.tag.outputs.name }}
           path: |
@@ -131,9 +172,9 @@ jobs:
         # is the right place for them.
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.name }}
         shell: bash
         run: |
-          TAG="${{ steps.tag.outputs.name }}"
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             echo "No release for $TAG yet; creating one from the tag message."
             gh release create "$TAG" --title "PingerPlot ${TAG#v}" --notes-from-tag --verify-tag

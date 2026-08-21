@@ -1,0 +1,15 @@
+# Actions are pinned by commit SHA (tags are mutable, and the release job holds
+# a token that can publish). A pinned SHA goes stale silently, so Dependabot
+# is what keeps them current -- it understands the `# v5` comment convention
+# and updates both the SHA and the comment together.
+#
+# Only github-actions is watched. The app itself is deliberately
+# dependency-free, so there is no pip ecosystem to track.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    commit-message:
+      prefix: "CI"
