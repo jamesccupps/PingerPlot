@@ -108,6 +108,7 @@ class Monitor:
         self._payload = icmp.DEFAULT_PAYLOAD
         self.log_path = ""
         self.timeout_note = ""   # set when start() raises a too-short timeout
+        self.log_note = ""       # set when the probe log could not be opened
         self._log_fh = None
         self._round = 0   # 0 = initial trace; 1,2,3… = monitoring rounds
         self.alert_enabled = True
@@ -426,6 +427,7 @@ class Monitor:
     # --- crash-safe probe log ---------------------------------------------
     def _open_log(self) -> None:
         self._close_log()
+        self.log_note = ""
         if not self.log_path:
             return
         try:
@@ -436,7 +438,14 @@ class Monitor:
                 self._log_fh.flush()
         except OSError as exc:
             self._log_fh = None
-            self.status = f"Log file error: {exc}"
+            # NOT self.status: _open_log runs inside start(), and the first
+            # thing the worker does is set "Resolving ...", so this survived a
+            # few milliseconds and was gone. The run then looked entirely
+            # normal while writing nothing -- which is the failure the
+            # unattended mode exists to avoid. Same treatment as timeout_note:
+            # timestamped in the Events tab, where it stays.
+            self.log_note = (f"Probe logging DISABLED - cannot open "
+                             f"{self.log_path}: {exc}")
 
     def _close_log(self) -> None:
         fh = self._log_fh
@@ -557,6 +566,8 @@ class Monitor:
                 # Timestamped in the Events tab rather than appended to the
                 # status line, which would repeat it on every round.
                 self._log_event("info", self.timeout_note)
+            if self.log_note:
+                self._log_event("warn", self.log_note)
 
             # An explicit source pins the outgoing interface -- the point of
             # the setting on a multi-homed box, where the route table would

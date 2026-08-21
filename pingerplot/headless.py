@@ -182,8 +182,13 @@ def _build_monitors(cfg: dict, base_dir: Path) -> List[Target]:
             if not target:
                 continue
             lp = kwargs.get("log_path", "")
-            if lp and not os.path.isabs(lp):
-                kwargs["log_path"] = str(base_dir / lp)
+            if lp:
+                # The makedirs covers absolute paths too. It used to sit inside
+                # the relative branch, so an absolute log_path under a
+                # directory that did not exist failed to open and logged
+                # nothing -- which, until now, said nothing either.
+                if not os.path.isabs(lp):
+                    kwargs["log_path"] = str(base_dir / lp)
                 os.makedirs(os.path.dirname(kwargs["log_path"]) or ".", exist_ok=True)
             m = Monitor()
             m.start(target, **kwargs)

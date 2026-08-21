@@ -39,6 +39,7 @@ LIGHT = {
     "banner_bg": "#c0392b", "banner_fg": "#ffffff",
     "fg_bad": "#c0392b", "fg_warn": "#b9770e", "fg_dest": "#1f5fbf", "fg_ok": "#333333",
     "ev_alert": "#fdecea", "ev_clear": "#eafaf1", "ev_route": "#eaf2fb",
+    "ev_warn": "#fef5e7",
     "mos_good": "#2e7d32", "mos_mid": "#b9770e", "mos_bad": "#c0392b",
     # ttk widget styling
     "ttk_theme": "vista", "win_bg": "#f0f0f0", "panel": "#f0f0f0", "field": "#ffffff",
@@ -54,6 +55,7 @@ DARK = {
     "banner_bg": "#c0392b", "banner_fg": "#ffffff",
     "fg_bad": "#ff6b6b", "fg_warn": "#e0a93b", "fg_dest": "#5aa9ff", "fg_ok": "#c8ccd2",
     "ev_alert": "#3d2528", "ev_clear": "#233a2a", "ev_route": "#21344a",
+    "ev_warn": "#42381f",
     "mos_good": "#5fd07a", "mos_mid": "#e0a93b", "mos_bad": "#ff6b6b",
     "ttk_theme": "clam", "win_bg": "#23252a", "panel": "#2d3036", "field": "#1c1e22",
     "fg": "#e4e6eb", "sel_bg": "#2f5d8a", "sel_fg": "#ffffff", "active": "#34373d",
@@ -283,6 +285,7 @@ class App:
         self.events_tree.tag_configure("alert", background=p["ev_alert"], foreground=p["fg"])
         self.events_tree.tag_configure("clear", background=p["ev_clear"], foreground=p["fg"])
         self.events_tree.tag_configure("route", background=p["ev_route"], foreground=p["fg"])
+        self.events_tree.tag_configure("warn", background=p["ev_warn"], foreground=p["fg"])
 
     # --- layout ------------------------------------------------------------
     def _build_controls(self) -> None:
@@ -484,6 +487,7 @@ class App:
         self.events_tree.tag_configure("alert", background=COLORS["ev_alert"])
         self.events_tree.tag_configure("clear", background=COLORS["ev_clear"])
         self.events_tree.tag_configure("route", background=COLORS["ev_route"])
+        self.events_tree.tag_configure("warn", background=COLORS["ev_warn"])
         ev_vsb = ttk.Scrollbar(events, orient="vertical", command=self.events_tree.yview)
         self.events_tree.configure(yscrollcommand=ev_vsb.set)
         ev_vsb.pack(side="right", fill="y")
@@ -1269,7 +1273,7 @@ class App:
         new, last = self.monitor.events_after(self._last_event_seq)
         for e in new:
             ts = time.strftime("%H:%M:%S", time.localtime(e.t))
-            tag = e.kind if e.kind in ("alert", "clear", "route") else "info"
+            tag = e.kind if e.kind in ("alert", "clear", "route", "warn") else "info"
             self.events_tree.insert("", "end", values=(ts, e.kind.upper(), e.text), tags=(tag,))
         if new:
             self.events_tree.yview_moveto(1.0)
