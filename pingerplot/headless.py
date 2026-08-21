@@ -350,7 +350,7 @@ def print_comparison(targets: List[Target], baseline_path: str,
     with nothing to compare against simply says so instead of erroring the run.
     """
     try:
-        with open(baseline_path, encoding="utf-8") as fh:
+        with open(baseline_path, encoding="utf-8-sig") as fh:
             data = json.load(fh)
     except (OSError, ValueError) as exc:
         log(f"Cannot read baseline {baseline_path}: {exc}")
@@ -413,7 +413,13 @@ def main(argv=None) -> int:
         return 0
 
     try:
-        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        # utf-8-sig, not utf-8: this file is hand-authored on Windows, where
+        # PowerShell 5.1's `Set-Content -Encoding utf8` and a number of editors
+        # write a byte-order mark. Plain utf-8 rejects it outright, so the
+        # service refused to start on a config that looks perfectly fine in
+        # every editor that produced it. Reading as utf-8-sig strips a BOM if
+        # present and is identical to utf-8 otherwise.
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError) as exc:
         print(f"Cannot read config {cfg_path}: {exc}", file=sys.stderr)
         return 1

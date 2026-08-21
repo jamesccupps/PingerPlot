@@ -974,7 +974,7 @@ class App:
         if not path:
             return
         try:
-            with open(path, "r", encoding="utf-8") as fh:
+            with open(path, "r", encoding="utf-8-sig") as fh:
                 data = json.load(fh)
         except (OSError, ValueError) as exc:
             messagebox.showerror("Load failed", str(exc))
@@ -1010,7 +1010,7 @@ class App:
         if not path:
             return
         try:
-            with open(path, "r", encoding="utf-8") as fh:
+            with open(path, "r", encoding="utf-8-sig") as fh:
                 data = json.load(fh)
         except (OSError, ValueError) as exc:
             messagebox.showerror("Compare failed", str(exc))

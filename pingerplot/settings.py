@@ -35,7 +35,7 @@ def config_path() -> Path:
 def load() -> dict:
     """Return the saved settings, or ``{}`` if absent/unreadable/not a dict."""
     try:
-        with open(config_dir() / FILE_NAME, "r", encoding="utf-8") as fh:
+        with open(config_dir() / FILE_NAME, "r", encoding="utf-8-sig") as fh:
             data = json.load(fh)
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
