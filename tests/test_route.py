@@ -48,7 +48,7 @@ def test_probe_round_shrinks_when_dest_answers_closer(monkeypatch):
     m.reached_target = True
     for t in (1, 2, 3):
         m._ensure_hop(t)
-    monkeypatch.setattr(m, "_gather_range", lambda lo, hi: {
+    monkeypatch.setattr(m, "_gather_range", lambda lo, hi, gen=None: {
         1: _ttl("10.0.0.1"), 2: _dest(), 3: _timeout()})
     assert m._probe_round(3, gen=1) == 2          # dest now at ttl 2
     assert len(m._hops) == 2
@@ -62,7 +62,7 @@ def test_probe_round_grows_when_dest_moves_farther(monkeypatch):
     for t in (1, 2):
         m._ensure_hop(t)
 
-    def gather(lo, hi):
+    def gather(lo, hi, gen=None):
         out = {}
         for t in range(lo, hi + 1):
             out[t] = _dest() if t == 4 else (_ttl(f"10.0.0.{t}") if t <= 2 else _timeout())

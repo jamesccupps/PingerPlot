@@ -700,10 +700,15 @@ class Monitor:
             self.packet_type, self.port, self._local_ip, self._payload, self._tos,
         )
 
-    def _gather_range(self, lo: int, hi: int) -> Dict[int, icmp.PingResult]:
+    def _gather_range(self, lo: int, hi: int,
+                      gen: Optional[int] = None) -> Dict[int, icmp.PingResult]:
         """Probe TTLs lo..hi. ICMP fans out across the pool (honouring send
         delay); TCP/UDP go through one parallel round on a shared capture socket
-        (~one timeout total instead of the sum)."""
+        (~one timeout total instead of the sum).
+
+        ``gen`` is the caller's run generation, so the submit loop can stop for
+        the same reason the rest of the worker does. Optional only because a
+        test may call this directly with no run in progress."""
         if self.packet_type != "icmp":
             return tcpudp.probe_path(self.target_ip, range(lo, hi + 1), self.timeout_ms,
                                      self.packet_type, self.port, self._local_ip,
@@ -714,7 +719,14 @@ class Monitor:
                     for ttl in range(lo, hi + 1)}
         futures = {}
         for ttl in range(lo, hi + 1):
-            if not self.running:        # abort promptly on stop()
+            # _alive(gen), not running: a superseded worker sees running ==
+            # True again the moment a new start() flips it, and would keep
+            # submitting probes for a run that is over. _apply_probe's
+            # generation check discards the results, so this only ever cost a
+            # few wasted probes -- but every other loop in the worker uses
+            # _alive, and one that does not is the kind of inconsistency
+            # somebody later reads as significant.
+            if not (self._alive(gen) if gen is not None else self.running):
                 break
             futures[ttl] = self._ping_pool.submit(self._do_probe, ttl)
             if self.send_delay_ms and ttl < hi:
@@ -735,7 +747,7 @@ class Monitor:
             self._apply_probe(1, r, gen)
             return 1
 
-        results = self._gather_range(1, route_len)
+        results = self._gather_range(1, route_len, gen)
         min_reached: Optional[int] = None
         for ttl in range(1, route_len + 1):
             if not self._alive(gen):    # stop()/superseded during the round:
@@ -777,10 +789,10 @@ class Monitor:
         upper = min(self.max_hops, route_len + GROW_PROBE_SPAN)
         if upper <= route_len:
             return None
-        results = self._gather_range(route_len + 1, upper)
+        results = self._gather_range(route_len + 1, upper, gen)
         reached = [ttl for ttl, r in results.items() if r.reached]
         if not reached and upper < self.max_hops:
-            results.update(self._gather_range(upper + 1, self.max_hops))
+            results.update(self._gather_range(upper + 1, self.max_hops, gen))
             reached = [ttl for ttl, r in results.items() if r.reached]
         if not reached:
             return None
@@ -803,6 +815,14 @@ class Monitor:
             return
         with self._lock:
             if route_len > len(self._hops):
+                # Returning before _retire_alerts is deliberate. route_len and
+                # _hops are only ever mutated by this same worker thread, so
+                # this is a defensive guard against a state that should not
+                # occur -- and in it there is no destination TTL to keep, so
+                # retiring would have to guess which alerts are stale. Doing
+                # nothing costs at most one extra round of a stale banner and
+                # the next round resolves it, which is strictly better than
+                # guessing wrong. (Raised as F14 by an external audit; kept.)
                 return
             dest = self._hops[route_len - 1]
             sent_window = min(self.alert_window, dest.sent)

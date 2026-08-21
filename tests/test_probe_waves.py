@@ -122,3 +122,81 @@ def test_short_route_does_not_spin_up_the_whole_pool():
         assert threading.active_count() - before <= 3
     finally:
         m.shutdown()
+
+
+# --- generation, not `running` ---------------------------------------------
+
+def test_a_superseded_worker_stops_submitting_probes():
+    """_gather_range aborted on self.running where the rest of the worker uses
+    _alive(gen). A superseded worker sees running == True again the instant a
+    new start() flips it, so it kept submitting probes for a run that was over.
+    _apply_probe's generation check discards the results, so the only cost was
+    wasted probes -- but a loop that guards differently from every other loop
+    in the worker is the kind of inconsistency a later reader takes as
+    meaningful."""
+    m = Monitor()
+    m.target_ip = "203.0.113.9"
+    m.max_hops = 30
+    m._ensure_pools()
+    m.running = True
+    m._generation = 7
+
+    submitted = []
+
+    def _probe(ttl, ip_ttl=None):
+        submitted.append(ttl)
+        if len(submitted) == 3:
+            m._generation = 8       # a new start() happened mid-round
+        return icmp.PingResult(icmp.IP_REQ_TIMED_OUT, None, None, False)
+
+    m._do_probe = _probe
+    try:
+        m._gather_range(1, 20, gen=7)
+        assert len(submitted) < 20, "kept probing for a superseded run"
+        assert len(submitted) >= 3
+    finally:
+        m.running = False
+        m.shutdown()
+
+
+def test_without_a_generation_it_still_honours_running():
+    """The parameter is optional so a test can call this with no run in
+    progress; that path must keep the old behaviour."""
+    m = Monitor()
+    m.target_ip = "203.0.113.9"
+    m.max_hops = 30
+    m._ensure_pools()
+    m.running = True
+    submitted = []
+
+    def _probe(ttl, ip_ttl=None):
+        submitted.append(ttl)
+        if len(submitted) == 4:
+            m.running = False
+        return icmp.PingResult(icmp.IP_REQ_TIMED_OUT, None, None, False)
+
+    m._do_probe = _probe
+    try:
+        m._gather_range(1, 20)
+        assert len(submitted) < 20
+    finally:
+        m.running = False
+        m.shutdown()
+
+
+def test_the_whole_range_is_probed_when_the_run_stays_current():
+    """The guard must not have made the ordinary path stop early."""
+    m = Monitor()
+    m.target_ip = "203.0.113.9"
+    m.max_hops = 30
+    m._ensure_pools()
+    m.running = True
+    m._generation = 3
+    m._do_probe = lambda ttl, ip_ttl=None: icmp.PingResult(
+        icmp.IP_REQ_TIMED_OUT, None, None, False)
+    try:
+        res = m._gather_range(1, 20, gen=3)
+        assert set(res) == set(range(1, 21))
+    finally:
+        m.running = False
+        m.shutdown()
