@@ -439,7 +439,13 @@ class Monitor:
         try:
             fh.write(f"{now:.3f},{iso},{self._round},{ttl},{r.address or ''},{rtt},{r.status}\n")
             fh.flush()
-        except OSError:
+        except (OSError, ValueError):
+            # ValueError is "I/O operation on closed file". stop() joins the
+            # worker with a bounded timeout and then closes the log regardless,
+            # so a probe that outlived the join can still be holding this
+            # handle. Losing one line to a shutdown race is fine; letting it
+            # escape is not — it aborts the round and surfaces as
+            # "Monitor error" for what is a benign teardown.
             return
         self._rotate_log_if_needed()
 
@@ -453,8 +459,8 @@ class Monitor:
         try:
             if fh.tell() < MAX_LOG_BYTES:
                 return
-        except OSError:
-            return
+        except (OSError, ValueError):
+            return   # same shutdown race as _log_probe: tell() on a closed file
         self._close_log()
         try:
             root, ext = os.path.splitext(self.log_path)
