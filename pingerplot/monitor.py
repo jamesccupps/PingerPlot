@@ -742,6 +742,15 @@ class Monitor:
             ttl = dest.ttl
             name = dest.hostname or dest.address or "?"
 
+        # Alerts are keyed by TTL, and only the destination's TTL is ever
+        # evaluated. A reroute that changes the path length moves the
+        # destination to a different TTL, orphaning the previous key: nothing
+        # would revisit it, so the banner kept reporting loss on a hop that no
+        # longer exists. Retire those explicitly, before the history check
+        # below — the new destination not having enough history yet is a reason
+        # to say nothing about it, not a reason to keep showing the old one.
+        self._retire_alerts(keep_ttl=ttl, reason="route changed")
+
         if sent_window < self.alert_window:
             return  # not enough history yet to call anything "sustained"
 
@@ -779,13 +788,27 @@ class Monitor:
             self._log_event("alert", f"ALERT: {text}")
 
     def _clear_all_alerts(self) -> None:
+        self._retire_alerts(keep_ttl=None)
+
+    def _retire_alerts(self, keep_ttl: Optional[int], reason: str = "") -> None:
+        """Clear active alerts that will never be evaluated again.
+
+        ``keep_ttl=None`` clears everything (alerts switched off, destination
+        no longer reachable). Otherwise only ``keep_ttl`` survives — every
+        other key belongs to a hop that is no longer the destination.
+
+        The lock is released between the pop and the log, because _log_event
+        beeps and fires the webhook and neither should happen holding it.
+        """
         with self._lock:
-            keys = list(self._active_alerts.keys())
-        for key in keys:
+            stale = [k for k in self._active_alerts
+                     if keep_ttl is None or k[0] != keep_ttl]
+        suffix = f" ({reason})" if reason else ""
+        for key in stale:
             with self._lock:
                 cleared = self._active_alerts.pop(key, None)
             if cleared:
-                self._log_event("clear", f"Cleared: {cleared}")
+                self._log_event("clear", f"Cleared{suffix}: {cleared}")
 
     # --- reverse DNS (best effort, off the probe path) --------------------
     def _maybe_resolve(self, ttl: int, address: str) -> None:
