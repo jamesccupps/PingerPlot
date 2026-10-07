@@ -12,8 +12,9 @@ and MOS alerts, DSCP marking, baseline comparison, session save/load, a world ma
 and ICMP/TCP/UDP probe modes. Pure Python, **zero third-party dependencies**,
 dark-themed, HiDPI-aware. Free and Open Source.
 
-Windows is the tested platform. A Linux/macOS ICMP backend landed in 1.3.0 and is
-unit-tested but not yet field-tested — see [Platform](#platform).
+Windows is the tested platform. The Linux ICMP backend runs live against a real
+kernel in CI on every push; macOS shares it but is untested on real hardware —
+see [Platform](#platform).
 
 ![PingerPlot — dark theme, multi-target sidebar, hop table and latency graph](docs/screenshot.png)
 
@@ -211,7 +212,7 @@ plain one, and two runs that don't say which aren't comparable.
 **Windows 10/11 — tested.** The ICMP backend (`icmp.py`) uses the Win32 IP
 Helper API, so it needs no admin rights and no capture driver.
 
-**Linux and macOS — implemented in 1.3.0, not yet field-tested.**
+**Linux — live-tested in CI. macOS — implemented, untested on a Mac.**
 `icmp_posix.py` uses unprivileged `SOCK_DGRAM`/`IPPROTO_ICMP` sockets, the same
 technique `mtr` uses. `icmp.ping()` dispatches, so the engine, GUI and headless
 runner follow without knowing which backend answered.
@@ -240,10 +241,15 @@ backend unavailable, it will name this:
 sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"
 ```
 
-Honest status: the packet building, error-queue decoding, IP-header detection
-and status mapping are unit-tested on every platform in CI, and the live socket
-path runs wherever CI permits it — but it has **not** been run against a real
-multi-hop path on real hardware. Smoke-test it before trusting a trace:
+Honest status: the packet building, error-queue decoding, reply matching and
+status mapping are unit-tested on every platform. On the Linux CI runners the
+live socket path runs on every push — echo replies from loopback, a TTL-1 probe
+answered by the runner's real first hop, and the kernel-timestamp timing under a
+busy Python thread — and CI fails if those tests would skip. An external review
+for 1.3.3 reported a correct trace, and correct reroute detection, across a
+four-router network-namespace lab. It has **not** yet been run across a long
+real-world path on physical hardware, and nothing has run on macOS. Smoke-test
+it before trusting a trace:
 
 ```bash
 python -m pingerplot.selftest 8.8.8.8
@@ -502,7 +508,9 @@ never clobber a real target list.
 
 CI runs `pytest -rs` so every skipped test and its reason appears in the log: a
 group that silently skips on half the matrix isn't covering what it appears to.
-Two rules the suite enforces on itself, both learned the hard way:
+On the Linux legs that goes further: a live POSIX test that would skip there is
+a failure, so a green tick means the backend really ran against the kernel.
+Two more rules the suite enforces on itself, both learned the hard way:
 
 - **No test may depend on what the network happens to do.** One assumed
   `192.0.2.1` black-holes traffic; it does, until you run in a container whose
@@ -520,7 +528,7 @@ The raw-socket layer needs real hardware; exercise it by running the app or
 CI does this on every tag, but the recipe is in the repo and reproducible:
 
 ```powershell
-python -m pip install pyinstaller
+python -m pip install --require-hashes --only-binary=:all: -r packaging/requirements-build.txt
 python packaging/make_icon.py build/pingerplot.ico
 python -m PyInstaller --noconfirm --clean packaging/pingerplot.spec
 ```
@@ -554,15 +562,18 @@ packaging/
   pingerplot.spec  PyInstaller recipe for both Windows binaries
   make_icon.py     builds a multi-size .ico from the procedural app icon
   headless_entry.py  console entry point for the frozen headless runner
+  requirements-build.txt  release build tooling, pinned by version and hash
 tests/             pytest for the pure layers + a mock router for the socket layer
 ```
 
 ## Possible extensions
 
 - Field-testing the POSIX backend on real Linux/macOS hardware, and adding a
-  live multi-hop trace to CI if a runner can be made to allow it.
+  network-namespace multi-hop lab to CI (the 1.3.3 review built one; GitHub's
+  Linux runners reportedly allow it under sudo).
 - IPv6 (`Icmp6SendEcho2` — different structs, needs a source address).
-- Sub-millisecond RTT (would require raw sockets + self-timing).
+- Sub-millisecond RTT on Windows ICMP, which `IcmpSendEcho` reports in whole
+  milliseconds. (Linux already has it, from the kernel's receive timestamp.)
 - Email alert actions (webhook POSTs are already built in).
 
 ## Contributing
