@@ -669,6 +669,19 @@ class Monitor:
             # the setting on a multi-homed box, where the route table would
             # otherwise decide for you and you could not ask "what does this
             # path look like from the other VLAN".
+            if self.source_ip:
+                # Checked here, in every mode, because each mode otherwise
+                # failed with the wrong explanation: ICMP traced nothing and
+                # blamed the target, TCP/UDP's capture bind failed and blamed
+                # a lack of Administrator.
+                problem = tcpudp.source_problem(self.source_ip)
+                if problem:
+                    self._set_status(
+                        f"Source IP {self.source_ip} is not an address on this machine "
+                        f"({problem}). Fix it in Engine options or leave it blank.", gen)
+                    if gen == self._generation:
+                        self.running = False
+                    return
             self._local_ip = self.source_ip or tcpudp.local_ip_for(self.target_ip)
             needs_capture = self.packet_type != "icmp" and not (
                 self.final_hop_only and self.packet_type == "tcp"
@@ -801,6 +814,7 @@ class Monitor:
         return tcpudp.probe(
             self.target_ip, actual_ttl, self.timeout_ms,
             self.packet_type, self.port, self._local_ip, self._payload, self._tos,
+            strict_source=bool(self.source_ip),
         )
 
     def _gather_range(self, lo: int, hi: int,
@@ -815,7 +829,8 @@ class Monitor:
         if self.packet_type != "icmp":
             return tcpudp.probe_path(self.target_ip, range(lo, hi + 1), self.timeout_ms,
                                      self.packet_type, self.port, self._local_ip,
-                                     self._payload, self._tos)
+                                     self._payload, self._tos,
+                                     strict_source=bool(self.source_ip))
         results: Dict[int, icmp.PingResult] = {}
         if self._ping_pool is None:     # pools torn down (e.g. mid-shutdown)
             return {ttl: icmp.PingResult(icmp.IP_REQ_TIMED_OUT, None, None, False)

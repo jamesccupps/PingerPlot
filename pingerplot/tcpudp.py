@@ -34,11 +34,16 @@ import time
 from typing import Optional
 
 from .icmp import (
+    ERROR_INVALID_NETNAME,
     IP_REQ_TIMED_OUT,
     IP_SUCCESS,
     IP_TTL_EXPIRED_TRANSIT,
     PingResult,
 )
+
+# What a probe reports when an explicitly chosen source address cannot be
+# bound -- the same status the Windows ICMP backend returns for it.
+_NO_SOURCE = PingResult(ERROR_INVALID_NETNAME, None, None, False)
 
 ICMP_TYPE_DEST_UNREACH = 3
 ICMP_TYPE_TTL_EXCEEDED = 11
@@ -103,6 +108,35 @@ def local_ip_for(dest_ip: str) -> str:
         return "0.0.0.0"
 
 
+def source_problem(source_ip: str) -> Optional[str]:
+    """Why ``source_ip`` cannot be used as a probe source, or None if it can.
+
+    Binding a throwaway UDP socket asks the stack the real question -- "is
+    this an address I hold?" -- without sending anything, and fails the same
+    way for a malformed string.
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.bind((source_ip, 0))
+    except (OSError, OverflowError, TypeError) as exc:
+        return str(exc)
+    finally:
+        s.close()
+    return None
+
+
+def _bind_source(sock: socket.socket, local_ip: str, strict: bool) -> bool:
+    """Bind ``sock`` to ``local_ip``. False only when that fails for an address
+    the user chose (``strict``): falling back to the default route would then
+    measure a different path than the one asked about. An auto-detected
+    address that has gone away is allowed to fall back, as it always has."""
+    try:
+        sock.bind((local_ip, 0))
+    except OSError:
+        return not strict
+    return True
+
+
 def _open_capture(local_ip: str) -> socket.socket:
     """Raw socket in receive-all mode so we see ICMP errors the stack would
     otherwise swallow. Raises OSError without Administrator rights, and
@@ -154,11 +188,16 @@ def probe(
     local_ip: str,
     payload: bytes = b"",
     tos: int = 0,
+    strict_source: bool = False,
 ) -> PingResult:
     """One TCP or UDP probe at the given IP TTL. ``mode`` is "tcp" or "udp".
 
     Without a capture socket (not elevated) TCP still detects reaching the
     destination, so TCP final-hop-only works; intermediate hops and UDP need it.
+
+    ``strict_source`` means ``local_ip`` was chosen by the user: if it cannot
+    be bound the probe reports ERROR_INVALID_NETNAME instead of quietly going
+    out of whichever interface the route table picks.
     """
     timeout = max(0.05, timeout_ms / 1000.0)
     try:
@@ -173,10 +212,8 @@ def probe(
         probe_sock.setsockopt(socket.IPPROTO_IP, socket.IP_TTL, int(ip_ttl))
         _set_tos(probe_sock, tos)
         probe_sock.setblocking(False)
-        try:
-            probe_sock.bind((local_ip, 0))
-        except OSError:
-            pass
+        if not _bind_source(probe_sock, local_ip, strict_source):
+            return _NO_SOURCE
 
         start = time.perf_counter()
         if mode == "tcp":
@@ -249,16 +286,19 @@ def probe_path(
     local_ip: str,
     payload: bytes = b"",
     tos: int = 0,
+    strict_source: bool = False,
 ) -> dict:
     """Probe all ``ttls`` in one round in parallel, sharing a single capture
     socket — so a round costs ~one timeout instead of the sum (much faster on
     paths with silent hops). Returns ``{ttl: PingResult}``. Falls back to serial
-    single probes if the capture socket can't be opened (e.g. not elevated)."""
+    single probes if the capture socket can't be opened (e.g. not elevated).
+    ``strict_source`` as for :func:`probe`."""
     ttls = list(ttls)
     try:
         cap = _open_capture(local_ip)
     except OSError:
-        return {ttl: probe(dest_ip, ttl, timeout_ms, mode, port, local_ip, payload, tos)
+        return {ttl: probe(dest_ip, ttl, timeout_ms, mode, port, local_ip, payload, tos,
+                           strict_source)
                 for ttl in ttls}
 
     timeout = max(0.05, timeout_ms / 1000.0)
@@ -272,10 +312,10 @@ def probe_path(
                 s.setsockopt(socket.IPPROTO_IP, socket.IP_TTL, int(ttl))
                 _set_tos(s, tos)
                 s.setblocking(False)
-                try:
-                    s.bind((local_ip, 0))
-                except OSError:
-                    pass
+                if not _bind_source(s, local_ip, strict_source):
+                    s.close()
+                    results[ttl] = _NO_SOURCE
+                    continue
                 key = s.getsockname()[1]
                 start = time.perf_counter()
                 try:
@@ -291,6 +331,13 @@ def probe_path(
                 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 s.setsockopt(socket.IPPROTO_IP, socket.IP_TTL, int(ttl))
                 _set_tos(s, tos)
+                # Bound like the TCP sockets: an unbound datagram leaves from
+                # whatever interface the route table picks, which is not the
+                # path a pinned source asked about.
+                if not _bind_source(s, local_ip, strict_source):
+                    s.close()
+                    results[ttl] = _NO_SOURCE
+                    continue
                 start = time.perf_counter()
                 try:
                     s.sendto(payload or b"\x00", (dest_ip, key))
@@ -301,7 +348,7 @@ def probe_path(
                 senders[ttl] = [None, start]
             key_ttl[key] = ttl
 
-        pending = set(ttls)
+        pending = set(ttls) - set(results)   # minus any refused at bind
         deadline = time.perf_counter() + timeout
         while pending and time.perf_counter() < deadline:
             wlist = [senders[t][0] for t in pending if senders[t][0] is not None]

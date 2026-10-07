@@ -39,6 +39,9 @@ class _PortSpy:
             def setsockopt(self, *_a):
                 pass
 
+            def bind(self, _addr):      # UDP probes bind to the source address
+                pass
+
             def sendto(self, _data, addr):
                 spy.ports.append(addr[1])
                 return 1
