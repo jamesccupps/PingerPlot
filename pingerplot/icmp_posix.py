@@ -35,6 +35,7 @@ from __future__ import annotations
 import errno
 import itertools
 import os
+import platform
 import select
 import socket
 import struct
@@ -68,6 +69,22 @@ MSG_ERRQUEUE = getattr(socket, "MSG_ERRQUEUE", 0x2000)
 
 _LINUX = sys.platform.startswith("linux")
 _SUPPORTED_PLATFORM = _LINUX or sys.platform == "darwin"
+
+# SO_TIMESTAMPNS: the kernel stamps each received packet, so an RTT does not
+# include the time this thread spent waiting for the GIL before it could read
+# the reply -- which, with anything else busy in the process (a Timeline
+# redraw holds it for tens of ms), was being reported as network latency.
+# Python's socket module does not export it. 35 is the asm-generic value;
+# alpha, mips, parisc and sparc number it differently and are left on the
+# user-space clock rather than guessed at. macOS has only the microsecond
+# SO_TIMESTAMP and is likewise left as it was.
+_SO_TIMESTAMPNS = getattr(socket, "SO_TIMESTAMPNS", None)
+if _SO_TIMESTAMPNS is None and _LINUX and platform.machine().lower() in {
+        "x86_64", "amd64", "i386", "i686", "aarch64", "arm64", "armv6l", "armv7l",
+        "armv8l", "riscv64", "ppc64le", "ppc64", "s390x", "loongarch64"}:
+    _SO_TIMESTAMPNS = 35
+_TIMESPEC = struct.Struct("@ll")      # struct timespec: native long tv_sec, tv_nsec
+_MAX_KERNEL_RTT_NS = 60 * 1_000_000_000
 
 # ICMP dest-unreachable codes -> the IP_STATUS the rest of the app speaks, so
 # one vocabulary covers both backends.
@@ -183,6 +200,26 @@ def reply_is_ours(data: bytes, dest_ip: str, ident: int, seq: int,
     return False
 
 
+def kernel_rtt_ms(ancdata, sent_ns: int) -> Optional[float]:
+    """RTT from a received packet's SO_TIMESTAMPNS control message, or None.
+
+    ``sent_ns`` is ``time.time_ns()`` taken just before sendto; the kernel's
+    stamp is the same clock (CLOCK_REALTIME). That clock can be stepped by NTP
+    mid-probe, so a negative or absurd difference is discarded and the caller
+    falls back to its own measurement.
+    """
+    if _SO_TIMESTAMPNS is None:
+        return None
+    for level, ctype, cdata in ancdata:
+        if level != socket.SOL_SOCKET or ctype != _SO_TIMESTAMPNS or len(cdata) < _TIMESPEC.size:
+            continue
+        sec, nsec = _TIMESPEC.unpack_from(cdata)
+        delta = sec * 1_000_000_000 + nsec - sent_ns
+        if 0 <= delta < _MAX_KERNEL_RTT_NS:
+            return delta / 1_000_000.0
+    return None
+
+
 def parse_errqueue(cmsg_data: bytes) -> Optional[Tuple[int, int, Optional[str]]]:
     """Decode a Linux ``IP_RECVERR`` control message.
 
@@ -281,6 +318,13 @@ def ping(
                 sock.setsockopt(socket.IPPROTO_IP, IP_RECVERR, 1)
             except OSError:
                 pass          # without it intermediate hops read as timeouts
+        stamped = False
+        if _LINUX and _SO_TIMESTAMPNS is not None:
+            try:
+                sock.setsockopt(socket.SOL_SOCKET, _SO_TIMESTAMPNS, 1)
+                stamped = True
+            except OSError:
+                pass          # falls back to timing in user space
         if source_ip:
             try:
                 sock.bind((source_ip, 0))
@@ -296,9 +340,13 @@ def ping(
                 return PingResult(ERROR_INVALID_NETNAME, None, None, False)
         sock.setblocking(False)
 
+        packet = build_echo(ident, seq, payload)
         start = time.perf_counter()
+        # Last thing before the send: from here to the syscall this thread
+        # holds the GIL throughout, so the stamp is not delayed by anyone.
+        sent_ns = time.time_ns() if stamped else None
         try:
-            sock.sendto(build_echo(ident, seq, payload), (dest_ip, 0))
+            sock.sendto(packet, (dest_ip, 0))
         except OSError as exc:
             return PingResult(_send_failure_status(exc), None, None, False)
 
@@ -310,7 +358,7 @@ def ping(
 
             # Error queue first: on Linux the router's TTL-exceeded is here, and
             # it is the only place the router's address exists.
-            hop = _read_errqueue(sock, start)
+            hop = _read_errqueue(sock, start, sent_ns)
             if hop is not None:
                 return hop
 
@@ -319,7 +367,7 @@ def ping(
             except OSError:
                 return PingResult(IP_REQ_TIMED_OUT, None, None, False)
 
-            reply = _read_reply(sock, dest_ip, start, ident, seq)
+            reply = _read_reply(sock, dest_ip, start, ident, seq, sent_ns)
             if reply is not None:
                 return reply
     finally:
@@ -336,7 +384,17 @@ def _send_failure_status(exc: OSError) -> int:
     return IP_REQ_TIMED_OUT
 
 
-def _read_errqueue(sock: socket.socket, start: float) -> Optional[PingResult]:
+def _rtt_ms(ancdata, sent_ns: Optional[int], start: float) -> float:
+    """The kernel's figure when there is one, else the user-space clock."""
+    if sent_ns is not None:
+        rtt = kernel_rtt_ms(ancdata, sent_ns)
+        if rtt is not None:
+            return rtt
+    return (time.perf_counter() - start) * 1000.0
+
+
+def _read_errqueue(sock: socket.socket, start: float,
+                   sent_ns: Optional[int] = None) -> Optional[PingResult]:
     if not _LINUX:
         return None
     try:
@@ -352,7 +410,7 @@ def _read_errqueue(sock: socket.socket, start: float) -> Optional[PingResult]:
         if parsed is None:
             continue
         icmp_type, icmp_code, offender = parsed
-        rtt = (time.perf_counter() - start) * 1000.0
+        rtt = _rtt_ms(ancdata, sent_ns, start)
         if icmp_type == ICMP_TIME_EXCEEDED:
             return PingResult(IP_TTL_EXPIRED_TRANSIT, rtt, offender, False)
         # An unreachable is a hop that answered, but not the destination. No
@@ -362,9 +420,13 @@ def _read_errqueue(sock: socket.socket, start: float) -> Optional[PingResult]:
 
 
 def _read_reply(sock: socket.socket, dest_ip: str, start: float,
-                ident: int, seq: int) -> Optional[PingResult]:
+                ident: int, seq: int, sent_ns: Optional[int] = None) -> Optional[PingResult]:
+    ancdata = []
     try:
-        data, addr = sock.recvfrom(2048)
+        if sent_ns is not None:       # timestamps on: they arrive as ancillary data
+            data, ancdata, _flags, addr = sock.recvmsg(2048, 1024)
+        else:
+            data, addr = sock.recvfrom(2048)
     except (BlockingIOError, InterruptedError):
         return None
     except OSError:
@@ -376,7 +438,7 @@ def _read_reply(sock: socket.socket, dest_ip: str, start: float,
         return None             # another probe's reply; keep waiting for ours
     icmp_type, icmp_code, _rest = parsed
     responder = addr[0] if addr else None
-    rtt = (time.perf_counter() - start) * 1000.0
+    rtt = _rtt_ms(ancdata, sent_ns, start)
     if icmp_type == ICMP_ECHO_REPLY:
         return PingResult(IP_SUCCESS, rtt, responder or dest_ip, True)
     if icmp_type == ICMP_TIME_EXCEEDED:
