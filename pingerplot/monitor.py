@@ -510,7 +510,11 @@ class Monitor:
             except Exception:
                 pass
 
-    def _set_status(self, text: str) -> None:
+    def _set_status(self, text: str, gen: Optional[int] = None) -> None:
+        """``gen`` is the caller's run generation: a worker that outlived
+        stop()'s join must not overwrite the status of the run replacing it."""
+        if gen is not None and gen != self._generation:
+            return
         self.status = text
         self._notify()
 
@@ -556,14 +560,21 @@ class Monitor:
 
     def _run(self, gen: int) -> None:
         try:
-            self._set_status(f"Resolving {self.target_input}...")
+            self._set_status(f"Resolving {self.target_input}...", gen)
             try:
-                self.target_ip = socket.gethostbyname(self.target_input)
+                ip = socket.gethostbyname(self.target_input)
             except OSError as exc:
-                self._set_status(f"Cannot resolve '{self.target_input}': {exc.strerror or exc}")
+                self._set_status(f"Cannot resolve '{self.target_input}': {exc.strerror or exc}", gen)
                 if gen == self._generation:
                     self.running = False
                 return
+            # Resolution is the one step stop()'s join cannot bound: with DNS
+            # down it can outlast the join, and a new start() may have begun
+            # in the meantime. Its answer is not this run's to record.
+            with self._lock:
+                if gen != self._generation:
+                    return
+                self.target_ip = ip
 
             if self.timeout_note:
                 # Timestamped in the Events tab rather than appended to the
@@ -583,7 +594,8 @@ class Monitor:
             if needs_capture and not tcpudp.capture_supported(self._local_ip):
                 self._set_status(
                     f"{self.packet_type.upper()} traceroute needs Administrator (raw capture). "
-                    "Re-run elevated, switch to ICMP, or use TCP with 'Final hop only'."
+                    "Re-run elevated, switch to ICMP, or use TCP with 'Final hop only'.",
+                    gen,
                 )
                 if gen == self._generation:
                     self.running = False
@@ -595,12 +607,12 @@ class Monitor:
                     self.route_len = 1
                 route_len = 1
             else:
-                self._set_status(f"Tracing route to {self.target_input} [{self.target_ip}]...")
+                self._set_status(f"Tracing route to {self.target_input} [{self.target_ip}]...", gen)
                 route_len = self._trace(gen)
                 if not self._alive(gen):
                     return
                 if route_len == 0:
-                    self._set_status(f"No reply from {self.target_input} - target may block ICMP or be down.")
+                    self._set_status(f"No reply from {self.target_input} - target may block ICMP or be down.", gen)
                     if gen == self._generation:
                         self.running = False
                     return
@@ -609,17 +621,19 @@ class Monitor:
                 t0 = time.perf_counter()
                 if self.paused:
                     self._set_status(f"Paused - {self.target_input} [{self.target_ip}] "
-                                     f"({len(self._hops)} hops, history kept)")
+                                     f"({len(self._hops)} hops, history kept)", gen)
                     self._notify()
                     self._interruptible_sleep(self.interval, gen)
                     continue
                 route_len = self._probe_round(route_len, gen)
+                if not self._alive(gen):
+                    break       # stopped or superseded mid-round: judge nothing
                 self._evaluate_alerts(route_len)
-                self._set_status(self._monitor_status(route_len))
+                self._set_status(self._monitor_status(route_len), gen)
                 self._notify()
                 self._interruptible_sleep(self.interval - (time.perf_counter() - t0), gen)
         except Exception as exc:  # never let the worker die silently
-            self._set_status(f"Monitor error: {exc!r}")
+            self._set_status(f"Monitor error: {exc!r}", gen)
         finally:
             if gen == self._generation:   # don't clobber a newer run's flag
                 self.running = False
@@ -680,13 +694,17 @@ class Monitor:
             self._apply_probe(ttl, r, gen)
             if r.address:
                 deepest = ttl
-            self._set_status(f"Tracing route... hop {ttl}: {r.address or '*'}")
+            self._set_status(f"Tracing route... hop {ttl}: {r.address or '*'}", gen)
             if r.reached:
                 reached_ttl = ttl
                 break
 
         route_len = reached_ttl or deepest
         with self._lock:
+            if gen != self._generation:
+                # Superseded: the hop list now belongs to the new run, and an
+                # aborted trace's route_len of 0 would delete all of it.
+                return 0
             del self._hops[route_len:]  # trim trailing all-timeout hops
             self.route_len = route_len
         return route_len
@@ -765,7 +783,7 @@ class Monitor:
         if min_reached is not None:
             self._unreached = 0
             if min_reached < route_len:
-                return self._shrink_route(route_len, min_reached)
+                return self._shrink_route(route_len, min_reached, gen)
             return route_len
 
         # Destination missed this round. If we have ever reached it, the route
@@ -780,8 +798,10 @@ class Monitor:
                     return grown
         return route_len
 
-    def _shrink_route(self, old_len: int, new_len: int) -> int:
+    def _shrink_route(self, old_len: int, new_len: int, gen: int) -> int:
         with self._lock:
+            if gen != self._generation:
+                return old_len
             del self._hops[new_len:]
             self.route_len = new_len
         self._log_event("route", f"Route shortened {old_len} -> {new_len} hops (destination now closer)")
@@ -806,6 +826,8 @@ class Monitor:
                 r = self._do_probe(ttl)
             self._apply_probe(ttl, r, gen)
         with self._lock:
+            if gen != self._generation:
+                return None
             del self._hops[new_len:]
             self.route_len = new_len
         self._log_event("route", f"Route lengthened {route_len} -> {new_len} hops (destination now farther)")
