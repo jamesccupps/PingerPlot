@@ -1152,8 +1152,13 @@ class App:
 
     # --- refresh loop ------------------------------------------------------
     def _refresh(self) -> None:
-        self._refresh_once()
-        self.root.after(REFRESH_MS, self._refresh)
+        # Re-arm first-and-always: an exception in one redraw is reported by
+        # Tk and must not also end the timer, which froze every target's
+        # display while the monitors carried on probing behind it.
+        try:
+            self._refresh_once()
+        finally:
+            self.root.after(REFRESH_MS, self._refresh)
 
     def _refresh_once(self) -> None:
         self._update_summary()
