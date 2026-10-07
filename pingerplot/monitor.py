@@ -554,7 +554,10 @@ class Monitor:
             return
         now = time.time()
         iso = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(now))
-        rtt = "" if r.rtt_ms is None else f"{r.rtt_ms:.0f}"
+        # Microsecond precision, trailing zeros dropped: the POSIX and TCP/UDP
+        # timings are sub-millisecond (".0f" logged a 0.17 ms LAN hop as 0),
+        # while Windows ICMP's whole milliseconds still log exactly as before.
+        rtt = "" if r.rtt_ms is None else f"{r.rtt_ms:.3f}".rstrip("0").rstrip(".")
         try:
             fh.write(f"{now:.3f},{iso},{self._round},{ttl},{r.address or ''},{rtt},{r.status}\n")
             fh.flush()
