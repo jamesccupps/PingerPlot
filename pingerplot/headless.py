@@ -21,7 +21,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Callable, List, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from . import __version__, compare as _compare, icmp
 from .model import csv_safe, mos, mos_label
@@ -111,7 +111,8 @@ class Target:
     thresholds and the probe mode from the config file.
     """
 
-    __slots__ = ("name", "monitor", "kwargs", "retry_at", "retry_delay", "restarts")
+    __slots__ = ("name", "monitor", "kwargs", "retry_at", "retry_delay", "restarts",
+                 "last_event")
 
     def __init__(self, name: str, monitor: Monitor, kwargs: dict) -> None:
         self.name = name
@@ -120,6 +121,7 @@ class Target:
         self.retry_at = 0.0            # 0 == not currently scheduled for a retry
         self.retry_delay = RESTART_DELAY_S
         self.restarts = 0
+        self.last_event = -1           # newest event id already printed
 
 
 def supervise(targets: List[Target], now: float,
@@ -161,6 +163,9 @@ def supervise(targets: List[Target], now: float,
             continue
         t.restarts += 1
         log(f"    {t.name}: restarting (attempt {t.restarts})")
+        # start() clears the event log and numbers from 0 again; a cursor left
+        # at the old run's last id would hide the new run's events.
+        t.last_event = -1
         try:
             mon.start(t.name, **t.kwargs)
         except (OSError, ValueError, TypeError) as exc:
@@ -243,6 +248,33 @@ def print_status(targets: List[Target], log: Callable[[str], None] = print) -> N
         log(f"    {t.name:<24} hops={n_hops:<3} loss={loss_s:<5} "
             f"avg={avg_s:<8} MOS={mos_s}{tail}")
     sys.stdout.flush()
+
+
+def _console(line: str) -> None:
+    """print(), minus the one way it can kill the service. Event text carries
+    reverse-DNS names, which are whatever a PTR record says, and a Windows
+    console is still cp1252/cp437: an unencodable character would raise out of
+    the run loop and stop every monitor."""
+    enc = getattr(sys.stdout, "encoding", None) or "ascii"
+    print(line.encode(enc, "replace").decode(enc, "replace"))
+
+
+def print_events(targets: List[Target], log: Optional[Callable[[str], None]] = None) -> None:
+    """Print each target's events not printed yet: alerts and clears, route
+    changes, and the warnings (probe log could not be opened or rolled over,
+    webhook not delivered) that the GUI shows in its Events tab. Without this
+    a headless box -- the one nobody is watching -- reported none of them."""
+    out = log or _console
+    printed = False
+    for t in targets:
+        new, last = t.monitor.events_after(t.last_event)
+        t.last_event = last
+        for e in new:
+            ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(e.t))
+            out(f"[{ts}] {t.name}: {e.kind.upper():<5} {e.text}")
+            printed = True
+    if printed:
+        sys.stdout.flush()
 
 
 def report_rows(monitor: Monitor) -> List[dict]:
@@ -359,6 +391,7 @@ def run_report(targets: List[Target], rounds: int, log: Callable[[str], None] = 
 
     end = time.monotonic() + deadline
     while not should_stop() and time.monotonic() < end:
+        print_events(targets, None if log is print else log)
         if all(t.monitor._round >= rounds or not t.monitor.running for t in targets):
             break
         _STOP.wait(poll)
@@ -535,6 +568,7 @@ def main(argv=None) -> int:
             # Bring back anything that stopped -- a target whose name did not
             # resolve at boot would otherwise stay dead for the whole run.
             supervise(targets, now)
+            print_events(targets)
             if status_interval > 0 and now - last_status >= status_interval:
                 print_status(targets)
                 last_status = now
