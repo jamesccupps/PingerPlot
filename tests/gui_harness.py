@@ -20,7 +20,14 @@ import json
 
 import pytest
 
-tk = pytest.importorskip("tkinter", reason="gui.py needs tkinter")
+try:
+    import tkinter as tk
+except ImportError:
+    # Not importorskip: this module is imported by conftest.py, and a skip
+    # raised while loading conftest is a collection error -- it took the whole
+    # suite down on a Python built without Tk. Only the GUI tests need Tk, so
+    # only they skip (in tk_root, below).
+    tk = None
 
 
 @pytest.fixture
@@ -39,6 +46,8 @@ def isolated_settings(tmp_path, monkeypatch):
 
 @pytest.fixture
 def tk_root():
+    if tk is None:
+        pytest.skip("gui.py needs tkinter")
     try:
         root = tk.Tk()
     except tk.TclError as exc:                      # no display
@@ -54,15 +63,20 @@ def tk_root():
 
 
 @pytest.fixture
-def app(tk_root, isolated_settings):
+def app(tk_root, isolated_settings, monkeypatch):
     """A real gui.App, with the periodic refresh and geo worker suppressed.
 
     Both are cancelled rather than left running: _refresh reschedules itself
     every 700 ms and would keep firing against a destroyed root at teardown,
     and the geo worker would make real HTTPS requests from a test run.
+
+    The ICMP backend is reported available while the App is built. Where it
+    is not (Linux without ping_group_range), __init__ opens a modal error
+    dialog, and under xvfb nobody dismisses it: every GUI test hung forever.
     """
     from pingerplot import gui
 
+    monkeypatch.setattr(gui.icmp, "is_available", lambda: True)
     a = gui.App(tk_root)
     for after_id in tk_root.tk.call("after", "info"):
         tk_root.after_cancel(after_id)

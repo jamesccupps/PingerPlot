@@ -19,8 +19,15 @@ import time
 
 import pytest
 
-from pingerplot import headless
+from pingerplot import headless, icmp
 from pingerplot.monitor import Monitor
+
+# The first three tests watch a real run reach "Monitoring", which needs the
+# ICMP backend to get a reply from loopback. Without one (Linux, closed
+# ping_group_range) they failed rather than skipped, which reads as a bug in
+# the logging code.
+needs_icmp = pytest.mark.skipif(not icmp.is_available(),
+                                reason=f"needs a working ICMP backend: {icmp.unavailable_reason()}")
 
 
 def _wait(pred, timeout=8.0):
@@ -32,6 +39,7 @@ def _wait(pred, timeout=8.0):
     return False
 
 
+@needs_icmp
 def test_an_unopenable_log_is_announced_in_the_events_tab(tmp_path):
     m = Monitor()
     bad = tmp_path / "no-such-dir" / "probe.csv"
@@ -49,6 +57,7 @@ def test_an_unopenable_log_is_announced_in_the_events_tab(tmp_path):
         m.shutdown()
 
 
+@needs_icmp
 def test_the_note_does_not_hijack_the_status_line(tmp_path):
     """It must not go back to being a status: the status is the one thing the
     worker overwrites on every round."""
@@ -63,6 +72,7 @@ def test_the_note_does_not_hijack_the_status_line(tmp_path):
         m.shutdown()
 
 
+@needs_icmp
 def test_a_working_log_leaves_no_note(tmp_path):
     m = Monitor()
     good = tmp_path / "probe.csv"

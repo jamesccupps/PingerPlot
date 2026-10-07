@@ -50,6 +50,7 @@ def test_version_flag_does_not_need_a_display():
 def test_version_walks_the_import_graph_that_broke():
     """gui -> geoip -> urllib.request -> email. If that chain is ever severed,
     the CI gate stops meaning anything."""
+    pytest.importorskip("tkinter", reason="gui.py imports tkinter at module level")
     import pingerplot.gui  # noqa: F401
     assert "pingerplot.geoip" in sys.modules
     assert "urllib.request" in sys.modules
