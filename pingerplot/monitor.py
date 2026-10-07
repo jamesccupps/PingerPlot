@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import threading
 import time
@@ -57,6 +58,39 @@ TCP_REFUSAL_FLOOR_MS = 3000
 MAX_LOAD_HISTORY = 50_000  # cap a loaded session's per-hop ring buffer (DoS guard)
 MAX_LOG_BYTES = 25 * 1024 * 1024  # roll the probe CSV past ~25 MB (one backup kept)
 MAX_LOAD_HOPS = 1024       # cap hops loaded from a session file (defense-in-depth)
+
+
+def _log_suffix(target: str) -> str:
+    """``target`` reduced to characters that are safe in a file name on every
+    platform. Hostnames and IPv4 literals pass through unchanged."""
+    safe = re.sub(r"[^A-Za-z0-9.-]", "_", target.strip()).strip(".")
+    return "_" + (safe or "target")
+
+
+def per_target_log_path(path: str, target: str) -> str:
+    """``logs/probe.csv`` -> ``logs/probe_<target>.csv``.
+
+    The probe CSV has no target column, so two monitors sharing one file
+    interleave rows that cannot be told apart (the first hops are the same
+    gateways for every target), and one monitor's rollover renames the file
+    out from under the others. Idempotent, so a path that already carries the
+    suffix -- as Edit settings shows it -- is not suffixed twice.
+    """
+    if not path:
+        return path
+    root, ext = os.path.splitext(path)
+    suffix = _log_suffix(target)
+    if root.endswith(suffix):
+        return path
+    return f"{root}{suffix}{ext}"
+
+
+def log_path_template(path: str, target: str) -> str:
+    """Inverse of :func:`per_target_log_path`, for showing the configured path
+    back in the Engine dialog."""
+    root, ext = os.path.splitext(path)
+    suffix = _log_suffix(target)
+    return f"{root[:-len(suffix)]}{ext}" if root.endswith(suffix) else path
 
 
 def _build_payload(size: int) -> bytes:

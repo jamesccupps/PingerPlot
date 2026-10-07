@@ -601,7 +601,8 @@ class App:
                             "correlate the replies - so Port is the literal port probed only for TCP and for "
                             "final-hop-only. "
                             "TCP/UDP modes need Administrator (raw socket); ICMP does not. Send delay throttles the "
-                            "probe rate. Logging is crash-safe (flushed every probe). A webhook URL (http/https) gets "
+                            "probe rate. Logging is crash-safe (flushed every probe), and each target writes its "
+                            "own file: probe.csv becomes probe_<target>.csv. A webhook URL (http/https) gets "
                             "a JSON POST when the destination alert raises or clears. TCP mode raises the reply timeout "
                             f"to at least {monitor.TCP_REFUSAL_FLOOR_MS} ms, because Windows takes about that long to "
                             "report a closed port and a shorter wait cannot tell one from an unreachable host. "
@@ -667,7 +668,9 @@ class App:
             port=port,
             dscp=dscp,
             source_ip=self.sourceip_var.get(),
-            log_path=self.logpath_var.get(),
+            # One field, many targets: each gets its own file, or their rows
+            # interleave in a CSV that has no target column.
+            log_path=monitor.per_target_log_path(self.logpath_var.get().strip(), target),
             alert_enabled=self.alerts_var.get(),
             alert_loss_pct=a_loss,
             alert_latency_ms=a_lat,
@@ -810,7 +813,7 @@ class App:
         self.packettype_var.set(mon.packet_type.upper())
         self.dscp_var.set(str(mon.dscp))
         self.sourceip_var.set(mon.source_ip)
-        self.logpath_var.set(mon.log_path)
+        self.logpath_var.set(monitor.log_path_template(mon.log_path, name))
         self.webhook_var.set(mon.webhook_url)
         self.resolve_var.set(mon.resolve_names)
         self.finalhop_var.set(mon.final_hop_only)

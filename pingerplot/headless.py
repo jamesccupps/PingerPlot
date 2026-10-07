@@ -25,7 +25,7 @@ from typing import Callable, List, Tuple
 
 from . import __version__, compare as _compare, icmp
 from .model import csv_safe, mos, mos_label
-from .monitor import Monitor
+from .monitor import Monitor, per_target_log_path
 
 RESTART_DELAY_S = 30.0       # wait this long before restarting a stopped target
 RESTART_DELAY_MAX_S = 300.0  # ...doubling to this ceiling while it keeps failing
@@ -175,20 +175,46 @@ def _build_monitors(cfg: dict, base_dir: Path) -> List[Target]:
     next to the config file (so it works regardless of the working directory).
     A malformed target is skipped with a warning rather than killing the run."""
     defaults = cfg.get("defaults", {}) or {}
-    targets: List[Target] = []
+    parsed = []
     for tcfg in cfg.get("targets", []):
         try:
             target, kwargs = _target_options(defaults, tcfg)
-            if not target:
-                continue
-            lp = kwargs.get("log_path", "")
-            if lp:
+        except (ValueError, TypeError, AttributeError) as exc:
+            print(f"Skipping target {tcfg!r}: {exc}", file=sys.stderr)
+            continue
+        if not target:
+            continue
+        lp = kwargs.get("log_path", "")
+        if lp and not os.path.isabs(lp):
+            kwargs["log_path"] = str(base_dir / lp)
+        parsed.append((tcfg, target, kwargs))
+
+    # A log_path in `defaults` puts every target on one file. The probe CSV
+    # has no target column, so those rows could not be told apart, and the
+    # monitors would roll the file over underneath each other. Split only the
+    # paths that are actually shared: a per-target path is left as written.
+    def _key(path: str) -> str:
+        return os.path.normcase(os.path.abspath(path))
+
+    uses: dict = {}
+    for _tcfg, _target, kwargs in parsed:
+        if kwargs["log_path"]:
+            uses[_key(kwargs["log_path"])] = uses.get(_key(kwargs["log_path"]), 0) + 1
+    for _tcfg, target, kwargs in parsed:
+        lp = kwargs["log_path"]
+        if lp and uses[_key(lp)] > 1:
+            kwargs["log_path"] = per_target_log_path(lp, target)
+            print(f"    {target}: log_path is shared with other targets; "
+                  f"logging to {kwargs['log_path']}")
+
+    targets: List[Target] = []
+    for tcfg, target, kwargs in parsed:
+        try:
+            if kwargs["log_path"]:
                 # The makedirs covers absolute paths too. It used to sit inside
                 # the relative branch, so an absolute log_path under a
                 # directory that did not exist failed to open and logged
                 # nothing -- which, until now, said nothing either.
-                if not os.path.isabs(lp):
-                    kwargs["log_path"] = str(base_dir / lp)
                 os.makedirs(os.path.dirname(kwargs["log_path"]) or ".", exist_ok=True)
             m = Monitor()
             m.start(target, **kwargs)
