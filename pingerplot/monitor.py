@@ -57,6 +57,7 @@ FINAL_HOP_TTL = 255        # TTL used to ping the destination directly
 TCP_REFUSAL_FLOOR_MS = 3000
 MAX_LOAD_HISTORY = 50_000  # cap a loaded session's per-hop ring buffer (DoS guard)
 MAX_LOG_BYTES = 25 * 1024 * 1024  # roll the probe CSV past ~25 MB (one backup kept)
+LOG_ROTATE_RETRY_S = 60.0  # after a failed rollover, keep appending this long before retrying
 MAX_LOAD_HOPS = 1024       # cap hops loaded from a session file (defense-in-depth)
 
 
@@ -144,6 +145,8 @@ class Monitor:
         self.timeout_note = ""   # set when start() raises a too-short timeout
         self.log_note = ""       # set when the probe log could not be opened
         self._log_fh = None
+        self._rotate_retry_at = 0.0  # monotonic time before which not to retry a rollover
+        self._rotate_failing = False
         self._round = 0   # 0 = initial trace; 1,2,3… = monitoring rounds
         self.alert_enabled = True
         self.alert_loss_pct = 20.0
@@ -261,6 +264,8 @@ class Monitor:
         # MOS runs 1.0-5.0; anything above 5 would alert permanently.
         self.alert_mos = max(0.0, min(float(alert_mos), 5.0))
         self.webhook_url = (webhook_url or "").strip()
+        self._rotate_retry_at = 0.0
+        self._rotate_failing = False
         with self._lock:
             self._generation += 1
             gen = self._generation
@@ -525,16 +530,37 @@ class Monitor:
                 return
         except (OSError, ValueError):
             return   # same shutdown race as _log_probe: tell() on a closed file
+        now = time.monotonic()
+        if now < self._rotate_retry_at:
+            # A rollover just failed. Keep appending rather than close, fail
+            # and reopen on every probe until whatever holds the file lets go.
+            return
         self._close_log()
+        root, ext = os.path.splitext(self.log_path)
         try:
-            root, ext = os.path.splitext(self.log_path)
-            backup = f"{root}.1{ext}"
-            if os.path.exists(backup):
-                os.remove(backup)
-            os.replace(self.log_path, backup)
-        except OSError:
-            pass
-        self._open_log()   # reopen fresh (writes a new header)
+            # os.replace overwrites an existing backup atomically, so the old
+            # backup is only lost if the rollover actually happens.
+            os.replace(self.log_path, f"{root}.1{ext}")
+        except OSError as exc:
+            # On Windows this is the CSV (or its backup) being open in Excel.
+            self._rotate_retry_at = now + LOG_ROTATE_RETRY_S
+            if not self._rotate_failing:
+                self._rotate_failing = True
+                self._log_event(
+                    "warn",
+                    f"Probe log rollover failed ({exc}); still appending to "
+                    f"{self.log_path} past the {MAX_LOG_BYTES // (1024 * 1024)} MB "
+                    f"cap, retrying every {LOG_ROTATE_RETRY_S:.0f}s")
+        else:
+            self._rotate_retry_at = 0.0
+            if self._rotate_failing:
+                self._rotate_failing = False
+                self._log_event("info", f"Probe log rolled over to {root}.1{ext}")
+        self._open_log()   # reopen (writes a new header if the rollover happened)
+        if self._log_fh is None:
+            # _open_log's note is otherwise only read at start-up, so logging
+            # would stop here mid-run with nothing saying so.
+            self._log_event("warn", self.log_note)
 
     # --- worker ------------------------------------------------------------
     def _notify(self) -> None:
