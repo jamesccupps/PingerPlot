@@ -1,0 +1,39 @@
+# Build tooling for .github/workflows/release.yml, pinned by version AND hash.
+#
+# The release job used to run `pip install --upgrade pip pyinstaller pytest`:
+# whatever PyPI served that minute, executed in the job that produces the
+# binaries people download. Installed with --require-hashes --only-binary=:all:,
+# so a changed or substituted file fails the build instead of shipping in it.
+#
+# Resolved for the release runner (Windows x64, CPython 3.12) from PyPI's JSON
+# API; every transitive dependency must be listed or --require-hashes refuses.
+# Dependabot (pip ecosystem, /packaging) proposes updates. To regenerate by
+# hand: pip-compile --generate-hashes, or resolve the same closure and copy the
+# sha256 digests PyPI publishes for each wheel.
+#
+# The app itself has no runtime dependencies; this is build-time only.
+
+altgraph==0.17.5 \
+    --hash=sha256:f3a22400bce1b0c701683820ac4f3b159cd301acab067c51c653e06961600597
+colorama==0.4.6 \
+    --hash=sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6
+iniconfig==2.3.1 \
+    --hash=sha256:9121e2c1fdb355232495be3194c8dfe87ccc2d5dee45947b78e68f499790d7a7
+packaging==26.3 \
+    --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
+pefile==2024.8.26 \
+    --hash=sha256:76f8b485dcd3b1bb8166f1128d395fa3d87af26360c2358fb75b80019b957c6f
+pluggy==1.6.0 \
+    --hash=sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746
+pygments==2.21.0 \
+    --hash=sha256:2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9
+pyinstaller==6.22.3 \
+    --hash=sha256:500bd58c7bf7e584a8435adccbd763a0b918d5c12b08d74ff50fd79b2915458b
+pyinstaller-hooks-contrib==2026.8 \
+    --hash=sha256:6d21d65323ea4467753afc21f52d7d0e69416ae8101dd88269bf273ad48db084
+pytest==9.1.1 \
+    --hash=sha256:37a86b45efb9a47a61a36449063e8e18d0cab3161329fc099eb21783169c4f0c
+pywin32-ctypes==0.2.3 \
+    --hash=sha256:8a1513379d709975552d202d942d9837758905c8d01eb82b8bcc30918929e7b8
+setuptools==84.0.0 \
+    --hash=sha256:51a52592b3b99e102b609654876bd65f19f999935166d1352678931132b0c670

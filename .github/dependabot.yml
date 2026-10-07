@@ -3,8 +3,9 @@
 # is what keeps them current -- it understands the `# v5` comment convention
 # and updates both the SHA and the comment together.
 #
-# Only github-actions is watched. The app itself is deliberately
-# dependency-free, so there is no pip ecosystem to track.
+# The app itself is deliberately dependency-free. The pip entry covers only
+# the release job's build tooling, which is pinned by version and hash in
+# packaging/requirements-build.txt and would otherwise go stale silently too.
 version: 2
 updates:
   - package-ecosystem: "github-actions"
@@ -13,3 +14,9 @@ updates:
       interval: "monthly"
     commit-message:
       prefix: "CI"
+  - package-ecosystem: "pip"
+    directory: "/packaging"
+    schedule:
+      interval: "monthly"
+    commit-message:
+      prefix: "Build"
