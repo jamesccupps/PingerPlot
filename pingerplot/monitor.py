@@ -314,6 +314,13 @@ class Monitor:
         self._thread = threading.Thread(target=self._run, args=(gen,), name="monitor", daemon=True)
         self._thread.start()
 
+    def request_stop(self) -> None:
+        """Tell the worker to stop, without waiting for it. To stop several
+        monitors, call this on all of them before stop() on each: a worker
+        mid-round takes up to a reply timeout to wind down, and signalling
+        them together makes those waits overlap instead of adding up."""
+        self.running = False
+
     def stop(self) -> None:
         self.running = False
         t = self._thread

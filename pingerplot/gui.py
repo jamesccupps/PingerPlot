@@ -704,7 +704,13 @@ class App:
             mon.stop()
 
     def _stop_all(self) -> None:
-        for mon in self._monitors.values():
+        # Signal every monitor before waiting on any: each stop() can wait up
+        # to a reply timeout for a round in flight, and one at a time those
+        # waits added up into a frozen window.
+        mons = list(self._monitors.values())
+        for mon in mons:
+            mon.request_stop()
+        for mon in mons:
             mon.stop()
 
     def _remove_target(self) -> None:
@@ -835,7 +841,10 @@ class App:
     def _on_close(self) -> None:
         self._save_settings()
         self.geo.stop()
-        for mon in self._monitors.values():
+        mons = list(self._monitors.values())
+        for mon in mons:
+            mon.request_stop()      # all at once, as in _stop_all
+        for mon in mons:
             mon.shutdown()
         self._empty.shutdown()
         self.root.destroy()

@@ -277,6 +277,16 @@ def print_events(targets: List[Target], log: Optional[Callable[[str], None]] = N
         sys.stdout.flush()
 
 
+def shutdown_all(targets: List[Target]) -> None:
+    """Stop every target, signalling them all before waiting on any. A
+    monitor mid-round takes up to a reply timeout to wind down; one at a time,
+    Ctrl-C on a many-target config waited for the sum of them."""
+    for t in targets:
+        t.monitor.request_stop()
+    for t in targets:
+        t.monitor.shutdown()
+
+
 def report_rows(monitor: Monitor) -> List[dict]:
     """The per-hop summary a report prints, as plain data.
 
@@ -548,8 +558,7 @@ def main(argv=None) -> int:
     if args.report is not None:
         if args.report < 1:
             print("--report needs a round count of at least 1", file=sys.stderr)
-            for t in targets:
-                t.monitor.shutdown()
+            shutdown_all(targets)
             return 2
         try:
             rc = run_report(targets, args.report)
@@ -562,8 +571,7 @@ def main(argv=None) -> int:
             print(f"Report failed: {exc}", file=sys.stderr)
             rc = 1
         finally:
-            for t in targets:
-                t.monitor.shutdown()
+            shutdown_all(targets)
         return rc
 
     last_status = 0.0
@@ -582,8 +590,7 @@ def main(argv=None) -> int:
         pass
     finally:
         print("Stopping...")
-        for t in targets:
-            t.monitor.shutdown()
+        shutdown_all(targets)
         print("Stopped.")
     return 0
 
