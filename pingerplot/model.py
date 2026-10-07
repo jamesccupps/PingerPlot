@@ -107,22 +107,24 @@ class Hop:
         count = n - start
         received = 0
         total = 0.0
-        total_sq = 0.0
+        prev: Optional[float] = None
+        jump_total = 0.0
         for s in window:
             r = s.rtt
             if r is None:
                 continue
             received += 1
             total += r
-            total_sq += r * r
+            if prev is not None:
+                jump_total += abs(r - prev)
+            prev = r
         loss_pct = 100.0 * (count - received) / count
         if not received:
             return (loss_pct, None, None)
         avg = total / received
         if received < 2:
             return (loss_pct, avg, None)
-        var = total_sq / received - avg * avg
-        return (loss_pct, avg, var ** 0.5 if var > 0 else 0.0)
+        return (loss_pct, avg, jump_total / (received - 1))
 
     @property
     def sent(self) -> int:
@@ -162,12 +164,16 @@ class Hop:
 
     @property
     def jitter(self) -> Optional[float]:
-        """Population standard deviation of RTT over the window."""
+        """Mean absolute change in RTT between consecutive replies (lost probes
+        skipped) -- packet-to-packet variation, RFC 3550's notion averaged
+        rather than smoothed, and the quantity the MOS E-model's jitter term
+        expects. Not the standard deviation, which it was until 1.3.3: that
+        scores a clean latency step after a reroute as sustained jitter, and
+        alternating 10/30 ms as only 10 ms when every packet moved 20."""
         r = self._rtts()
         if len(r) < 2:
             return None
-        mean = sum(r) / len(r)
-        return (sum((x - mean) ** 2 for x in r) / len(r)) ** 0.5
+        return sum(abs(b - a) for a, b in zip(r, r[1:])) / (len(r) - 1)
 
     def compute(self):
         """All window stats in a *single* pass — much cheaper than the
@@ -180,7 +186,8 @@ class Hop:
             return (0, 0, 0.0, None, None, None, None, None)
         received = 0
         total = 0.0
-        total_sq = 0.0
+        prev: Optional[float] = None
+        jump_total = 0.0          # sum of |rtt - previous rtt|; see jitter
         best: Optional[float] = None
         worst: Optional[float] = None
         for s in samples:
@@ -189,7 +196,9 @@ class Hop:
                 continue
             received += 1
             total += r
-            total_sq += r * r
+            if prev is not None:
+                jump_total += abs(r - prev)
+            prev = r
             if best is None or r < best:
                 best = r
             if worst is None or r > worst:
@@ -198,10 +207,7 @@ class Hop:
         loss_pct = 100.0 * (n - received) / n
         if received:
             avg = total / received
-            # population variance via E[x^2] - E[x]^2 (one pass); clamp tiny
-            # negative FP results to 0 for the all-equal case.
-            var = total_sq / received - avg * avg
-            jitter = (var ** 0.5 if var > 0 else 0.0) if received >= 2 else None
+            jitter = jump_total / (received - 1) if received >= 2 else None
         else:
             avg = jitter = None
         return (n, received, loss_pct, current, avg, best, worst, jitter)

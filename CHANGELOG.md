@@ -8,8 +8,21 @@ All notable changes to PingerPlot are recorded here. The format follows
 
 A second audit pass, combining an external review (which built a Linux
 network-namespace lab to reproduce its findings) with a fresh read of the code.
-Five fixes change numbers the app reports; most of the rest are more places
-where something failed **silently**, the theme of 1.3.2.
+Five fixes change numbers the app reports, and one definition changes; most of
+the rest are more places where something failed **silently**, the theme of
+1.3.2.
+
+### Changed
+
+- **Jitter is now the mean change between consecutive replies**, not the
+  standard deviation of RTT. This is what the MOS E-model's jitter term expects
+  (and what PingPlotter reports). Standard deviation scored a clean latency
+  step — a reroute from a steady 20 ms to a steady 60 ms — as ~20 ms of jitter
+  for as long as the step sat in the window, which MOS then charged at double
+  weight; and it under-scored alternating latency (10/30/10/30 ms: 10 ms by
+  stddev, 20 ms packet to packet). The Jitter column, CSV export, reports and
+  MOS all change with it. Saved sessions store raw samples, so older ones are
+  recomputed the new way when loaded.
 
 ### Fixed — what the app reports
 

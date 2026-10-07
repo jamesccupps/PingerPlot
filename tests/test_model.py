@@ -48,13 +48,52 @@ def test_current_is_none_when_last_probe_lost():
     assert h.avg == 10.0
 
 
-def test_jitter_is_population_stddev():
+def test_jitter_is_the_mean_change_between_consecutive_replies():
+    """Packet-to-packet variation (RFC 3550's idea, averaged rather than
+    smoothed), which is what the MOS E-model's jitter term means and what
+    PingPlotter reports. It used to be the population standard deviation."""
     h = Hop(1)
     _fill(h, [10.0, 10.0, 10.0])
     assert h.jitter == 0.0
     h2 = Hop(2)
     _fill(h2, [10.0, 20.0])
-    assert h2.jitter == 5.0  # stddev of [10,20] about mean 15
+    assert h2.jitter == 10.0
+
+
+def test_a_clean_latency_step_is_not_jitter():
+    """The case standard deviation got wrong: a reroute that moves a steady
+    20 ms path to a steady 60 ms one is a latency change, not jitter. Stddev
+    scored it 20 ms of jitter for as long as the step sat in the window (and
+    MOS charged twice that); consecutive differences see one 40 ms jump."""
+    h = Hop(1)
+    _fill(h, [20.0] * 10 + [60.0] * 10)
+    assert h.jitter == pytest.approx(40.0 / 19)
+    assert h.recent_stats(20)[2] == pytest.approx(40.0 / 19)
+
+
+def test_alternating_latency_is_jitter():
+    """And the converse: 10/30/10/30 has a stddev of only 10, but every packet
+    is 20 ms off the last -- that is what a jitter buffer has to absorb."""
+    h = Hop(1)
+    _fill(h, [10.0, 30.0] * 5)
+    assert h.jitter == 20.0
+
+
+def test_jitter_skips_over_lost_probes():
+    """A lost probe has no RTT to compare; the next reply is compared with the
+    last one that arrived."""
+    h = Hop(1)
+    _fill(h, [10.0])
+    h.record(None, None, 11010)
+    _fill(h, [30.0])
+    assert h.jitter == 20.0
+    assert h.recent_stats(3)[2] == 20.0
+
+
+def test_window_jitter_uses_only_the_window():
+    h = Hop(1)
+    _fill(h, [100.0, 10.0, 10.0, 10.0])
+    assert h.recent_stats(3)[2] == 0.0      # the 100 -> 10 jump is outside it
 
 
 def test_history_is_bounded():

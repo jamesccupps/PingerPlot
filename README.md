@@ -468,6 +468,12 @@ number that means anything.
 - A latency *step* that appears at one hop and persists through every hop after
   it is where the delay is being introduced.
 - Sub-millisecond hops show as `<1`; the Win32 RTT is integer-millisecond.
+- **Jitter** is the average change in RTT from one reply to the next (lost
+  probes skipped) — what a jitter buffer has to absorb, and what the MOS
+  formula expects. A path that steps from a steady 20 ms to a steady 60 ms has
+  a latency change, not jitter. (Before 1.3.3 this column was the standard
+  deviation of RTT, which counted that step as jitter for as long as it sat in
+  the window.)
 
 ## Tests
 
