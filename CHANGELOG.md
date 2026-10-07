@@ -106,14 +106,26 @@ the rest are more places where something failed **silently**, the theme of
   only SHA-pinned actions and `gh`, holds `contents: write`. Build tooling is
   installed from `packaging/requirements-build.txt` with `--require-hashes`;
   checkouts no longer persist the token in `.git/config`. CI resolves the lock
-  on every push, and Dependabot watches it.
+  on every push, and Dependabot watches it. `actions/checkout` is now v7.0.1
+  and `actions/setup-python` v7.0.0.
+
+### Fixed — responsiveness
+
+- **"Stop all", closing the window and Ctrl-C in headless stopped targets one
+  at a time.** Each waits for its round in flight — up to a reply timeout — so
+  the waits added up (five targets taking 0.4 s each to wind down: 2.05 s).
+  Every monitor is now signalled before any is waited on (0.41 s).
 
 ### Tests
 
 - The suite loads on a Python without Tk (a skip raised while importing
   `conftest` was a collection error), the GUI tests no longer hang on the
   "ICMP unavailable" dialog, and live-ICMP tests skip with a reason instead of
-  failing where there is no backend. 424 → 520 passing on Windows.
+  failing where there is no backend. 424 → 526 passing on Windows.
+- On the CI Linux legs, a live POSIX test that would skip is now a failure:
+  if `ping_group_range` ever stops taking effect, the backend would otherwise
+  go untested behind a green tick. With that gate in place, the kernel
+  receive-timestamp path is verified on a real Linux kernel on every push.
 
 ## [1.3.2] — 2026-08-21
 
