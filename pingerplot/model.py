@@ -42,6 +42,12 @@ class Hop:
         self.last_status: Optional[int] = None
         self.resolving = False
         self.samples: Deque[Sample] = deque(maxlen=history)
+        # Samples recorded since the current responder took this TTL. The
+        # samples deque deliberately spans responders (the MTR per-TTL model),
+        # but an alert judging the destination must not count a router that
+        # held this TTL before a reroute -- its rate-limited TTL-exceeded
+        # replies read as the destination's packet loss.
+        self.since_change = 0
 
     def record(self, rtt: Optional[float], address: Optional[str], status: int) -> None:
         self.last_status = status
@@ -50,7 +56,9 @@ class Hop:
             # new responder and re-resolve its name.
             self.address = address
             self.hostname = None
+            self.since_change = 0
         self.samples.append(Sample(time.time(), rtt))
+        self.since_change += 1
 
     # --- derived statistics, all computed over the current window ----------
     def _rtts(self) -> List[float]:

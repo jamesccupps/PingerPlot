@@ -408,6 +408,9 @@ class Monitor:
                     for pair in samples[-cap:]:
                         rtt = pair[1]
                         hop.samples.append(Sample(float(pair[0]), None if rtt is None else float(rtt)))
+                    # A session records no per-sample responder, so all of it
+                    # is attributed to the address the file names.
+                    hop.since_change = len(hop.samples)
                     self._hops.append(hop)
                 except (KeyError, ValueError, TypeError, IndexError):
                     continue  # skip a malformed hop rather than crash the load
@@ -825,7 +828,12 @@ class Monitor:
                 # guessing wrong. (Raised as F14 by an external audit; kept.)
                 return
             dest = self._hops[route_len - 1]
-            sent_window = min(self.alert_window, dest.sent)
+            # Only samples since the destination took this TTL. After a
+            # reroute the TTL's history can belong to a router that held it,
+            # and that router's rate-limited replies are not the destination's
+            # loss. A responder change therefore restarts the "enough history
+            # to call it sustained" wait below.
+            sent_window = min(self.alert_window, dest.sent, dest.since_change)
             ever = dest.received
             # One pass for all three: the MOS alert needs jitter as well, and
             # the E-model wants latency, jitter and loss from the same window.
