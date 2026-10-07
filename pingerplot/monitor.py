@@ -61,6 +61,22 @@ LOG_ROTATE_RETRY_S = 60.0  # after a failed rollover, keep appending this long b
 MAX_LOAD_HOPS = 1024       # cap hops loaded from a session file (defense-in-depth)
 
 
+# start() keyword -> the attribute it lands in. One table, so saving a target's
+# options and validating them on restore cannot disagree about what exists.
+_START_OPTIONS = {
+    "interval": "interval", "timeout_ms": "timeout_ms", "max_hops": "max_hops",
+    "resolve_names": "resolve_names", "packet_size": "packet_size",
+    "send_delay_ms": "send_delay_ms", "final_hop_only": "final_hop_only",
+    "packet_type": "packet_type", "port": "port", "dscp": "dscp",
+    "source_ip": "source_ip", "log_path": "log_path",
+    "alert_enabled": "alert_enabled", "alert_loss_pct": "alert_loss_pct",
+    "alert_latency_ms": "alert_latency_ms", "alert_window": "alert_window",
+    "alert_sound": "alert_sound", "alert_mos": "alert_mos",
+    "webhook_url": "webhook_url",
+}
+START_OPTION_KEYS = frozenset(_START_OPTIONS)
+
+
 def _log_suffix(target: str) -> str:
     """``target`` reduced to characters that are safe in a file name on every
     platform. Hostnames and IPv4 literals pass through unchanged."""
@@ -348,6 +364,12 @@ class Monitor:
     def active_alerts(self) -> List[str]:
         with self._lock:
             return list(self._active_alerts.values())
+
+    def start_options(self) -> dict:
+        """The keyword arguments that reproduce this monitor's configured run
+        through :meth:`start` -- what the GUI saves per target, so a relaunch
+        restores each target as configured rather than from the toolbar."""
+        return {key: getattr(self, attr) for key, attr in _START_OPTIONS.items()}
 
     def run_summary(self) -> dict:
         """Run conditions + the wall-clock window the current samples cover, so

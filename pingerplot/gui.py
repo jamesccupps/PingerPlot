@@ -630,55 +630,57 @@ class App:
             self.logpath_var.set(path)
 
     # --- actions -----------------------------------------------------------
-    def _start(self) -> None:
-        target = self.target_var.get().strip()
+    def _toolbar_options(self) -> Optional[dict]:
+        """start() keyword arguments from the toolbar and Engine dialog, or
+        None (after saying why) when a numeric field does not parse."""
+        try:
+            return dict(
+                interval=float(self.interval_var.get()),
+                timeout_ms=int(self.timeout_var.get()),
+                max_hops=int(self.maxhops_var.get()),
+                resolve_names=self.resolve_var.get(),
+                packet_size=int(self.psize_var.get()),
+                send_delay_ms=int(self.senddelay_var.get()),
+                final_hop_only=self.finalhop_var.get(),
+                packet_type=self.packettype_var.get().lower(),
+                port=int(self.port_var.get()),
+                dscp=int(self.dscp_var.get()),
+                source_ip=self.sourceip_var.get(),
+                log_path=self.logpath_var.get().strip(),
+                alert_enabled=self.alerts_var.get(),
+                alert_loss_pct=float(self.alert_loss_var.get()),
+                alert_latency_ms=float(self.alert_lat_var.get()),
+                alert_window=int(self.alert_win_var.get()),
+                alert_sound=self.alert_sound_var.get(),
+                alert_mos=float(self.alert_mos_var.get()),
+                webhook_url=self.webhook_var.get(),
+            )
+        except ValueError:
+            messagebox.showwarning("Invalid input", "Interval, engine and alert fields must be numbers.")
+            return None
+
+    def _start(self, target: Optional[str] = None, options: Optional[dict] = None) -> None:
+        """Start (or restart) ``target`` -- the Target box by default -- with
+        ``options``, or with the toolbar's values when none are given."""
+        target = (self.target_var.get() if target is None else target).strip()
         if not target:
             messagebox.showwarning("No target", "Enter a hostname or IP address.")
             return
-        try:
-            interval = float(self.interval_var.get())
-            max_hops = int(self.maxhops_var.get())
-            timeout_ms = int(self.timeout_var.get())
-            psize = int(self.psize_var.get())
-            send_delay = int(self.senddelay_var.get())
-            port = int(self.port_var.get())
-            dscp = int(self.dscp_var.get())
-            a_loss = float(self.alert_loss_var.get())
-            a_lat = float(self.alert_lat_var.get())
-            a_win = int(self.alert_win_var.get())
-            a_mos = float(self.alert_mos_var.get())
-        except ValueError:
-            messagebox.showwarning("Invalid input", "Interval, engine and alert fields must be numbers.")
-            return
+        if options is None:
+            options = self._toolbar_options()
+            if options is None:
+                return
+        options = dict(options)
+        # One field, many targets: each gets its own file, or their rows
+        # interleave in a CSV that has no target column.
+        options["log_path"] = monitor.per_target_log_path(
+            str(options.get("log_path") or "").strip(), target)
 
         mon = self._monitors.get(target)
         if mon is None:
             mon = Monitor()
             self._monitors[target] = mon
-        mon.start(
-            target,
-            interval=interval,
-            timeout_ms=timeout_ms,
-            max_hops=max_hops,
-            resolve_names=self.resolve_var.get(),
-            packet_size=psize,
-            send_delay_ms=send_delay,
-            final_hop_only=self.finalhop_var.get(),
-            packet_type=self.packettype_var.get().lower(),
-            port=port,
-            dscp=dscp,
-            source_ip=self.sourceip_var.get(),
-            # One field, many targets: each gets its own file, or their rows
-            # interleave in a CSV that has no target column.
-            log_path=monitor.per_target_log_path(self.logpath_var.get().strip(), target),
-            alert_enabled=self.alerts_var.get(),
-            alert_loss_pct=a_loss,
-            alert_latency_ms=a_lat,
-            alert_window=a_win,
-            alert_sound=self.alert_sound_var.get(),
-            alert_mos=a_mos,
-            webhook_url=self.webhook_var.get(),
-        )
+        mon.start(target, **options)
         self._activate(target)
 
     def _activate(self, name: Optional[str]) -> None:
@@ -895,17 +897,37 @@ class App:
             # permanently-dead row reading "Cannot resolve 'x (loaded)'".
             # Self-perpetuating, too: every save rewrote it.
             "targets": [n for n in self._monitors if n not in self._loaded],
+            # Each target's own configuration. The toolbar holds whichever
+            # target was edited last, so restoring from it alone gave every
+            # target those values.
+            "target_options": {n: m.start_options() for n, m in self._monitors.items()
+                               if n not in self._loaded},
         })
 
     def _restore_targets(self) -> None:
-        """If enabled, re-add and start the targets from the last session."""
+        """If enabled, re-add and start the targets from the last session,
+        each with the options it was running with."""
         if not self.resume_var.get():
             return
+        saved = self._settings.get("target_options")
+        saved = saved if isinstance(saved, dict) else {}
         entry = self.target_var.get()
         for name in self._settings.get("targets", []) or []:
-            if isinstance(name, str) and name.strip():
-                self.target_var.set(name)
-                self._start()
+            if not (isinstance(name, str) and name.strip()):
+                continue
+            opts = saved.get(name)
+            if isinstance(opts, dict):
+                opts = {k: v for k, v in opts.items() if k in monitor.START_OPTION_KEYS}
+            else:
+                opts = None              # 1.3.x settings: names only
+            self.target_var.set(name)
+            try:
+                self._start(name, opts)
+            except (ValueError, TypeError):
+                # A hand-edited or corrupt entry. This runs inside __init__, so
+                # raising would stop the app opening at all; the toolbar's
+                # values are the 1.3.x behaviour.
+                self._start(name)
         self.target_var.set(entry)   # leave the box showing the saved entry text
 
     def _export(self) -> None:

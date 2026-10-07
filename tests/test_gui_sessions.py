@@ -86,7 +86,8 @@ def test_the_dead_row_this_prevents(app, tmp_path, isolated_settings, load_sessi
     app._save_settings()
 
     started = []
-    app._start = lambda: started.append(app.target_var.get())
+    app._start = lambda target=None, options=None: started.append(
+        target if target is not None else app.target_var.get())
     app._settings = isolated_settings.load()
     app.resume_var.set(True)
     app._restore_targets()
