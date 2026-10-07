@@ -42,7 +42,7 @@ except ImportError:  # pragma: no cover - non-Windows
     winsound = None  # type: ignore[assignment]
 
 from . import __version__, icmp, tcpudp
-from .model import DEFAULT_HISTORY, Event, Hop, HopView, Sample, mos, mos_label
+from .model import Event, Hop, HopView, Sample, hop_from_session, mos, mos_label, opt_str
 
 GROW_PROBE_SPAN = 8       # extra TTLs to probe when looking for a longer route
 UNREACHED_BEFORE_GROW = 3  # consecutive dest-miss rounds before probing deeper
@@ -451,53 +451,67 @@ class Monitor:
     def load_dict(self, data: dict) -> None:
         """Replace live state with a saved session (for offline review). Stops
         any running monitor first; the result renders through the normal
-        snapshot path, just with ``running == False``."""
+        snapshot path, just with ``running == False``.
+
+        The file is not necessarily ours, so every field is type-checked and a
+        bad one falls back to its default. Everything is parsed before any
+        state changes: one non-numeric config value used to raise after the
+        target, address and route length had already been replaced, leaving a
+        half-loaded monitor. Raises ValueError only for something that is not
+        a session object at all.
+        """
+        if not isinstance(data, dict):
+            raise ValueError("not a PingerPlot session (expected a JSON object)")
+        cfg = data.get("config")
+        cfg = cfg if isinstance(cfg, dict) else {}
+
+        def _cfg(key, conv, current):
+            try:
+                return conv(cfg[key]) if key in cfg else current
+            except (TypeError, ValueError, OverflowError):
+                return current
+
+        def _int(value) -> int:
+            try:
+                return int(value or 0)
+            except (TypeError, ValueError, OverflowError):
+                return 0
+
+        raw_hops = data.get("hops")
+        raw_hops = raw_hops if isinstance(raw_hops, list) else []
+        # Clamp the ring buffers so a crafted/corrupt session can't blow up
+        # memory; the most recent samples are kept.
+        hops = [h for h in (hop_from_session(hd, MAX_LOAD_HISTORY)
+                            for hd in raw_hops[:MAX_LOAD_HOPS]) if h is not None]
+        raw_events = data.get("events")
+        events: List[Event] = []
+        for ev in (raw_events if isinstance(raw_events, list) else []):
+            try:
+                events.append(Event(int(ev[0]), float(ev[1]), str(ev[2]), str(ev[3])))
+            except (IndexError, KeyError, ValueError, TypeError, OverflowError):
+                continue
+        target = data.get("target_input")
+
         self.stop()
         with self._lock:
-            self.target_input = str(data.get("target_input", ""))
-            self.target_ip = data.get("target_ip")
-            self.route_len = int(data.get("route_len", 0) or 0)
+            self.target_input = "" if target is None else str(target)
+            self.target_ip = opt_str(data.get("target_ip"))
+            self.route_len = _int(data.get("route_len"))
             self.reached_target = bool(data.get("reached_target", False))
             self.final_hop_only = bool(data.get("final_hop_only", False))
-            cfg = data.get("config", {})
-            self.interval = float(cfg.get("interval", self.interval))
-            self.timeout_ms = int(cfg.get("timeout_ms", self.timeout_ms))
-            self.max_hops = int(cfg.get("max_hops", self.max_hops))
-            self.packet_size = int(cfg.get("packet_size", self.packet_size))
-            self.send_delay_ms = int(cfg.get("send_delay_ms", self.send_delay_ms))
-            self.packet_type = str(cfg.get("packet_type", self.packet_type))
-            self.port = int(cfg.get("port", self.port))
-            self.dscp = int(cfg.get("dscp", self.dscp))
-            self.source_ip = str(cfg.get("source_ip", self.source_ip) or "")
-            self._hops = []
-            for hd in (data.get("hops", []) or [])[:MAX_LOAD_HOPS]:
-                try:
-                    samples = hd.get("samples", []) or []
-                    # Clamp the ring buffer so a crafted/corrupt session can't
-                    # blow up memory; keep the most recent samples.
-                    cap = min(MAX_LOAD_HISTORY, max(DEFAULT_HISTORY, len(samples)))
-                    hop = Hop(int(hd["ttl"]), history=cap)
-                    hop.address = hd.get("address")
-                    hop.hostname = hd.get("hostname")
-                    hop.last_status = hd.get("last_status")
-                    for pair in samples[-cap:]:
-                        rtt = pair[1]
-                        hop.samples.append(Sample(float(pair[0]), None if rtt is None else float(rtt)))
-                    # A session records no per-sample responder, so all of it
-                    # is attributed to the address the file names.
-                    hop.since_change = len(hop.samples)
-                    self._hops.append(hop)
-                except (KeyError, ValueError, TypeError, IndexError):
-                    continue  # skip a malformed hop rather than crash the load
+            self.interval = _cfg("interval", float, self.interval)
+            self.timeout_ms = _cfg("timeout_ms", int, self.timeout_ms)
+            self.max_hops = _cfg("max_hops", int, self.max_hops)
+            self.packet_size = _cfg("packet_size", int, self.packet_size)
+            self.send_delay_ms = _cfg("send_delay_ms", int, self.send_delay_ms)
+            self.packet_type = _cfg("packet_type", str, self.packet_type)
+            self.port = _cfg("port", int, self.port)
+            self.dscp = _cfg("dscp", int, self.dscp)
+            self.source_ip = opt_str(cfg.get("source_ip")) or ""
+            self._hops = hops
             self._events.clear()
-            self._event_seq = 0
-            for ev in data.get("events", []):
-                try:
-                    seq = int(ev[0])
-                    self._events.append(Event(seq, float(ev[1]), str(ev[2]), str(ev[3])))
-                    self._event_seq = max(self._event_seq, seq + 1)
-                except (IndexError, ValueError, TypeError):
-                    continue
+            self._events.extend(events)
+            self._event_seq = max((e.seq + 1 for e in events), default=0)
             self._active_alerts.clear()
             self.status = f"Loaded session: {self.target_input} [{self.target_ip}] - {len(self._hops)} hops"
         self._notify()

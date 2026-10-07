@@ -20,7 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
-from .model import DEFAULT_HISTORY, Hop, Sample, mos
+from .model import Hop, hop_from_session, mos
 
 # What counts as a real change rather than noise.
 LOSS_DELTA_PTS = 5.0    # percentage points of packet loss
@@ -155,22 +155,13 @@ def stats_from_session(data: dict) -> List[HopStats]:
     statistics here, so a baseline and a live run can never be summarised by
     two subtly different formulas.
     """
-    out: List[HopStats] = []
-    for hd in (data.get("hops") or []):
-        try:
-            samples = hd.get("samples") or []
-            hop = Hop(int(hd["ttl"]),
-                      history=max(DEFAULT_HISTORY, len(samples)))
-            hop.address = hd.get("address")
-            hop.hostname = hd.get("hostname")
-            for pair in samples:
-                rtt = pair[1]
-                hop.samples.append(
-                    Sample(float(pair[0]), None if rtt is None else float(rtt)))
-            out.append(stats_from_hop(hop))
-        except (KeyError, ValueError, TypeError, IndexError):
-            continue   # skip a malformed hop, same as load_dict
-    return out
+    if not isinstance(data, dict):
+        return []
+    hops = data.get("hops")
+    # The same parser as Load session, so a malformed entry is skipped by
+    # both rather than crashing one of them.
+    return [stats_from_hop(h) for h in map(hop_from_session, hops if isinstance(hops, list) else [])
+            if h is not None]
 
 
 def _verdict(base: HopStats, now: HopStats) -> str:

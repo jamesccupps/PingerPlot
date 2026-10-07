@@ -207,6 +207,46 @@ class Hop:
         return (n, received, loss_pct, current, avg, best, worst, jitter)
 
 
+def opt_str(value) -> Optional[str]:
+    """``value`` if it is a string, else None -- for fields read from a file
+    that is not necessarily ours, where a list or object would otherwise reach
+    code that formats or hashes it."""
+    return value if isinstance(value, str) else None
+
+
+def hop_from_session(hd, max_history: Optional[int] = None) -> Optional[Hop]:
+    """Rebuild a :class:`Hop` from one entry of a saved session's ``hops``
+    list, or None if the entry is unusable.
+
+    Shared by Load session and baseline comparison, so a malformed entry is
+    handled identically by both: skipped, never raised. ``max_history`` caps
+    the ring buffer (most recent samples kept) against a crafted file.
+    """
+    if not isinstance(hd, dict):
+        return None
+    try:
+        samples = hd.get("samples") or []
+        if not isinstance(samples, list):
+            return None
+        history = max(DEFAULT_HISTORY, len(samples))
+        if max_history:
+            history = min(history, max_history)
+        hop = Hop(int(hd["ttl"]), history=history)
+        hop.address = opt_str(hd.get("address"))
+        hop.hostname = opt_str(hd.get("hostname"))
+        status = hd.get("last_status")
+        hop.last_status = status if isinstance(status, int) else None
+        for pair in samples[-history:]:
+            rtt = pair[1]
+            hop.samples.append(Sample(float(pair[0]), None if rtt is None else float(rtt)))
+        # A session records no per-sample responder, so all of it is
+        # attributed to the address the file names.
+        hop.since_change = len(hop.samples)
+        return hop
+    except (KeyError, ValueError, TypeError, IndexError, OverflowError):
+        return None
+
+
 @dataclass(frozen=True)
 class HopView:
     """Immutable snapshot of a :class:`Hop` for the UI thread."""

@@ -419,6 +419,11 @@ def print_comparison(targets: List[Target], baseline_path: str,
     except (OSError, ValueError) as exc:
         log(f"Cannot read baseline {baseline_path}: {exc}")
         return
+    if not isinstance(data, dict):
+        # main() only catches OSError around the report, so anything raised
+        # here died as a traceback after the tables had already printed.
+        log(f"Cannot read baseline {baseline_path}: not a PingerPlot session")
+        return
     base_stats = _compare.stats_from_session(data)
     base_name = str(data.get("target_input") or baseline_path)
     if not base_stats:

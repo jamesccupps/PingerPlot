@@ -1022,13 +1022,20 @@ class App:
         if not isinstance(data, dict) or "hops" not in data:
             messagebox.showerror("Load failed", "Not a PingerPlot session file.")
             return
-        name = (data.get("target_input") or "loaded session") + " (loaded)"
-        mon = self._monitors.get(name)
-        if mon is None:
-            mon = Monitor()
-            self._monitors[name] = mon
+        name = f"{data.get('target_input') or 'loaded session'} (loaded)"
+        # Loaded into a fresh Monitor and only then registered: registering
+        # first left an empty "(loaded)" row behind whenever the load raised.
+        mon = Monitor()
+        try:
+            mon.load_dict(data)
+        except (ValueError, TypeError) as exc:
+            messagebox.showerror("Load failed", f"Could not load that session: {exc}")
+            return
+        old = self._monitors.get(name)
+        if old is not None:
+            old.shutdown()
+        self._monitors[name] = mon
         self._loaded.add(name)
-        mon.load_dict(data)
         self._activate(name)
 
     # --- baseline comparison ----------------------------------------------
