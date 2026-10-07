@@ -30,6 +30,7 @@ import re
 import socket
 import threading
 import time
+import urllib.parse
 import urllib.request
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
@@ -118,12 +119,14 @@ def _build_payload(size: int) -> bytes:
     return (base * (size // len(base) + 1))[:size]
 
 
-def _send_webhook(url: str, payload: dict) -> bool:
-    """POST ``payload`` as JSON to ``url`` (http/https only). Best-effort: never
-    raises, returns True on a 2xx/3xx response. Lets the monitor *tell* you when
-    the destination degrades instead of only beeping."""
+def _send_webhook(url: str, payload: dict) -> Optional[str]:
+    """POST ``payload`` as JSON to ``url`` (http/https only). Never raises.
+    Returns None when delivered (2xx/3xx), otherwise why not -- so a mistyped
+    URL is reported instead of discovered when the alert you needed never
+    arrives. Lets the monitor *tell* you when the destination degrades instead
+    of only beeping."""
     if not url.lower().startswith(("http://", "https://")):
-        return False
+        return "not an http(s) URL"
     try:
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
@@ -131,9 +134,20 @@ def _send_webhook(url: str, payload: dict) -> bool:
             headers={"Content-Type": "application/json", "User-Agent": "PingerPlot"},
         )
         with urllib.request.urlopen(req, timeout=8) as resp:
-            return 200 <= getattr(resp, "status", 200) < 400
-    except Exception:
-        return False
+            status = getattr(resp, "status", 200)
+            return None if 200 <= status < 400 else f"HTTP {status}"
+    except Exception as exc:   # any failure is reported, never raised
+        return str(exc) or type(exc).__name__
+
+
+def _webhook_host(url: str) -> str:
+    """Where a webhook points, for messages. Never the whole URL: Slack, Teams
+    and ntfy put the secret in the path, and these messages are printed."""
+    try:
+        host = urllib.parse.urlsplit(url).hostname
+    except ValueError:
+        host = None
+    return host or "(unparseable URL)"
 
 
 class Monitor:
@@ -631,8 +645,16 @@ class Monitor:
             "text": text,
             "time": time.time(),
         }
-        threading.Thread(target=_send_webhook, args=(url, payload),
+        threading.Thread(target=self._deliver_webhook, args=(url, payload),
                          name="webhook", daemon=True).start()
+
+    def _deliver_webhook(self, url: str, payload: dict) -> None:
+        error = _send_webhook(url, payload)
+        if error:
+            # "warn", not "alert": it must not beep, and it must not fire the
+            # webhook that just failed.
+            self._log_event("warn", f"Webhook to {_webhook_host(url)} failed "
+                                    f"({payload.get('event')}): {error}")
 
     def _alive(self, gen: int) -> bool:
         """True while ``gen`` is still the active run (and we haven't stopped).

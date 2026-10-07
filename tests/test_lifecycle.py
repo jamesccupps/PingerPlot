@@ -81,9 +81,10 @@ def test_probe_log_rotates_at_cap(tmp_path, monkeypatch):
 
 
 def test_send_webhook_rejects_non_http():
-    assert monitor._send_webhook("file:///etc/passwd", {"x": 1}) is False
-    assert monitor._send_webhook("ftp://host/p", {"x": 1}) is False
-    assert monitor._send_webhook("", {"x": 1}) is False
+    # Not raised, not silent: a reason the caller can report.
+    assert monitor._send_webhook("file:///etc/passwd", {"x": 1}) == "not an http(s) URL"
+    assert monitor._send_webhook("ftp://host/p", {"x": 1}) == "not an http(s) URL"
+    assert monitor._send_webhook("", {"x": 1}) == "not an http(s) URL"
 
 
 def test_send_webhook_posts_json(monkeypatch):
@@ -99,7 +100,7 @@ def test_send_webhook_posts_json(monkeypatch):
         return _Resp()
 
     monkeypatch.setattr(monitor.urllib.request, "urlopen", fake_urlopen)
-    assert monitor._send_webhook("https://example.com/hook", {"event": "alert"}) is True
+    assert monitor._send_webhook("https://example.com/hook", {"event": "alert"}) is None
     import json as _json
     assert seen["url"] == "https://example.com/hook"
     assert _json.loads(seen["data"]) == {"event": "alert"}
@@ -112,7 +113,7 @@ def test_log_event_alert_fires_webhook(monkeypatch):
     def fake_send(url, payload):
         captured["url"], captured["payload"] = url, payload
         fired.set()
-        return True
+        return None
 
     monkeypatch.setattr(monitor, "_send_webhook", fake_send)
     m = Monitor()
@@ -123,4 +124,30 @@ def test_log_event_alert_fires_webhook(monkeypatch):
     assert captured["url"] == "https://example.com/hook"
     assert captured["payload"]["event"] == "alert"
     assert captured["payload"]["text"] == "Hop 5: 30% loss"
+    m.shutdown()
+
+
+def test_a_failed_webhook_is_reported_without_leaking_the_url(monkeypatch):
+    """_send_webhook's result used to go nowhere: a mistyped URL was found out
+    when the alert you needed never arrived. The event names the host only --
+    Slack, Teams and ntfy carry their secret in the path."""
+    import time as _time
+
+    def refused(req, timeout=0):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(monitor.urllib.request, "urlopen", refused)
+    m = Monitor()
+    m.alert_sound = False
+    m.webhook_url = "https://hooks.example.net/services/T000/SECRET-TOKEN"
+    m._log_event("alert", "Hop 5: 30% loss")
+    end = _time.monotonic() + 3
+    warns = []
+    while not warns and _time.monotonic() < end:
+        warns = [e.text for e in m.events_after(-1)[0] if e.kind == "warn"]
+        _time.sleep(0.02)
+    assert warns and "hooks.example.net" in warns[0] and "connection refused" in warns[0]
+    assert "SECRET-TOKEN" not in warns[0]
+    kinds = [e.kind for e in m.events_after(-1)[0]]
+    assert kinds.count("alert") == 1, "the failure must not re-fire the webhook"
     m.shutdown()
