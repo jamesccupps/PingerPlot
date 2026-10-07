@@ -4,6 +4,104 @@ All notable changes to PingerPlot are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [1.3.3] — 2026-10-07
+
+A second audit pass, combining an external review (which built a Linux
+network-namespace lab to reproduce its findings) with a fresh read of the code.
+Five fixes change numbers the app reports; most of the rest are more places
+where something failed **silently**, the theme of 1.3.2.
+
+### Fixed — what the app reports
+
+- **A reroute could raise a false loss alert on a healthy destination.** Stats
+  are kept per TTL, and after a reroute the destination's alert window could
+  hold samples from a router that briefly held that TTL — rate-limited
+  "TTL exceeded" replies that read as loss. Reproduced on the lab: a 4 → 5 → 4
+  hop reroute raised "30% packet loss" (and fired the webhook) against a
+  destination answering every probe. The alert window now counts only samples
+  since the destination took its hop number. The hop table is unchanged.
+- **On Linux, a busy Python thread showed up as network latency.** The POSIX
+  backend timed replies with the user-space clock after `recv` returned, which
+  includes waiting for the GIL — a 0.17 ms path read ~12 ms average with one
+  busy thread on the lab, and a Timeline redraw holds the GIL for ~56 ms.
+  Replies are now timed by the kernel (`SO_TIMESTAMPNS`, on the echo reply and
+  the error-queue message alike). macOS and TCP/UDP modes are unchanged.
+- **All GUI targets wrote into one probe CSV,** which has no target column, so
+  their rows could not be told apart and one monitor's rollover renamed the file
+  from under the others. Each target now writes `probe_<target>.csv`; headless
+  splits a path only when several targets share it.
+- **Per-target settings were lost on relaunch.** Only target names were saved,
+  so every restored target got the toolbar's values — those of whichever target
+  was edited last. Each target's options are now saved and restored. 1.3.x
+  settings files still load.
+- **macOS: parallel probes could take each other's replies.** The backend relied
+  on a Linux guarantee (a ping socket only sees its own replies) that macOS does
+  not give. Replies are now matched by sequence number — unique per probe; it
+  used to be the millisecond clock, shared by most of a round — and a router's
+  error by the echo header it quotes. Untested on a Mac.
+- The probe CSV kept whole milliseconds only, so sub-millisecond POSIX and
+  TCP/UDP timings logged as 0 or 1. Now microsecond precision; whole-millisecond
+  values are written exactly as before.
+
+### Fixed — silent failures
+
+- **A source IP the machine does not hold was ignored in TCP/UDP modes.** TCP
+  fell back to the default route (verified: a probe "from" 192.0.2.77 reported
+  the destination reached) and UDP never bound its sockets. Elevated, the user
+  was told TCP/UDP "needs Administrator"; in ICMP mode the status blamed the
+  target. Now refused up front, in every mode, with a message that says why;
+  an address that disappears mid-run reports `ERROR_INVALID_NETNAME` per probe.
+- **A failed probe-log rollover was silent, and could thrash.** With the CSV
+  open in Excel the rename fails while the append reopen succeeds (verified on
+  Windows), so every probe closed and reopened the file and the size cap was
+  never enforced. A failed reopen stopped logging with no event. Both are now
+  warn events; a failed rollover keeps appending and retries after 60 s, and no
+  longer deletes the existing backup before the rename has worked.
+- **Webhook failures were never reported.** A mistyped URL was discovered when
+  the alert did not arrive. Now a warn event naming the host only (Slack, Teams
+  and ntfy put their secret in the URL path).
+- **Headless printed no events at all** — no alerts, clears, route changes or
+  warnings, including the "probe logging DISABLED" note 1.3.2 moved into an
+  event so it would stop vanishing. Events are now printed as they happen, in
+  run and report mode, through an encoder that cannot crash on a cp437 console.
+- **Map lookups that failed were cached as "no location"** and never retried,
+  so opening the Map tab offline left those hops blank until restart, with the
+  error counter at 0. Network errors, timeouts, HTTP errors and non-JSON bodies
+  are now counted and retried after a back-off.
+- **Pressing Add / Start during a slow DNS lookup could wipe the new run.** The
+  superseded worker, outliving `stop()`'s join, overwrote `target_ip` and its
+  aborted trace deleted the new run's hops. Every write the old worker made is
+  now checked against the run generation.
+- **One exception in a redraw froze the whole window**, because the refresh
+  timer only re-armed after a successful pass.
+- **Malformed session files crashed the loader** (`"config": null`, a hop that
+  is not an object, a non-numeric value — the last after half the state had
+  been replaced), left an empty "(loaded)" row in the GUI, and killed
+  `--baseline` with a traceback. Every field is now type-checked and skipped if
+  unusable, and the load is applied in one step.
+
+### Security
+
+- **The auto-start task's admin-only check did not cover what ran elevated.**
+  It checked `pyw.exe` in `C:\Windows`, but the launcher picks the interpreter
+  from per-user registry keys and `py.ini`; and an elevated Python still runs
+  `.pth` files from the user site-packages and honours a per-user
+  `PYTHONPATH`. The task now registers the resolved interpreter, checks it and
+  its stdlib, and every elevated launch runs with `-E -s`.
+- **The release job installed unpinned build tools while holding a write
+  token.** The build job is now read-only and a separate publish job, running
+  only SHA-pinned actions and `gh`, holds `contents: write`. Build tooling is
+  installed from `packaging/requirements-build.txt` with `--require-hashes`;
+  checkouts no longer persist the token in `.git/config`. CI resolves the lock
+  on every push, and Dependabot watches it.
+
+### Tests
+
+- The suite loads on a Python without Tk (a skip raised while importing
+  `conftest` was a collection error), the GUI tests no longer hang on the
+  "ICMP unavailable" dialog, and live-ICMP tests skip with a reason instead of
+  failing where there is no backend. 424 → 520 passing on Windows.
+
 ## [1.3.2] — 2026-08-21
 
 Acts on an independent third-party audit of 1.3.1. All fifteen findings are

@@ -57,7 +57,9 @@ destination).
 - **Session save / load** to JSON for offline review, plus **crash-safe
   CSV logging** of every probe (with a per-round index, so "did every hop spike
   in the same round?" is a one-line filter) — size-capped with rollover, so
-  unattended multi-week runs can't fill the disk.
+  unattended multi-week runs can't fill the disk. Each target writes its own
+  file (`probe.csv` → `probe_<target>.csv`), and a rollover that fails (the CSV
+  is open in Excel) is reported and retried rather than silently thrashing.
 - **Engine options dialog** — packet type & port, reply timeout, payload size,
   send delay (rate throttle), max hops, name resolution, final-hop-only.
 - **Dark theme by default**, with a light/dark toggle (button, top-right).
@@ -69,10 +71,13 @@ destination).
 - **Pause / Resume & copy** — right-click a target to pause probing without
   losing its history (resume picks up where it left off); right-click a hop to
   copy its IP or hostname.
-- **Per-target settings** — engine and alert options are remembered per target;
-  right-click a target → *Edit settings…* to inspect or change just that one.
+- **Per-target settings** — engine and alert options are remembered per target,
+  including across a relaunch; right-click a target → *Edit settings…* to
+  inspect or change just that one.
 - **Webhook alerts** — point the Engine dialog's *Webhook URL* at an http(s)
-  endpoint to get a JSON POST when the destination alert raises or clears.
+  endpoint to get a JSON POST when the destination alert raises or clears. A
+  delivery that fails is logged as a warning (host only, never the full URL),
+  so a mistyped URL shows up before the alert you needed doesn't.
 - **Baseline comparison** — *File → Compare with saved session…* diffs the
   live path against one you saved earlier and shows what actually changed, per
   hop. A hop whose responding address changed is reported as **rerouted** with
@@ -83,7 +88,8 @@ destination).
   measured as itself. See [DSCP and source interface](#dscp-and-source-interface).
 - **Source-interface binding** — pin the outgoing NIC on a multi-homed box, to
   ask what a path looks like *from a particular VLAN*. An address the machine
-  doesn't hold is rejected outright rather than quietly falling back.
+  doesn't hold is rejected outright, in every probe mode, rather than quietly
+  falling back.
 - **MOS alerts** — alert on the score itself, not just loss and latency
   separately. The E-model folds latency, jitter and loss together, so a path can
   sit under every individual threshold and still be unusable for voice.
@@ -92,7 +98,8 @@ destination).
   was reachable. For tickets and scheduled checks rather than a service.
 - **Persists between launches** — theme, engine options, alert thresholds and
   your target list save to `%APPDATA%\PingerPlot` and restore on start;
-  *View → Resume targets on launch* re-arms the last session's monitors.
+  *View → Resume targets on launch* re-arms the last session's monitors, each
+  with the settings it was running with.
 
 ### Tabs and layout
 
@@ -123,6 +130,13 @@ evaluated **over the last N probes** (the window is what makes it "sustained" �
 a single spike won't trip a 20-probe window). Set a threshold to `0` to disable
 that check. **Sound** toggles the beep. A condition raises when it crosses the
 threshold and clears automatically when it recovers; both are logged.
+
+The window only counts probes answered (or lost) since the destination took its
+current hop number. After a reroute, a hop's history can belong to a router that
+held that TTL in the meantime, and its rate-limited "TTL exceeded" replies are
+not the destination's packet loss — so a route change restarts the wait for a
+full window instead of alerting on someone else's samples. The hop table still
+shows per-TTL statistics across responders, as `mtr` does.
 
 ## How it works (and why no admin / no Npcap)
 
@@ -180,10 +194,13 @@ as best-effort. 46 is EF (voice), 34 is AF41 (video), 26 is AF31 (signalling),
 > weaker claim.
 
 **Source IP** (Engine… → *Source IP*) pins the outgoing interface on a
-multi-homed host. An address the machine doesn't hold is rejected with
-`ERROR_INVALID_NETNAME` rather than silently falling back to the default
-route — a silent fallback is the dangerous outcome, because the numbers look
-fine and describe a path you didn't ask about.
+multi-homed host. An address the machine doesn't hold is refused at start with
+a message saying so, in ICMP, TCP and UDP modes alike, and an address that
+disappears mid-run makes each probe report `ERROR_INVALID_NETNAME` rather than
+silently falling back to the default route — a silent fallback is the
+dangerous outcome, because the numbers look fine and describe a path you
+didn't ask about. (Before 1.3.3 only ICMP kept this promise: TCP fell back
+to the default route and UDP never bound its sockets at all.)
 
 Both are recorded in the status line, the report header, the CSV export header
 and the saved session: a marked or pinned run measured a different thing from a
@@ -205,6 +222,16 @@ because on Linux it's an *error* about the datagram we sent rather than a
 message addressed to us — it goes to the socket's error queue (`IP_RECVERR` +
 `recvmsg(MSG_ERRQUEUE)`). macOS has neither and delivers it as an ordinary
 readable message. Both paths are implemented.
+
+On Linux each reply is timed by the kernel (`SO_TIMESTAMPNS` on the echo reply
+and on the error-queue message), not by Python reading the clock after `recv`
+returns: a probe thread has to win the GIL back first, so anything else busy in
+the process — a Timeline redraw holds it for tens of milliseconds — would
+otherwise be reported as network latency and feed the alerts and MOS. macOS,
+and the TCP/UDP modes on every platform, still time in user space. macOS also
+makes no promise that a socket only sees replies to its own echoes, so every
+reply is matched to its probe by sequence number (and a router's error by the
+echo header it quotes back).
 
 On Linux the unprivileged socket is gated by a sysctl. If PingerPlot reports the
 backend unavailable, it will name this:
@@ -328,6 +355,18 @@ registered unless you run that command, and one command removes it.
 > Administrator at your next logon. `-InstallAutostart` checks for this and warns
 > you, but doesn't block you. If you don't need persistence, prefer the one-off
 > **(Admin)** launch below.
+>
+> What it checks is what runs. The task registers the actual interpreter the
+> `py` launcher resolves to — not the launcher, whose choice comes from per-user
+> registry keys and `py.ini` that anything running as you can change — and
+> checks that interpreter, its standard library and the program folder. Every
+> elevated launch runs Python with `-E -s`, so a per-user `PYTHONPATH` and the
+> `.pth` files in your user site-packages (both writable without elevation,
+> both executed at start-up) are ignored. One residual: the elevated app still
+> reads its settings, including the probe-log path, from
+> `%APPDATA%\PingerPlot\settings.json`, which you can write without elevation.
+> ICMP mode needs no elevation at all; only run elevated if you need TCP/UDP
+> traceroute.
 
 For a one-off elevated launch instead, use the **PingerPlot (Admin)** shortcut,
 `Setup.cmd` → option 2, or `.\launch.ps1 -Elevated` (UAC prompts once).
@@ -359,15 +398,22 @@ entry may override any default:
 ```
 
 Relative `log_path`s resolve next to the config file (so it works regardless of
-the working directory), and the log directory is created if missing. To run it
-at logon/boot under **Task Scheduler**, point a task at:
+the working directory), and the log directory is created if missing. A
+`log_path` in `defaults` would put every target on one file; when several
+targets resolve to the same path, each gets its own `<name>_<target>.csv`
+instead (and the runner says so). To run it at logon/boot under **Task
+Scheduler**, point a task at:
 
 ```
 pythonw.exe -m pingerplot.headless C:\path\to\monitor.json
 ```
 
-(or `python.exe` if you want the periodic status lines in a redirected log).
-`pip install .` also registers a `pingerplot-headless` console script.
+(or `python.exe` with its output redirected to a file, if you want a record).
+Besides the periodic status lines, the runner prints every event as it happens —
+alert raised and cleared, route changes, and warnings such as a probe log that
+could not be opened or a webhook that was not delivered — which `pythonw.exe`
+has nowhere to send. `pip install .` also registers a `pingerplot-headless`
+console script.
 
 A target whose name doesn't resolve at start-up — the normal case for a task
 that runs at boot, before DNS is up — is **restarted automatically**, with the
