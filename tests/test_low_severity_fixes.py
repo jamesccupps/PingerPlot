@@ -149,8 +149,8 @@ def test_the_geo_response_is_read_with_a_bound(monkeypatch):
 
 
 def test_an_oversized_body_does_not_become_a_result(monkeypatch):
-    """Truncated JSON does not parse, so the cap degrades to 'no data' rather
-    than to a partly-decoded object."""
+    """Truncated JSON does not parse, so the cap degrades to a failed lookup
+    (counted, retried later) rather than to a partly-decoded object."""
     payload = b'{"success": true, "latitude": 1.0, "longitude": 2.0, "pad": "'
     payload += b"x" * (geoip._MAX_BODY * 2) + b'"}'
 
@@ -160,7 +160,8 @@ def test_an_oversized_body_does_not_become_a_result(monkeypatch):
         def read(self, n=None): return payload[:n] if n else payload
 
     monkeypatch.setattr(geoip.urllib.request, "urlopen", lambda req, timeout=0: _Resp())
-    assert geoip.GeoResolver()._lookup("8.8.8.8") is None
+    with pytest.raises(geoip.LookupFailed):
+        geoip.GeoResolver()._lookup("8.8.8.8")
 
 
 def test_the_cap_is_generous_enough_for_a_real_reply():

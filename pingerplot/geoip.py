@@ -12,12 +12,20 @@ import ipaddress
 import json
 import queue
 import threading
+import time
 import urllib.request
 from dataclasses import dataclass
 
 _URL = "https://ipwho.is/{ip}?fields=success,latitude,longitude,city,region,country,connection"
 _MIN_INTERVAL = 0.8   # seconds between requests (be polite to the free API)
 _MAX_BODY = 64 * 1024  # a location object is ~300 bytes; anything near this is wrong
+_RETRY_S = 60.0       # after a failed lookup, wait this long before asking again
+
+
+class LookupFailed(Exception):
+    """The service could not be asked (offline, timeout, DNS, HTTP error, a
+    captive portal's HTML). Says nothing about the address, so it is retried
+    rather than remembered as "no location"."""
 
 
 @dataclass(slots=True)
@@ -45,6 +53,7 @@ class GeoResolver:
         self.failures = 0                            # lookups that raised, not just missed
         self._q: queue.Queue[str] = queue.Queue()
         self._seen: set[str] = set()
+        self._retry_at: dict[str, float] = {}        # ip -> monotonic time it may be retried
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -60,9 +69,12 @@ class GeoResolver:
         self._stop.set()
 
     def request(self, ip: str | None) -> None:
-        if not ip or ip in self._seen:
+        if not ip:
             return
-        self._seen.add(ip)
+        with self._lock:
+            if ip in self._seen or self._retry_at.get(ip, 0.0) > time.monotonic():
+                return
+            self._seen.add(ip)
         if not _is_public(ip):
             with self._lock:
                 self.cache[ip] = None
@@ -92,18 +104,32 @@ class GeoResolver:
                 ip = self._q.get(timeout=0.5)
             except queue.Empty:
                 continue
-            try:
-                info = self._lookup(ip)
-            except Exception:
-                # This thread is started once and never restarted, so anything
-                # that escapes _lookup ends geolocation for the rest of the
-                # session -- silently, because nothing is watching it. One
-                # malformed reply from a third party must not cost the feature.
-                info = None
-                self.failures += 1
-            with self._lock:
-                self.cache[ip] = info
+            self._process(ip)
             self._stop.wait(_MIN_INTERVAL)
+
+    def _process(self, ip: str) -> None:
+        try:
+            info = self._lookup(ip)
+        except LookupFailed:
+            # Not an answer about this address. Caching it as "no location"
+            # left every hop looked up while offline blank until restart, with
+            # the failure counter still at 0. Count it, and let a later redraw
+            # ask again once the back-off has passed.
+            with self._lock:
+                self.failures += 1
+                self._seen.discard(ip)
+                self._retry_at[ip] = time.monotonic() + _RETRY_S
+            return
+        except Exception:
+            # This thread is started once and never restarted, so anything
+            # that escapes _lookup ends geolocation for the rest of the
+            # session -- silently, because nothing is watching it. One
+            # malformed reply from a third party must not cost the feature.
+            info = None
+            with self._lock:
+                self.failures += 1
+        with self._lock:
+            self.cache[ip] = info
 
     def _lookup(self, ip: str) -> GeoInfo | None:
         try:
@@ -115,8 +141,11 @@ class GeoResolver:
                 # rather than total transfer, so a slow-drip large body would
                 # otherwise be read in full and then handed to json.loads.
                 data = json.loads(resp.read(_MAX_BODY).decode("utf-8", "replace"))
-        except (OSError, ValueError):
-            return None
+        except (OSError, ValueError) as exc:
+            # OSError covers URLError, HTTPError (a 429 included) and timeouts;
+            # ValueError is a body that is not JSON at all, e.g. a captive
+            # portal's login page.
+            raise LookupFailed(str(exc)) from exc
         # json.loads returns whatever the body held: a captive portal, a proxy
         # error page or a CDN interstitial can all be valid JSON that is not an
         # object. Only an object has the fields below.

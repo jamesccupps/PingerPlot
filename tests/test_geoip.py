@@ -3,6 +3,8 @@ dedup/caching. urlopen is mocked — no real network."""
 import json
 import time
 
+import pytest
+
 from pingerplot import geoip
 
 
@@ -54,11 +56,37 @@ def test_lookup_parses_and_caches(monkeypatch):
     assert len(seen) == 1 and "8.8.8.8" in seen[0]
 
 
-def test_lookup_swallows_network_error(monkeypatch):
+def test_a_network_error_is_a_failure_not_an_answer(monkeypatch):
+    """Offline, a timeout, DNS, a 429: none of these say anything about the
+    address. They used to be cached as "no location" -- so a Map tab opened
+    while offline stayed blank until restart -- and the failure counter, which
+    only counted unexpected exceptions, stayed at 0."""
     def boom(req, timeout=0):
         raise OSError("network down")
     monkeypatch.setattr(geoip.urllib.request, "urlopen", boom)
-    assert geoip.GeoResolver()._lookup("8.8.8.8") is None
+    r = geoip.GeoResolver()
+    with pytest.raises(geoip.LookupFailed):
+        r._lookup("8.8.8.8")
+
+    r.request("8.8.8.8")
+    r._process(r._q.get_nowait())
+    assert r.failures == 1
+    assert "8.8.8.8" not in r.cache, "a failed lookup was remembered as no-location"
+
+    r.request("8.8.8.8")
+    assert r._q.empty(), "retried inside the back-off window"
+    r._retry_at["8.8.8.8"] = 0.0                       # window elapsed
+    _body(monkeypatch, json.dumps({"success": True, "latitude": 1.0,
+                                   "longitude": 2.0}).encode())
+    r.request("8.8.8.8")
+    r._process(r._q.get_nowait())
+    assert r.get("8.8.8.8") is not None, "the retry never happened"
+
+
+def test_a_captive_portal_page_is_retried_too(monkeypatch):
+    _body(monkeypatch, b"<html>Please log in to the guest Wi-Fi</html>")
+    with pytest.raises(geoip.LookupFailed):
+        geoip.GeoResolver()._lookup("8.8.8.8")
 
 
 def test_lookup_rejects_unsuccessful_body(monkeypatch):
