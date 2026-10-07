@@ -6,10 +6,12 @@ already decoded. POSIX has no such call, so this module assembles the same
 thing from two different mechanisms:
 
 * **The probe socket** is ``SOCK_DGRAM``/``IPPROTO_ICMP``, not ``SOCK_RAW``.
-  That is the whole reason no root is needed — the kernel owns the identifier
-  and the checksum and will only deliver replies to echoes *you* sent, so it
-  can safely hand the socket to an unprivileged process. Linux gates it on
-  ``net.ipv4.ping_group_range``; macOS allows it outright.
+  That is the whole reason no root is needed — on Linux the kernel owns the
+  identifier and the checksum and will only deliver replies to echoes *you*
+  sent, so it can safely hand the socket to an unprivileged process. Linux
+  gates it on ``net.ipv4.ping_group_range``; macOS allows it outright but
+  makes no such delivery guarantee, so every reply is matched to its probe
+  (:func:`reply_is_ours`) rather than trusted.
 
 * **The router's TTL-exceeded** does not arrive on that socket on Linux,
   because it is an *error* relating to the datagram we sent, not a message
@@ -31,11 +33,13 @@ Linux box before trusting a trace from it.
 from __future__ import annotations
 
 import errno
+import itertools
 import os
 import select
 import socket
 import struct
 import sys
+import threading
 import time
 from typing import Optional, Tuple
 
@@ -73,6 +77,21 @@ _UNREACH_STATUS = {
     2: IP_DEST_PROT_UNREACHABLE,
     3: IP_DEST_PORT_UNREACHABLE,
 }
+
+
+# Sequence numbers are the one thing a reply provably echoes back unchanged,
+# so each probe gets its own. Random start: another PingerPlot process on a
+# macOS box shares the ICMP namespace with this one.
+_seq_counter = itertools.count(int.from_bytes(os.urandom(2), "big"))
+_seq_lock = threading.Lock()
+
+
+def next_seq() -> int:
+    """A sequence number no other in-flight probe from this process holds. It
+    used to be the millisecond clock, which every probe submitted in the same
+    millisecond -- most of a 30-hop round -- shared."""
+    with _seq_lock:
+        return next(_seq_counter) & 0xFFFF
 
 
 def checksum(data: bytes) -> int:
@@ -126,6 +145,42 @@ def parse_icmp(data: bytes) -> Optional[Tuple[int, int, bytes]]:
     if len(body) < 8:
         return None
     return body[0], body[1], body[8:]
+
+
+def reply_is_ours(data: bytes, dest_ip: str, ident: int, seq: int,
+                  check_ident: bool) -> bool:
+    """Whether a message read from the probe socket answers *this* probe.
+
+    Linux already guarantees it: a ping socket only receives replies carrying
+    its kernel-assigned identifier, and router errors go to its own error
+    queue. macOS does not. Its ICMP datagram socket behaves like a raw one, so
+    with a round's probes in flight each could take another's reply -- or a
+    TTL-exceeded meant for another probe -- as its own.
+
+    * Echo reply: our sequence number, and our identifier when the kernel has
+      not rewritten it (``check_ident``; Linux rewrites it, so not there).
+    * TTL exceeded / unreachable: the quoted original must be an ICMP echo to
+      ``dest_ip`` with our sequence number. The quoted identifier is not
+      checked, because a NAT may rewrite it on the way back.
+    """
+    body = strip_ip_header(data)
+    if len(body) < 8:
+        return False
+    itype = body[0]
+    if itype == ICMP_ECHO_REPLY:
+        rid, rseq = struct.unpack_from("!HH", body, 4)
+        return rseq == seq and (not check_ident or rid == ident)
+    if itype in (ICMP_TIME_EXCEEDED, ICMP_DEST_UNREACH):
+        quoted = body[8:]
+        if len(quoted) < 20 or quoted[0] >> 4 != 4 or quoted[9] != socket.IPPROTO_ICMP:
+            return False
+        inner = quoted[(quoted[0] & 0x0F) * 4:]
+        if len(inner) < 8 or inner[0] != ICMP_ECHO_REQUEST:
+            return False
+        if socket.inet_ntoa(quoted[16:20]) != dest_ip:
+            return False
+        return struct.unpack_from("!H", inner, 6)[0] == seq
+    return False
 
 
 def parse_errqueue(cmsg_data: bytes) -> Optional[Tuple[int, int, Optional[str]]]:
@@ -212,7 +267,7 @@ def ping(
 
     timeout = max(0.001, timeout_ms / 1000.0)
     ident = os.getpid() & 0xFFFF
-    seq = int(time.time() * 1000) & 0xFFFF
+    seq = next_seq()
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_ICMP)
     try:
         sock.setsockopt(socket.IPPROTO_IP, socket.IP_TTL, max(1, min(int(ttl), 255)))
@@ -264,7 +319,7 @@ def ping(
             except OSError:
                 return PingResult(IP_REQ_TIMED_OUT, None, None, False)
 
-            reply = _read_reply(sock, dest_ip, start)
+            reply = _read_reply(sock, dest_ip, start, ident, seq)
             if reply is not None:
                 return reply
     finally:
@@ -306,7 +361,8 @@ def _read_errqueue(sock: socket.socket, start: float) -> Optional[PingResult]:
     return None
 
 
-def _read_reply(sock: socket.socket, dest_ip: str, start: float) -> Optional[PingResult]:
+def _read_reply(sock: socket.socket, dest_ip: str, start: float,
+                ident: int, seq: int) -> Optional[PingResult]:
     try:
         data, addr = sock.recvfrom(2048)
     except (BlockingIOError, InterruptedError):
@@ -316,13 +372,12 @@ def _read_reply(sock: socket.socket, dest_ip: str, start: float) -> Optional[Pin
     parsed = parse_icmp(data)
     if parsed is None:
         return None
+    if not reply_is_ours(data, dest_ip, ident, seq, check_ident=not _LINUX):
+        return None             # another probe's reply; keep waiting for ours
     icmp_type, icmp_code, _rest = parsed
     responder = addr[0] if addr else None
     rtt = (time.perf_counter() - start) * 1000.0
     if icmp_type == ICMP_ECHO_REPLY:
-        # The kernel rewrote our identifier, so it cannot be matched on. The
-        # socket is connectionless but the kernel only delivers replies to
-        # echoes this socket sent, which is the guarantee being relied on.
         return PingResult(IP_SUCCESS, rtt, responder or dest_ip, True)
     if icmp_type == ICMP_TIME_EXCEEDED:
         # The macOS path: the error arrives as an ordinary readable message
