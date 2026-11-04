@@ -23,9 +23,10 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Dict, List, Optional
 
 from . import __version__, appicon, compare as cmpmod, geoip, icmp, settings
-from . import theme as themes, tkthreads, tray as traymod, winplatform
+from . import theme as themes, tkthreads, tray as traymod, updater, winplatform
 from .gui_charts import BAD_MS, WARN_MS, Ink, draw_graph, draw_map, draw_timeline, fmt_ms, row_tag
 from .gui_settings import REPO_URL, EditTargetDialog, OptionVars, SettingsPage
+from .gui_updates import Updates
 from .gui_widgets import Nav, ScrollFrame, TargetCard
 from .model import HopView, csv_safe, draw_version, mos, mos_label
 from . import monitor
@@ -63,7 +64,8 @@ def _csv_num(v: Optional[float]) -> str:
 
 
 class App:
-    def __init__(self, root: tk.Tk, use_tray: bool = False, start_minimized: bool = False) -> None:
+    def __init__(self, root: tk.Tk, use_tray: bool = False, start_minimized: bool = False,
+                 resume: bool = False) -> None:
         tkthreads.install()     # before the first Variable or image: see tkthreads
         self.root = root
         self.tray: Optional[traymod.TrayIcon] = None
@@ -115,6 +117,7 @@ class App:
         self.interval_var = self.defaults["interval"]
         self.logpath_var = self.defaults["log_path"]
         self.alert_loss_var = self.defaults["alert_loss_pct"]
+        self.updates = Updates(self)
 
         self._build_header()
         self._build_pages()
@@ -136,9 +139,13 @@ class App:
             winplatform.refresh_autostart()     # the folder moved: point the Run key here
         if start_minimized and self.tray is not None:
             self.root.withdraw()                # Start with Windows: straight to the tray
-        self._restore_targets()          # optionally resume the last session's targets
+        # The last session's targets: when the setting says so, and always
+        # after an update, which shouldn't stop anything being monitored.
+        self._restore_targets(force=resume)
         self._refresh_once()
         self.root.after(REFRESH_MS, self._refresh)
+        self.root.after(50, self._drain_ui)     # work posted from other threads
+        self.updates.start()
 
     @property
     def monitor(self) -> Monitor:
@@ -262,6 +269,7 @@ class App:
         self.nav.pack(side="left")
         self.nav.select("targets")
         ttk.Frame(self.root, style="Divider.TFrame", height=1).pack(side="top", fill="x")
+        self.updates.build_bar_holder(self.root)
 
     def _build_pages(self) -> None:
         self.pages = ttk.Frame(self.root)
@@ -509,7 +517,6 @@ class App:
             on_theme=lambda: self._post(self._on_system_theme))
         if t.start():
             self.tray = t
-            self.root.after(50, self._drain_ui)
 
     def _post(self, fn) -> None:
         """Run ``fn`` on Tk's thread. The tray's callbacks come from its own
@@ -536,6 +543,7 @@ class App:
         if winplatform.IS_WINDOWS:
             items.append(M("Start with Windows", lambda: self._post(self._tray_toggle_autostart),
                            checked=winplatform.autostart_enabled()))
+        items += self.updates.tray_items(M)
         items += [M(), M("Quit", lambda: self._post(self._quit))]
         return items
 
@@ -741,6 +749,12 @@ class App:
         finally:
             menu.grab_release()
 
+    def _check_for_updates(self) -> None:
+        """From the ⋯ menu: check, on the Settings page, where the answer
+        shows."""
+        self.nav.select("settings", notify=True)
+        self.updates.check()
+
     def _header_menu(self, button) -> None:
         m = self._menu(self.root)
         m.add_command(label="Export hops as CSV…", command=self._export)
@@ -748,6 +762,7 @@ class App:
         m.add_command(label="Open a saved session…", command=self._load_session)
         m.add_command(label="Compare with a saved session…", command=self._compare_with_baseline)
         m.add_separator()
+        m.add_command(label="Check for updates", command=self._check_for_updates)
         m.add_command(label="Report a problem…", command=lambda: webbrowser.open(self.report_url()))
         m.add_command(label="Project page", command=lambda: webbrowser.open(REPO_URL))
         m.add_separator()
@@ -842,6 +857,7 @@ class App:
                          (self.notify_var, "notify")):
             if isinstance(s.get(key), bool):
                 var.set(s[key])
+        self.updates.load(s)
 
     def _save_settings(self) -> None:
         """Persist the defaults, app options and the target list."""
@@ -851,6 +867,7 @@ class App:
                 "notify": bool(self.notify_var.get()),
                 "told_hidden": bool(self._settings.get("told_hidden", False))}
         self.defaults.save_settings(data)
+        self.updates.save(data)
         # Live targets only. A loaded session lives in the same dict so the
         # detail views can render it, but its key is "<name> (loaded)" -- not
         # a hostname. Saving it meant _restore_targets called _start() on it
@@ -862,10 +879,10 @@ class App:
                                   if n not in self._loaded}
         settings.save(data)
 
-    def _restore_targets(self) -> None:
-        """If enabled, re-add and start the last session's targets, each with
-        the options it was running with."""
-        if not self.resume_var.get():
+    def _restore_targets(self, force: bool = False) -> None:
+        """If enabled (or ``force``d), re-add and start the last session's
+        targets, each with the options it was running with."""
+        if not (force or self.resume_var.get()):
             return
         saved = self._settings.get("target_options")
         saved = saved if isinstance(saved, dict) else {}
@@ -1335,7 +1352,13 @@ def _enable_windows_dpi_awareness() -> None:
 
 
 def main() -> None:
-    if "--version" in sys.argv[1:]:
+    argv = sys.argv[1:]
+    if "--finish-update" in argv:
+        # The staged copy of a portable update: swap it into the program
+        # folder, start it there, exit. No window, no settings of its own.
+        i = argv.index("--finish-update")
+        raise SystemExit(updater.finish_update(argv[i + 1], argv[i + 2]))
+    if "--version" in argv:
         # Exits before Tk is touched, which makes this the one way to run the
         # windowed build without a display -- and therefore the way CI proves a
         # frozen binary's import graph is intact. gui imports geoip imports
@@ -1344,7 +1367,7 @@ def main() -> None:
         # hypothetical: it is exactly how the first build of this was broken.
         print(f"PingerPlot {__version__}")
         return
-    if "--self-test" in sys.argv[1:]:
+    if "--self-test" in argv:
         # Before the single-instance check: a copy already running on the
         # machine mustn't stop a build being tested.
         from . import selfcheck
@@ -1357,8 +1380,18 @@ def main() -> None:
     instance = winplatform.SingleInstance()
     if instance.already_running and instance.signal_existing():
         return
+    updated, failed = "--updated" in argv, "--update-failed" in argv
+    if updated or failed:
+        updater.cleanup_after_update()
+        updater.ulog(f"update: {__version__} started" + (" after a failed update" if failed else ""))
     root = tk.Tk()
-    App(root, use_tray=True, start_minimized="--minimized" in sys.argv[1:])
+    app = App(root, use_tray=True, start_minimized="--minimized" in argv, resume=updated or failed)
+    if updated:
+        app._note(f"Updated to {__version__}", seconds=30)
+    if failed:
+        root.after(800, lambda: messagebox.showerror(
+            "PingerPlot", "The update couldn't be installed, so this version was started again. "
+                          f"Details are in {settings.config_dir() / updater.LOG_NAME}.", parent=root))
     root.mainloop()
     instance.release()
 

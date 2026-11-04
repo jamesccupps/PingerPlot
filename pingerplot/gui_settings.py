@@ -246,6 +246,7 @@ class SettingsPage(ScrollFrame):
         setting_row(card, look, "Resume targets when the app starts",
                     "Each with the settings it was running with.", _switch(app.resume_var))
         app.build_app_settings(card)
+        app.updates.build_section(body)
 
         card = section(body, look, "About")
 
