@@ -179,6 +179,44 @@ def draw_timeline(c, ink: Ink, views: List[HopView], data: Dict[int, List[Sample
     return f"All hops on one scale, 0 to {g_max:.0f} ms  ·  last {span:.0f} s  ·  {n} hops"
 
 
+def _ttl_list(ttls: List[int]) -> str:
+    """[5] -> "5"; [5, 6] -> "5–6"; [2, 5] -> "2, 5"."""
+    if len(ttls) > 1 and ttls == list(range(ttls[0], ttls[-1] + 1)):
+        return f"{ttls[0]}–{ttls[-1]}"
+    return ", ".join(str(t) for t in ttls)
+
+
+def _label_places(c, ink: Ink, located, gap: int, rad: int = 0) -> None:
+    """One label per place, in path order: hops at the same spot share it
+    ("5–6. Denver"), and a label that would cover another label or a dot
+    tries the dot's left, then above and below, and is left off if all four
+    are taken. At world scale a path within one region is a few pixels
+    across, and one label per hop piled up into an unreadable smear."""
+    places: List[list] = []                 # [x, y, ttls, name]
+    for v, g, x, y in located:
+        name = g.city or g.country or ""
+        for p in places:
+            if abs(p[0] - x) < 1 and abs(p[1] - y) < 1 and p[3] == name:
+                p[2].append(v.ttl)
+                break
+        else:
+            places.append([x, y, [v.ttl], name])
+    taken: List[tuple] = [(x - rad, y - rad, x + rad, y + rad) for x, y, _t, _n in places]
+    for x, y, ttls, name in places:
+        text = f"{_ttl_list(ttls)}. {name}".strip()
+        for anchor, dx, dy in (("w", gap, 0), ("e", -gap, 0), ("s", 0, -gap), ("n", 0, gap)):
+            item = c.create_text(x + dx, y + dy, anchor=anchor, text=text,
+                                 fill=ink.col["title"], font=ink.font(-2))
+            box = c.bbox(item)
+            if box and any(box[0] < b[2] and b[0] < box[2] and box[1] < b[3] and b[1] < box[3]
+                           for b in taken):
+                c.delete(item)
+                continue
+            if box:
+                taken.append(box)
+            break
+
+
 def draw_map(c, ink: Ink, views: List[HopView], geo) -> str:
     """Located public hops on the coastline backdrop, joined in path order.
     Asks ``geo`` for any it hasn't looked up. Returns the header caption."""
@@ -216,8 +254,7 @@ def draw_map(c, ink: Ink, views: List[HopView], geo) -> str:
     for v, g, x, y in located:
         c.create_oval(x - rad, y - rad, x + rad, y + rad,
                       fill=ink.hop_fg(v, v.ttl == last_ttl), outline=ink.col["graph_bg"])
-        c.create_text(x + rad + S(3), y, anchor="w", text=f"{v.ttl}. {g.city or g.country}".strip(),
-                      fill=ink.col["title"], font=ink.font(-2))
+    _label_places(c, ink, located, rad + S(3), rad)
 
     if not views:
         return "No data yet: start a target to map its hops."
