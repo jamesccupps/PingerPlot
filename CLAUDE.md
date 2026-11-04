@@ -1,7 +1,9 @@
 # PingerPlot - notes for Claude Code
 
 A continuous-traceroute network path monitor (MTR-style), Python standard library only: a Tkinter window
-(`gui.py`), a headless runner for Task Scheduler (`headless.py`), and one engine under both (`monitor.py`). Every
+(`gui.py`), a headless runner for Task Scheduler (`headless.py`), and one engine under both (`monitor.py`). Shipped
+for Windows as a per-user installer and a portable zip (PyInstaller onedir + Inno Setup), with signed in-app
+updates. Every
 round re-probes the whole path, so per-hop loss, latency, jitter and MOS accumulate over time and route changes are
 seen live. ICMP needs no administrator rights on any platform (Windows: the IP Helper API; Linux/macOS: unprivileged
 `SOCK_DGRAM` ICMP sockets); TCP/UDP traceroute needs Administrator on Windows (a raw `SIO_RCVALL` capture).
@@ -19,9 +21,11 @@ python -m pytest                       # ~30 s; Windows, Linux (xvfb-run -a for 
 python main.py                         # the app (real %APPDATA%\PingerPlot settings)
 python -m pingerplot.headless cfg.json # headless; --init writes a starter config, --report N runs N rounds and exits
 python -m pingerplot.selftest 8.8.8.8  # a quick trace in the console
+python scripts/demo.py                 # the real app against a pretend network; --shots DIR takes the pictures
 python -m pip install --require-hashes --only-binary=:all: -r packaging/requirements-build.txt
-python packaging/make_icon.py build/pingerplot.ico
-python -m PyInstaller --noconfirm --clean packaging/pingerplot.spec    # dist\PingerPlot.exe, pingerplot-headless.exe
+python packaging/build_windows.py      # dist\: PingerPlot\ (both exes), the zip, Setup.exe (Inno Setup 6), latest.json
+pwsh packaging/test_portable.ps1       # unzip, --self-test, a headless loopback probe
+pwsh packaging/test_update.ps1 -Kinds portable   # a copy updates itself to dist\ (installed: CI only, it replaces yours)
 ```
 
 Run the suite after any change. On the development PC `python` is 3.14 (`C:\Program Files\Python314`, with user
@@ -44,9 +48,20 @@ site-packages enabled; `py -3.12` matches the release build). Linux needs
   `reply_is_ours()` matches replies to probes; `next_seq()`.
 - `pingerplot/tcpudp.py`: TCP/UDP probes. `probe()` (one), `probe_path()` (a round in parallel on one capture
   socket), `_parse()`/`_match()` (ICMP errors), `source_problem()`, strict source binding.
-- `pingerplot/gui.py`: `App`. Toolbar + Engine dialog build start() options (`_toolbar_options()`), `_start(target,
-  options)`; a Targets grid; tabs Overview (hop table + graph), Timeline, Events, Map; settings in
-  `settings.py`; a 700 ms refresh timer that only reads snapshots.
+- `pingerplot/gui.py`: `App`. Header (status, the ⋯ menu), Targets / Settings pages; target cards on the left; the
+  detail on the right (MOS, the red alert banner, Hops / Timeline / Map / Events). `_start(target, options)`: a new
+  target gets the Settings page's defaults (`_default_options()`), a stopped one its own options. A 700 ms refresh
+  timer only reads snapshots. `_post()` queues work from other threads; `_drain_ui` runs it every 50 ms.
+- `pingerplot/gui_settings.py` (`FIELDS`, `OptionVars`, the option form, `SettingsPage`, `EditTargetDialog`),
+  `gui_widgets.py` (`ScrollFrame`, `Nav`, `TargetCard`, `setting_row`, `section`), `gui_charts.py` (drawing the
+  graph, timeline and map onto canvases), `gui_updates.py` (`Updates`: checks, the bar, the Settings card).
+- `pingerplot/theme.py` + `gfx.py`: the house look shared with UniFi Stock Watcher. Light/dark palettes, ttk elements
+  drawn as signed-distance rasters into 9-slice `PhotoImage`s, Segoe Fluent icons with fallbacks. Every ttk style
+  comes from `Theme`; `legacy_colours()` maps the palette to the keys the drawing code reads (`gui.COLORS`).
+- `pingerplot/winplatform.py`: DPI awareness, the AppUserModelID, dark title bars, the Run key (Start with Windows,
+  `--minimized`), `SingleInstance` (a named mutex; a second launch shows the first through the tray window).
+  `tray.py`: the notification-area icon on its own thread (`Shell_NotifyIconW`). `tkthreads.py`: see below.
+- `pingerplot/updater.py` + `ed25519.py` + `update_key.py`: signed updates (below). `selfcheck.py`: `--self-test`.
 - `pingerplot/headless.py`: config → `Target`s, `supervise()` (restart with back-off), `print_events()`,
   `print_status()`, `run_report()`/`format_report()`, `print_comparison()`, `shutdown_all()`.
 - `pingerplot/compare.py`: baseline diff (per TTL; a changed address is *rerouted*, never a latency delta).
@@ -54,9 +69,16 @@ site-packages enabled; `py -3.12` matches the release build). Linux needs
 - `pingerplot/settings.py`, `appicon.py` (the icon, drawn), `worldmap.py` (Natural Earth coastlines as data),
   `selftest.py`.
 - `launch.ps1` (+ `Setup.cmd`, `PingerPlot.vbs`): launch, elevate, shortcuts, the elevated logon task.
-- `packaging/`: `pingerplot.spec`, `make_icon.py`, `headless_entry.py`, `requirements-build.txt` (hash-pinned).
-- Data (never in the repo): `%APPDATA%\PingerPlot\settings.json` (XDG config dir elsewhere); probe CSVs and
-  sessions wherever the user puts them.
+- `packaging/`: `pingerplot.spec` (onedir: `PingerPlot.exe` and `pingerplot-headless.exe` share `_internal`),
+  `build_windows.py`, `PingerPlot.iss` (AppId `{64B8717F-...}` must never change), `signing.py` (the release key and
+  `latest.json`), `make_icon.py`, `headless_entry.py`, `requirements-build.txt` (hash-pinned), and the tests CI runs
+  on the built files: `test_portable.ps1`, `test_installer.ps1`, `test_update.ps1` (+ `update_test_helper.py`).
+- `scripts/demo.py`: the real engine and window against simulated paths (RFC 5737 addresses); the README and site
+  pictures come from `--shots site/images`. `scripts/make_social_preview.py` (Pillow, dev only). `site/`: the
+  GitHub Pages page (`.github/workflows/pages.yml`).
+- Data (never in the repo): `%APPDATA%\PingerPlot\` (`settings.json`, `update.log`; XDG config dir elsewhere), or
+  beside the exe for a portable copy (`portable.txt` there), or `PINGERPLOT_DATA_DIR`. Probe CSVs and sessions
+  wherever the user puts them.
 
 ## Design decisions and gotchas
 
@@ -105,6 +127,26 @@ site-packages enabled; `py -3.12` matches the release build). Linux needs
   runs Python with `-E -s` (not `-I`: that drops the script's folder from `sys.path`). Known residual: the elevated
   app reads the user-writable `settings.json`.
 
+- **Tk objects die on the main thread.** A `tk.Variable` or `PhotoImage` garbage-collected on a worker thread calls
+  into Tcl from there, which waits for the main loop (68 s per App in the suite). `tkthreads.install()` (first thing
+  in `App.__init__`) queues such finalisers; `drain()` runs them on the main thread.
+- **One copy at a time**: `SingleInstance` before Tk. `--self-test` and `--version` run before it, so a running copy
+  never stops a build being tested. `--finish-update` runs before anything else.
+- **Signed updates** (UniFi Stock Watcher's scheme): each release has `latest.json`, an Ed25519-signed payload of the
+  version and the installer's and zip's size and SHA-256. `updater.check()` trusts it only under `update_key.py`'s
+  public key; `download()` fetches from the version's own tag and deletes anything that doesn't hash; `apply()` runs
+  Setup `/VERYSILENT /relaunch=1` (installed: `unins000.exe` beside the exe) or starts the staged copy with
+  `--finish-update <dir> <pid>`, which waits, swaps program files in (`<name>.old` first, rolled back on failure,
+  `portable.txt` never added to a non-portable copy) and starts `--updated`. The asset names, the manifest shape and
+  the `vX.Y.Z` tag can never change: every installed copy reads them. A bad release is fixed by a higher one.
+  `--updated` resumes the saved targets even with resume off. `cleanup_after_update()` removes only
+  `PingerPlot-update-X.Y.Z` folders: `Path.glob` is case-insensitive on Windows and once deleted the update test's
+  own folder.
+- **The signing key** is `%USERPROFILE%\.pingerplot\update-signing-key.pem` (PKCS#8, what OpenSSL reads) on the
+  maintainer's PC and the `UPDATE_SIGNING_KEY` secret; never in the repo. `packaging/signing.py` signs with
+  `ed25519.py` (standard library; checked against RFC 8032 and `cryptography`). Lose it and installed copies need
+  one manual install of a build with a new public key.
+
 ## Testing
 
 - `tests/conftest.py` puts `tests/` on `sys.path` and imports `gui_harness` (which imports tkinter optionally: a
@@ -115,25 +157,31 @@ site-packages enabled; `py -3.12` matches the release build). Linux needs
 - Live probes go to loopback only, plus one TTL-1 probe that accepts any answer. `test_ci_coverage_gate.py` fails the
   CI Linux jobs if the live POSIX tests would skip, so a green run means they ran against a real kernel.
 - `test_packaging.py` enforces the workflow rules: no `${{ }}` inside `run:`, actions pinned by SHA with a version
-  comment, only the publish job can write, checkouts without credentials, the build lock hashed.
+  comment, only the publish job can write, only the sign job reads a secret (and installs nothing), checkouts without
+  credentials, the build lock hashed, the updater and the build agree on asset names.
+- GUI tests that need worker threads drain `app._ui_jobs` themselves (`tests/test_gui_updates.py`).
+- CI's `package` job builds the installer and zip on every push and runs the three PowerShell tests against them.
 
 ## Releasing
 
 1. Bump `__version__` in `pingerplot/__init__.py` and `version` in `pyproject.toml`; write the CHANGELOG entry and
-   `release-notes/vX.Y.Z.md`.
-2. `python -m pytest`, commit, push `main`, wait for CI.
-3. An annotated tag whose message is the release text (the workflow uses `--notes-from-tag`):
-   `git tag -a vX.Y.Z -F <notes>` and `git push origin vX.Y.Z`.
+   `release-notes/vX.Y.Z.md` (the release text).
+2. `python -m pytest`, commit, push `main`, wait for CI (including the `package` job).
+3. `git tag -a vX.Y.Z -m "PingerPlot X.Y.Z"` and `git push origin vX.Y.Z`.
 
-`release.yml`: the read-only `windows` job checks the tag, installs `packaging/requirements-build.txt` with
-`--require-hashes`, runs the suite, builds both executables, smoke-tests them (the GUI's `--version` exits before Tk;
-the headless one probes loopback) and uploads them with `SHA256SUMS.txt`; the `publish` job (the only one with
-`contents: write`, running only SHA-pinned actions and `gh`) creates the release from the tag and attaches the files.
+`release.yml`: the read-only `windows` job checks the tag and the version, installs the hash-pinned build lock, runs
+the suite, builds (`build_windows.py`), smoke-tests the GUI (`--version`), runs `test_portable.ps1`,
+`test_installer.ps1` and `test_update.ps1`, and uploads Setup.exe, the zip and `SHA256SUMS.txt`. The `sign` job holds
+`UPDATE_SIGNING_KEY`, installs nothing, signs `latest.json` with the runner's `python3 -I` and verifies it against the
+app's public key. The `publish` job (the only one with `contents: write`, running only SHA-pinned actions and `gh`)
+creates the release from `release-notes/<tag>.md` and uploads the files, `latest.json` last.
 Dependabot proposes newer action pins and lock entries monthly; check each lock hash against PyPI's published
 digests before taking it.
 
 ## Working on this repo from Claude Code
 
+- The repository's description, topics, the Pages source (GitHub Actions) and the social preview
+  (`site/images/social-preview.png`) are set by hand in Settings.
 - `gh` isn't installed. Read GitHub through the public API (`curl https://api.github.com/repos/jamesccupps/PingerPlot/...`);
   Actions job logs need a signed-in browser, so make CI failures visible through test results instead.
 - The repository's About text, topics and settings are edited in the built-in browser pane, where the user has signed

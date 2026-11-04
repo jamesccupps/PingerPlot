@@ -1,454 +1,262 @@
 # PingerPlot
 
+[![Latest release](https://img.shields.io/github/v/release/jamesccupps/PingerPlot?label=release)](https://github.com/jamesccupps/PingerPlot/releases/latest)
 [![CI](https://github.com/jamesccupps/PingerPlot/actions/workflows/ci.yml/badge.svg)](https://github.com/jamesccupps/PingerPlot/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-![Python](https://img.shields.io/badge/python-3.10%2B-blue)
-![Platform](https://img.shields.io/badge/platform-Windows-0078D6)
-![Linux/macOS](https://img.shields.io/badge/Linux%20%2F%20macOS-beta-yellow)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-A continuous-traceroute network path monitor (MTR-style): per-hop latency and
-packet-loss tracking with a live latency graph, multi-target summary, MOS scoring
-and MOS alerts, DSCP marking, baseline comparison, session save/load, a world map,
-and ICMP/TCP/UDP probe modes. Pure Python, **zero third-party dependencies**,
-dark-themed, HiDPI-aware. Free and Open Source.
+Shows you *where* along a network path a connection goes wrong. Like `mtr` or WinMTR, PingerPlot finds every
+router between you and a target and then keeps probing all of them, so loss, latency, jitter and a voice-quality
+score build up per hop over minutes or days. A problem that starts at your gateway, your ISP's first hop, a peering
+point or the destination shows up at that hop and every hop after it. It runs in the notification area, alerts you
+when the destination degrades, and needs no administrator rights for ICMP.
 
-Windows is the tested platform. The Linux ICMP backend runs live against a real
-kernel in CI on every push; macOS shares it but is untested on real hardware —
-see [Platform](#platform).
+**[⬇ Download for Windows](https://github.com/jamesccupps/PingerPlot/releases/latest/download/PingerPlot-Setup.exe)**
+(`PingerPlot-Setup.exe`, Windows 10 or 11, 64-bit) ·
+[Portable zip](https://github.com/jamesccupps/PingerPlot/releases/latest/download/PingerPlot-win64.zip) ·
+[All releases](https://github.com/jamesccupps/PingerPlot/releases) ·
+[Website](https://jamesccupps.github.io/PingerPlot/)
 
-![PingerPlot — dark theme, multi-target sidebar, hop table and latency graph](docs/screenshot.png)
+![PingerPlot in the dark theme: four targets on the left; the selected one is alerting, with its MOS, a red banner for loss and latency at the destination, a hop table where trouble starts at hop 4, and the destination's latency graph](site/images/hops-dark.png)
 
-## What it does
+<sub>Demo mode: simulated paths with documentation addresses.</sub>
 
-Like WinMTR or `mtr`, it discovers every router between you and a target,
-then re-probes the whole path on an interval. Each round is effectively a full
-traceroute, so you accumulate **min / avg / max / current latency, jitter, and
-packet loss for every hop over time** — which makes it obvious *where* along the
-path a problem lives (your LAN, your ISP's first hop, a peering point, or the
-destination).
+- **Every hop, all the time.** Each round is a full traceroute, so every hop gets current, average, best and worst
+  latency, jitter and loss over time, not a single snapshot.
+- **The path over time.** The Timeline draws every hop on one time axis: a latency step shows up as the row where
+  the bars get tall, and stays tall for every hop after it.
+- **Alerts that mean something.** Sustained loss, latency or a poor MOS at the *destination*, over a window you
+  choose, never a router in the middle that just deprioritises ICMP. A banner, a sound, a Windows notification and
+  an optional webhook (Slack, Teams, ntfy, Home Assistant…).
+- **Route changes, live.** A hop whose router changes, or a path that grows or shrinks, goes into the Events list.
+- **Many targets at once,** each with its own settings, each a card with its hop count, loss, latency and MOS.
+- **MOS**, the ITU-T E-model's 1 to 5 voice-quality score, for the destination: one number for "is this path good
+  enough for a call".
+- **ICMP, TCP and UDP probes**, DSCP marking (measure the path as voice or video traffic) and a fixed source address
+  on a multi-homed PC.
+- **Runs in the background.** Closing the window keeps every target monitored from the notification area; *Start
+  with Windows* puts it there when you sign in.
+- **Keeps a record.** Every probe to a size-capped CSV per target, sessions you can save, reopen and compare with
+  a later run, and a CSV export of the hop table.
+- **Signed updates.** It checks GitHub once a day and installs a new version with one click, only if the download
+  carries the release signature built into the app.
+- **A headless runner** for a server or Task Scheduler, with a one-shot report mode for tickets.
+- **Looks at home on Windows 11**, light or dark, following Windows, sharp at any display scale. Pure Python
+  standard library, no third-party dependencies.
 
-- **Route discovery** by walking the IP TTL upward and reading the
-  "TTL exceeded" replies (standard traceroute primitive).
-- **Continuous monitoring** of all hops, fanned out across a small thread pool
-  so each round takes ~one timeout, not the sum.
-- **Live hop table** — IP, reverse-DNS hostname, loss %, sent count,
-  current/avg/min/max latency, jitter. Rows colour amber/red on loss or high
-  latency.
-- **Single-hop latency graph** (Overview tab) for the selected hop (click a
-  row), with red ticks marking lost probes and a filled area for the trend.
-- **All-hops timeline** (Timeline tab) — every hop drawn as a stacked strip on
-  a shared time + latency scale, so a latency step shows up as the row where the
-  bars get tall. This is the full MTR-style path-over-time view.
-- **Continuous auto-retrace + route-change detection** — because every round is
-  a full traceroute, reroutes (a hop's address changing) and route length
-  grow/shrink are detected live and written to the Events tab.
-- **Sustained-degradation alerts** — a red banner + Windows beep + Event-log
-  entry when the **destination** shows sustained packet loss or high latency
-  over the last *N* probes. Evaluated on the destination only (the one hop whose
-  numbers aren't muddied by ICMP-deprioritising routers), and gated so a target
-  that simply blocks ICMP never false-alarms.
-- **ICMP / TCP / UDP probe modes** — trace with ICMP (default, no admin), or TCP
-  SYN to a port / UDP, for paths that block ICMP or to test a specific service.
-  See [Probe modes](#probe-modes) for the admin tradeoffs.
-- **Multi-target** — monitor many targets at once; a left **summary grid** shows
-  each one's hop count, loss, latency, and MOS at a glance. Click one to drive
-  the detail tabs. Alerts on any target surface in the banner.
-- **MOS (VoIP quality) score** for the destination — one number (ITU-T E-model)
-  for "is this path good enough for voice/video", shown live in the status bar.
-- **Session save / load** to JSON for offline review, plus **crash-safe
-  CSV logging** of every probe (with a per-round index, so "did every hop spike
-  in the same round?" is a one-line filter) — size-capped with rollover, so
-  unattended multi-week runs can't fill the disk. Each target writes its own
-  file (`probe.csv` → `probe_<target>.csv`), and a rollover that fails (the CSV
-  is open in Excel) is reported and retried rather than silently thrashing.
-- **Engine options dialog** — packet type & port, reply timeout, payload size,
-  send delay (rate throttle), max hops, name resolution, final-hop-only.
-- **Dark theme by default**, with a light/dark toggle (button, top-right).
-- **HiDPI-aware** — crisp on scaled (150 %/200 %) displays.
-- **CSV export** of the per-hop summary (with destination MOS), under a
-  self-documenting header that records the interval, timeout, probe mode, packet
-  size, sample count, and the exact time window — so two exports can actually be
-  compared instead of guessed at.
-- **Pause / Resume & copy** — right-click a target to pause probing without
-  losing its history (resume picks up where it left off); right-click a hop to
-  copy its IP or hostname.
-- **Per-target settings** — engine and alert options are remembered per target,
-  including across a relaunch; right-click a target → *Edit settings…* to
-  inspect or change just that one.
-- **Webhook alerts** — point the Engine dialog's *Webhook URL* at an http(s)
-  endpoint to get a JSON POST when the destination alert raises or clears. A
-  delivery that fails is logged as a warning (host only, never the full URL),
-  so a mistyped URL shows up before the alert you needed doesn't.
-- **Baseline comparison** — *File → Compare with saved session…* diffs the
-  live path against one you saved earlier and shows what actually changed, per
-  hop. A hop whose responding address changed is reported as **rerouted** with
-  no latency delta, because subtracting one router's latency from another's is
-  a meaningless number. Also available headless with `--baseline`.
-- **DSCP marking** — probe as the traffic class you care about (46 = EF/voice,
-  34 = AF41/video) instead of always as best-effort, so a QoS-marked path can be
-  measured as itself. See [DSCP and source interface](#dscp-and-source-interface).
-- **Source-interface binding** — pin the outgoing NIC on a multi-homed box, to
-  ask what a path looks like *from a particular VLAN*. An address the machine
-  doesn't hold is rejected outright, in every probe mode, rather than quietly
-  falling back.
-- **MOS alerts** — alert on the score itself, not just loss and latency
-  separately. The E-model folds latency, jitter and loss together, so a path can
-  sit under every individual threshold and still be unusable for voice.
-- **One-shot report mode** — `--report N` collects N rounds, prints an MTR-style
-  table per target and exits, with the exit status saying whether every target
-  was reachable. For tickets and scheduled checks rather than a service.
-- **Persists between launches** — theme, engine options, alert thresholds and
-  your target list save to `%APPDATA%\PingerPlot` and restore on start;
-  *View → Resume targets on launch* re-arms the last session's monitors, each
-  with the settings it was running with.
+## Install
 
-### Tabs and layout
+**Installer (recommended):** download
+[`PingerPlot-Setup.exe`](https://github.com/jamesccupps/PingerPlot/releases/latest/download/PingerPlot-Setup.exe)
+and run it.
 
-A left **Targets** summary grid lists every monitored target; selecting one
-drives the detail tabs on the right:
+- It installs for your Windows user only, with no admin prompt, into `%LOCALAPPDATA%\Programs\PingerPlot`.
+- It adds a Start menu shortcut (and a desktop one if you tick it) and appears in **Settings → Apps** for
+  uninstalling.
+- The app isn't code-signed, so Windows may show *Windows protected your PC* the first time: click **More info**,
+  then **Run anyway**. Each release lists the SHA-256 of every file in `SHA256SUMS.txt`.
 
-| Tab | Shows |
-|---|---|
-| **Overview** | Hop table (top) over a latency graph for the selected hop (bottom). Click a row to graph it; until you do, it follows the destination. |
-| **Timeline** | All hops stacked on a shared time axis — the path-over-time view. Scrolls when there are many hops. |
-| **Events** | Timestamped log of route changes, alert raises, and alert clears. |
-| **Map** | Geo-located hops plotted on a world map with the path between them. See the privacy note below. |
+**Portable:** download
+[`PingerPlot-win64.zip`](https://github.com/jamesccupps/PingerPlot/releases/latest/download/PingerPlot-win64.zip)
+and unzip it somewhere of your own, e.g. a USB stick or `%LOCALAPPDATA%\Programs`. It keeps its settings in its own
+folder (that's what the `portable.txt` beside it does), and updates itself in place. Avoid `C:\Program Files`,
+which it can't write to.
 
-### Map view & privacy
+**From source** (Windows, Linux, macOS): Python 3.10 or newer, nothing to `pip install`.
+`git clone https://github.com/jamesccupps/PingerPlot`, then `python main.py`, or on Windows double-click
+`PingerPlot.vbs` (no console window). See [Running from source](#running-from-source) for shortcuts and an elevated
+logon task.
 
-The Map tab geo-locates each **public** hop via [ipwho.is](https://ipwho.is)
-(free, HTTPS, no key) and plots the path on a baked-in Natural Earth coastline
-(no runtime dependency). This is the **only** part of the app that contacts a
-third party, and it's **opt-in**: nothing is sent until you open the Map tab, and
-**private/LAN hops are never looked up** (they have no public location anyway).
-Lookups are rate-limited and cached. If you'd rather not send hop IPs anywhere,
-just don't open the Map tab.
+> **About the unsigned download.** Some antivirus engines flag PyInstaller programs heuristically, and this one
+> is a worse-than-average case: it calls into `iphlpapi` through `ctypes`, can open raw capture sockets and maps
+> network paths, which is a fair description of both a diagnostic tool and something you wouldn't want running
+> unasked. The files are built by CI from the tagged commit and tested before they're published. If you'd rather
+> not run an unsigned program at all, run it from source: it's the same program.
 
-### Alerts
+## Use
 
-Set the thresholds in the second toolbar row: **loss ≥ X%**, **latency ≥ Y ms**,
-evaluated **over the last N probes** (the window is what makes it "sustained" —
-a single spike won't trip a 20-probe window). Set a threshold to `0` to disable
-that check. **Sound** toggles the beep. A condition raises when it crosses the
-threshold and clears automatically when it recovers; both are logged.
+1. Type a host name or IP address in the box at the top left (your gateway, `8.8.8.8`, a server you care about)
+   and press **Add**. Add as many as you like; each gets a card.
+2. Click a card to see that target: its status and MOS, then four views.
+   - **Hops**: the table (address, hostname, loss, sent, last, average, best, worst, jitter), rows amber or red
+     on loss or high latency, over a latency graph. Click a row to graph that hop; until you do, it follows the
+     destination.
+   - **Timeline**: every hop stacked on one time axis.
+   - **Map**: the public hops located on a world map (see [privacy](#updates-and-privacy)).
+   - **Events**: route changes, alerts raised and cleared, warnings.
+3. **Pause**, **Stop** and **Edit settings** are at the top right. Editing a target's settings restarts it with
+   them.
 
-The window only counts probes answered (or lost) since the destination took its
-current hop number. After a reroute, a hop's history can belong to a router that
-held that TTL in the meantime, and its rate-limited "TTL exceeded" replies are
-not the destination's packet loss — so a route change restarts the wait for a
-full window instead of alerting on someone else's samples. The hop table still
-shows per-TTL statistics across responders, as `mtr` does.
+- **⋯** on a card, or a right-click, has *Edit settings…*, *Pause*/*Resume*, *Stop*/*Start* and *Remove*.
+  Right-click a hop to copy its address, hostname or row. Ctrl+N goes back to the box.
+- **Settings** holds the defaults for new targets (probing, alerts, logging and webhooks) and the app's own
+  options: theme, resuming your targets at start, Start with Windows, the notification area, notifications and
+  updates.
+- **⋯** at the top right: export the hop table as CSV, save a session, open one, compare with a saved one, check
+  for updates, report a problem.
+- The tray icon is grey when nothing is monitored and gets a red badge while a target is alerting. Click it to open
+  the window; right-click for *Stop all*, *Start with Windows* and *Quit*.
 
-## How it works (and why no admin / no Npcap)
+## Reading the results
 
-ICMP is sent through the Windows IP Helper API (`IcmpSendEcho` in
-`iphlpapi.dll`) via `ctypes`. That API runs in user space, so unlike raw-socket
-ping/traceroute tools it needs **no administrator rights and no packet-capture
-driver**. The TTL is set per-probe through `IP_OPTION_INFORMATION`, and an
-intermediate router that drops the packet answers with status
-`IP_TTL_EXPIRED_TRANSIT` plus its own address — that is the whole trick.
+- **Loss at a hop in the middle while the destination stays clean is normal.** Many routers rate-limit or ignore
+  the "TTL exceeded" messages they're asked to generate. Only loss that carries through to the destination (the
+  last row) is a problem on the path.
+- A latency *step* that appears at one hop and stays in every hop after it is where the delay comes in.
+- Sub-millisecond hops show as `<1`: the Windows ICMP API reports whole milliseconds.
+- **Jitter** is the average change in RTT from one reply to the next (lost probes skipped): what a jitter buffer
+  has to absorb, and what the MOS formula expects. A path that steps from a steady 20 ms to a steady 60 ms has a
+  latency change, not jitter. (Before 1.3.3 this column was the standard deviation of RTT, which counted that step as
+  jitter for as long as it sat in the window.)
+- **MOS** runs from 1 to 5: 4.3 and up is excellent, under 3.6 is poor for a call.
 
-IPv4, and the probe **backend** is Windows-only today because it's the Win32 ICMP
-API — but that's the *only* platform-specific module (see [Platform](#platform)).
-Auto-retrace, the timeline, alerts, MOS, multi-target, and save/load are all built
-on this same user-space primitive, so the whole app runs **without administrator
-rights** in ICMP mode.
+## Alerts
+
+**Settings → Alerts** (or a target's **Edit settings**): packet loss at or above X %, average latency at or above
+Y ms, MOS at or below Z, over the last N probes. The window is what makes it "sustained": a single spike won't trip
+a 20-probe window. `0` turns a check off. An alert raises when it crosses the threshold and clears by itself when it
+recovers; both go into Events, the banner, a notification (**Settings → Show a notification for alerts**), the
+optional sound and the webhook.
+
+Alerts judge the destination only, the one hop whose numbers aren't muddied by routers deprioritising ICMP, and
+only once it has answered, so a target that simply blocks ICMP never false-alarms. The window counts only probes
+since the destination took its current hop number: after a reroute, a hop's history can belong to a router that
+held that TTL in the meantime, and its rate-limited "TTL exceeded" replies aren't the destination's loss. The hop
+table still shows per-TTL statistics across responders, as `mtr` does.
+
+**Webhook** (**Settings → Logging and webhooks**): an `https://` or `http://` address gets a JSON POST when an alert
+raises or clears. A delivery that fails is a warning in Events naming only the host, never the full address
+(Slack, Teams and ntfy put the secret in the path).
 
 ## Probe modes
 
-ICMP mode is built on the Windows IP Helper API (`IcmpSendEcho`) — the same call
-`ping.exe` and `tracert.exe` use internally, which is why it needs no admin. The
-other two modes:
+ICMP goes through the Windows IP Helper API (`IcmpSendEcho`), the same call `ping.exe` and `tracert.exe` use, which
+is why it needs no administrator rights. The others:
 
 | Mode | Needs admin? | Use it for |
 |---|---|---|
-| **ICMP** | No | Default. Full traceroute + monitoring. |
-| **TCP, final-hop-only** | No | "Is this service up, and how fast?" — a TCP handshake to a port (443, 3389, a device's web UI…). No per-hop trace, just the destination. |
-| **TCP / UDP, full traceroute** | **Yes** | Per-hop trace when ICMP is blocked/deprioritised. Sends via a normal socket with `IP_TTL`, captures routers' ICMP "TTL exceeded" via a raw `SIO_RCVALL` socket — which requires elevation. |
+| **ICMP** | No | The default. Full traceroute and monitoring. |
+| **TCP, destination only** | No | "Is this service up, and how fast?": a TCP handshake to a port (443, 3389, a device's web page). No per-hop trace. |
+| **TCP / UDP, full traceroute** | **Yes** | A per-hop trace where ICMP is blocked or deprioritised. Probes go out on a normal socket with `IP_TTL`; routers' "TTL exceeded" replies are captured on a raw `SIO_RCVALL` socket, which needs elevation. Right-click the shortcut and choose **Run as administrator**. |
 
-Without admin, the full TCP/UDP traceroute is refused with a clear message rather
-than showing misleading all-timeout hops. (UDP note: an *open* UDP port stays
-silent, so it reads as a timeout — prefer TCP for a definitive "service is up".)
+Without admin, a full TCP/UDP traceroute is refused with a message rather than showing misleading all-timeout hops.
+An *open* UDP port stays silent and reads as a timeout, so prefer TCP for a definitive "the service is up".
 
-> **TCP reply timeout.** Windows doesn't hand a connecting socket the RST the
-> moment it arrives — it finishes retransmitting the SYN first, about 2 s.
-> Below that, a *closed* port is indistinguishable from an unreachable host,
-> which is the wrong answer in the commonest case of all ("the service is down
-> but the box is fine"). TCP mode therefore raises the reply timeout to at
-> least 3000 ms and says so in the Events tab. Shortening the window with
-> `TCP_MAXRT` doesn't help: it replaces `WSAECONNREFUSED` with `WSAETIMEDOUT`
-> and destroys the very distinction the probe exists to draw.
+> **TCP reply timeout.** Windows doesn't hand a connecting socket the RST the moment it arrives: it finishes
+> retransmitting the SYN first, about 2 s. Below that a *closed* port is indistinguishable from an unreachable
+> host, which is the wrong answer in the commonest case of all ("the service is down but the box is fine"). TCP
+> mode therefore waits at least 3000 ms and says so in Events. `TCP_MAXRT` doesn't help: it replaces
+> `WSAECONNREFUSED` with `WSAETIMEDOUT` and destroys the very distinction the probe exists to draw.
 
-### DSCP and source interface
+### DSCP and source address
 
-**DSCP** (Engine… → *DSCP*) marks each probe with a DiffServ code point, so a
-path with QoS can be measured as the class you actually care about rather than
-as best-effort. 46 is EF (voice), 34 is AF41 (video), 26 is AF31 (signalling),
-0 is best-effort. The low two bits of the ToS byte are ECN and are never touched.
+**DSCP** (Settings → Probing) marks each probe with a DiffServ code point, so a path with QoS can be measured as the
+class you care about rather than as best-effort: 46 is EF (voice), 34 AF41 (video), 26 AF31 (signalling), 0 best
+effort. The low two bits of the ToS byte are ECN and are never touched.
 
-> ICMP mode marks via the IP Helper API and is the mode to use for this. Windows
-> **silently ignores** `IP_TOS` on an ordinary socket unless the
-> `DisableUserTOSSetting` registry value is cleared, so a TCP/UDP run may go out
-> unmarked while `setsockopt` reports success — confirm with a capture before
-> drawing a conclusion from one. That the byte reaches the wire has not been
-> verified here; every code point is accepted without error, which is a
+> ICMP mode marks through the IP Helper API and is the mode to use for this. Windows **silently ignores** `IP_TOS` on
+> an ordinary socket unless the `DisableUserTOSSetting` registry value is cleared, so a TCP/UDP run may go out
+> unmarked while `setsockopt` reports success: confirm with a capture before drawing a conclusion from one. That
+> the byte reaches the wire hasn't been verified here; every code point is accepted without error, which is a
 > weaker claim.
 
-**Source IP** (Engine… → *Source IP*) pins the outgoing interface on a
-multi-homed host. An address the machine doesn't hold is refused at start with
-a message saying so, in ICMP, TCP and UDP modes alike, and an address that
-disappears mid-run makes each probe report `ERROR_INVALID_NETNAME` rather than
-silently falling back to the default route — a silent fallback is the
-dangerous outcome, because the numbers look fine and describe a path you
-didn't ask about. (Before 1.3.3 only ICMP kept this promise: TCP fell back
-to the default route and UDP never bound its sockets at all.)
+**Source address** (Settings → Probing) pins the outgoing interface on a multi-homed PC, to ask what a path looks
+like *from a particular VLAN*. An address the PC doesn't have is refused at start, in every mode, and one that
+disappears mid-run makes each probe report `ERROR_INVALID_NETNAME` rather than silently falling back to the default
+route. A silent fallback is the dangerous outcome: the numbers look fine and describe a path you didn't ask about.
 
-Both are recorded in the status line, the report header, the CSV export header
-and the saved session: a marked or pinned run measured a different thing from a
-plain one, and two runs that don't say which aren't comparable.
+Both are recorded in the status line, the report header, the CSV export header and the saved session: a marked or
+pinned run measured something different from a plain one.
 
-## Platform
+## Sessions, logs and comparing runs
 
-**Windows 10/11 — tested.** The ICMP backend (`icmp.py`) uses the Win32 IP
-Helper API, so it needs no admin rights and no capture driver.
+- **Probe log** (Settings → Logging and webhooks): every probe of every round to CSV, with a round number, so "did
+  every hop spike in the same round?" is a one-line filter. Each target writes its own file (`probe.csv` becomes
+  `probe_<target>.csv`), capped at 25 MB with one backup, so a run of weeks can't fill the disk. A rollover that
+  fails (the file is open in Excel) is reported and retried, not silently repeated.
+- **⋯ → Save session… / Open a saved session…**: the whole run as JSON, every sample included, to look at later.
+- **⋯ → Compare with a saved session…** diffs the live path against one you saved earlier, per hop. A hop whose
+  router changed is **rerouted**, with no latency difference: subtracting one router's latency from another's isn't
+  a number that means anything.
+- **⋯ → Export hops as CSV…**: the hop table with the destination's MOS, under a header recording the interval,
+  timeout, probe mode, packet size, sample count and time window, so two exports can be compared rather than
+  guessed at.
 
-**Linux — live-tested in CI. macOS — implemented, untested on a Mac.**
-`icmp_posix.py` uses unprivileged `SOCK_DGRAM`/`IPPROTO_ICMP` sockets, the same
-technique `mtr` uses. `icmp.ping()` dispatches, so the engine, GUI and headless
-runner follow without knowing which backend answered.
+## Updates and privacy
 
-Getting a traceroute out of POSIX takes two mechanisms where Windows takes one.
-The echo reply arrives on the socket; the router's "TTL exceeded" does **not**,
-because on Linux it's an *error* about the datagram we sent rather than a
-message addressed to us — it goes to the socket's error queue (`IP_RECVERR` +
-`recvmsg(MSG_ERRQUEUE)`). macOS has neither and delivers it as an ordinary
-readable message. Both paths are implemented.
+PingerPlot sends probes to the targets you add and nowhere else, and reads nothing on your network beyond the
+replies. It talks to three other places:
 
-On Linux each reply is timed by the kernel (`SO_TIMESTAMPNS` on the echo reply
-and on the error-queue message), not by Python reading the clock after `recv`
-returns: a probe thread has to win the GIL back first, so anything else busy in
-the process — a Timeline redraw holds it for tens of milliseconds — would
-otherwise be reported as network latency and feed the alerts and MOS. macOS,
-and the TCP/UDP modes on every platform, still time in user space. macOS also
-makes no promise that a socket only sees replies to its own echoes, so every
-reply is matched to its probe by sequence number (and a router's error by the
-echo header it quotes back).
+- Your DNS server, for each hop's hostname (**Settings → Look up hostnames**).
+- [ipwho.is](https://ipwho.is), only when you open the **Map** view: the public hops' addresses, to place them on
+  the map. Private and LAN addresses are never sent. Rate-limited and cached. Don't open Map if you'd rather not.
+- GitHub, once a day, for this project's `latest.json` (installed and portable copies; turn it off in **Settings →
+  Updates**). Nothing is downloaded until you click **Install**. An installed copy then runs the new installer
+  silently and restarts; a portable copy swaps its program files in place and restarts, and puts everything back
+  if that fails. Your targets resume either way.
 
-On Linux the unprivileged socket is gated by a sysctl. If PingerPlot reports the
-backend unavailable, it will name this:
+Plus the webhook address, if you set one. It sends nothing about you or your PC anywhere. **⋯ → Report a
+problem…** opens a GitHub issue form with the version filled in, which you edit and send yourself.
 
-```bash
-sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"
+## Where it keeps things
+
+- `%APPDATA%\PingerPlot\` holds `settings.json` (your targets, each with its settings, and the app's options) and
+  `update.log`. On Linux and macOS it's `$XDG_CONFIG_HOME/PingerPlot`, usually `~/.config/PingerPlot`.
+- A portable copy keeps them beside `PingerPlot.exe` instead. Delete `portable.txt` to make it use `%APPDATA%`.
+- Probe logs and saved sessions go wherever you put them.
+
+## Headless runner
+
+For unattended monitoring on a box with no desktop session: the same engine without the window, each target
+logging to its own size-capped CSV. `pingerplot-headless.exe` is beside `PingerPlot.exe` in either kind of install;
+from source it's `python -m pingerplot.headless`.
+
+```
+pingerplot-headless.exe --init monitor.json   # write a starter config, then edit it
+pingerplot-headless.exe monitor.json          # run it (Ctrl+C to stop)
+pingerplot-headless.exe --version
 ```
 
-Honest status: the packet building, error-queue decoding, reply matching and
-status mapping are unit-tested on every platform. On the Linux CI runners the
-live socket path runs on every push — echo replies from loopback, a TTL-1 probe
-answered by the runner's real first hop, and the kernel-timestamp timing under a
-busy Python thread — and CI fails if those tests would skip. An external review
-for 1.3.3 reported a correct trace, and correct reroute detection, across a
-four-router network-namespace lab. It has **not** yet been run across a long
-real-world path on physical hardware, and nothing has run on macOS. Smoke-test
-it before trusting a trace:
-
-```bash
-python -m pingerplot.selftest 8.8.8.8
-```
-
-Bug reports from a real Linux or macOS box are very welcome.
-
-## Requirements
-
-- Windows 10/11 (tested), or Linux/macOS (beta — see [Platform](#platform))
-- Python 3.10+ (tested on 3.12). Tkinter ships with the python.org installer.
-- Nothing to `pip install`.
-- ICMP and TCP-final-hop work as a normal user. **Full TCP/UDP traceroute needs
-  an elevated (Run as administrator) session.**
-
-## Get it
-
-**Download the Windows executable** — nothing to install, not even Python:
-
-1. Grab `PingerPlot.exe` from the
-   [**Releases**](https://github.com/jamesccupps/PingerPlot/releases/latest) page.
-2. Double-click it.
-
-`pingerplot-headless.exe` is there too, for [service mode](#headless--service-mode-no-gui)
-on a box with no desktop. Both are built by CI from the tagged commit and
-smoke-tested before they are attached — the GUI binary's import graph is
-verified and the headless one runs a real probe against loopback.
-
-> **They are unsigned, and you should know what that means.** Windows
-> SmartScreen will show *"Windows protected your PC"* on first run — *More
-> info* → *Run anyway*. Some antivirus engines also flag PyInstaller binaries
-> heuristically, and this one is a worse-than-average case for that: it calls
-> into `iphlpapi` through `ctypes`, opens raw capture sockets, and enumerates
-> network paths, which is a fair description of both a diagnostic tool and
-> something you would not want running unasked. A code-signing certificate
-> would fix the SmartScreen half; this is a hobby project and doesn't have one.
->
-> `SHA256SUMS.txt` is published with each release so you can check what you
-> downloaded is what CI built:
->
-> ```powershell
-> Get-FileHash .\PingerPlot.exe -Algorithm SHA256
-> ```
->
-> If you would rather not run an unsigned binary at all — a reasonable
-> position — use the source route below. It is the same program.
-
-**Or run from source** (needs Python 3.10+):
-
-1. Grab the latest `Source code (zip)` from the
-   [**Releases**](https://github.com/jamesccupps/PingerPlot/releases/latest) page.
-2. Right-click the `.zip` → **Extract All…** to anywhere (e.g. your Desktop).
-3. Open the extracted folder and **double-click `PingerPlot.vbs`**. That's it —
-   no install, no build, no `pip`.
-
-**Or clone with Git:**
-
-```bash
-git clone https://github.com/jamesccupps/PingerPlot
-cd PingerPlot
-```
-
-No build step and nothing to `pip install` — it's pure standard library.
-(Optional: `pip install .` registers a `pingerplot` GUI entry point.)
-
-## Run
-
-**Double-click `PingerPlot.vbs`** — launches the GUI with no console window
-(uses `pyw`/`pythonw`). That's the everyday launcher.
-
-Other ways:
-
-| | |
-|---|---|
-| `PingerPlot.vbs` | Double-click launch, no console window (recommended). |
-| `Setup.cmd` | Menu: launch / launch-elevated / make shortcuts / enable-or-disable auto-start / status. |
-| `python main.py` | From a terminal (console stays open — handy for seeing errors). |
-| `run.bat` | Same as above, double-clickable. |
-
-Enter a hostname or IP (e.g. `8.8.8.8`, `1.1.1.1`, `cloudflare.com`, or an
-internal address like your gateway), set the interval, and press **Add / Start**.
-Add more targets the same way — they stack in the left grid. Click a hop row to
-graph it; click a target to switch the detail view. **Engine…** opens the probe
-type/port/timeout/logging options; **Save…/Load…** persist a session.
-
-### Shortcuts and auto-start
-
-Run `Setup.cmd` (or `launch.ps1` directly) for one-time setup:
-
-```powershell
-.\launch.ps1 -CreateShortcuts    # Desktop + Start-menu icons (normal + an "(Admin)" one)
-.\launch.ps1 -InstallAutostart   # auto-start at logon, elevated, with NO UAC prompt
-.\launch.ps1 -UninstallAutostart # undo it
-.\launch.ps1 -Status
-```
-
-`-InstallAutostart` registers a **Task Scheduler** logon task with *Run with
-highest privileges*, so the app starts automatically every time you log in —
-already elevated (so TCP/UDP traceroute works) and **without a UAC prompt**,
-which an on-demand elevated launch can't avoid. It's opt-in: nothing is
-registered unless you run that command, and one command removes it.
-
-> **Security note — where you install matters.** Because that task launches
-> PingerPlot **elevated with no prompt**, only enable auto-start from a folder
-> standard users can't modify — e.g. `C:\Program Files\PingerPlot`. If the
-> program folder *or* your Python install sits somewhere you can write *without*
-> elevation (your `Downloads`, your home folder, most data drives), then any
-> non-elevated process running as you could replace that code and have it run as
-> Administrator at your next logon. `-InstallAutostart` checks for this and warns
-> you, but doesn't block you. If you don't need persistence, prefer the one-off
-> **(Admin)** launch below.
->
-> What it checks is what runs. The task registers the actual interpreter the
-> `py` launcher resolves to — not the launcher, whose choice comes from per-user
-> registry keys and `py.ini` that anything running as you can change — and
-> checks that interpreter, its standard library and the program folder. Every
-> elevated launch runs Python with `-E -s`, so a per-user `PYTHONPATH` and the
-> `.pth` files in your user site-packages (both writable without elevation,
-> both executed at start-up) are ignored. One residual: the elevated app still
-> reads its settings, including the probe-log path, from
-> `%APPDATA%\PingerPlot\settings.json`, which you can write without elevation.
-> ICMP mode needs no elevation at all; only run elevated if you need TCP/UDP
-> traceroute.
-
-For a one-off elevated launch instead, use the **PingerPlot (Admin)** shortcut,
-`Setup.cmd` → option 2, or `.\launch.ps1 -Elevated` (UAC prompts once).
-
-## Headless / service mode (no GUI)
-
-For unattended monitoring on a box with no desktop session, run the same engine
-without the GUI — each target logs to its own crash-safe, size-capped CSV.
-
-```bash
-python -m pingerplot.headless --init monitor.json   # write a starter config, then edit it
-python -m pingerplot.headless monitor.json          # run it (Ctrl-C to stop)
-```
-
-The config is JSON: an optional `status_interval` (seconds between console
-status lines; `0` = silent), a `defaults` block, and a `targets` list where each
-entry may override any default:
+The config is JSON: an optional `status_interval` (seconds between status lines; `0` is silent), a `defaults`
+block, and a `targets` list where each entry may override any default:
 
 ```json
 {
   "status_interval": 60,
   "defaults": { "interval": 2.5, "alert_loss_pct": 20, "alert_latency_ms": 250 },
   "targets": [
-    { "target": "8.8.8.8", "log_path": "logs/dns.csv" },
-    { "target": "10.0.0.1", "log_path": "logs/gateway.csv", "final_hop_only": true,
+    { "target": "dns.example.net", "log_path": "logs/dns.csv" },
+    { "target": "192.168.1.1", "log_path": "logs/gateway.csv", "final_hop_only": true,
       "webhook_url": "https://hooks.example/abc" }
   ]
 }
 ```
 
-Relative `log_path`s resolve next to the config file (so it works regardless of
-the working directory), and the log directory is created if missing. A
-`log_path` in `defaults` would put every target on one file; when several
-targets resolve to the same path, each gets its own `<name>_<target>.csv`
-instead (and the runner says so). To run it at logon/boot under **Task
-Scheduler**, point a task at:
+Relative `log_path`s resolve next to the config file, and the folder is created if it's missing. A `log_path` in
+`defaults` would put every target in one file; when several targets resolve to the same path, each gets its own
+`<name>_<target>.csv` instead (and the runner says so). To run it at sign-in or boot, point a **Task Scheduler**
+task at `pingerplot-headless.exe C:\path\to\monitor.json` (or `pythonw.exe -m pingerplot.headless …` from source).
+Besides the status lines, it prints every event as it happens: alerts raised and cleared, route changes, and
+warnings such as a probe log it couldn't open or a webhook that wasn't delivered.
+
+A target whose name doesn't resolve at start, the normal case for a task that runs at boot before DNS is up, is
+**restarted automatically**, the delay backing off from 30 s to 5 minutes while it keeps failing. Restarts are
+logged and shown in the status lines.
+
+### One-shot reports
+
+For a ticket, a scheduled check, or a before/after around a change: collect a fixed number of rounds, print a
+table, and exit.
 
 ```
-pythonw.exe -m pingerplot.headless C:\path\to\monitor.json
+pingerplot-headless.exe monitor.json --report 20
+pingerplot-headless.exe monitor.json --report 20 --report-csv out.csv
+pingerplot-headless.exe monitor.json --report 20 --baseline last-week.json
 ```
 
-(or `python.exe` with its output redirected to a file, if you want a record).
-Besides the periodic status lines, the runner prints every event as it happens —
-alert raised and cleared, route changes, and warnings such as a probe log that
-could not be opened or a webhook that was not delivered — which `pythonw.exe`
-has nowhere to send. `pip install .` also registers a `pingerplot-headless`
-console script.
-
-A target whose name doesn't resolve at start-up — the normal case for a task
-that runs at boot, before DNS is up — is **restarted automatically**, with the
-delay backing off from 30 s to 5 minutes while it keeps failing. Restarts are
-logged and shown in the status lines, because a target flapping every few
-minutes is something you want to see.
-
-### One-shot report mode
-
-For a ticket, a scheduled check, or a before/after around a change — collect a
-fixed number of rounds, print a table, and exit:
-
-```bash
-python -m pingerplot.headless monitor.json --report 20
-python -m pingerplot.headless monitor.json --report 20 --report-csv out.csv
-```
-
-The exit status is `0` only if every target reached its destination, so a
-scheduled job can branch on it without parsing the output. The table names the
-probe mode, interval, timeout and any DSCP or source binding — a report that
-doesn't say how it was produced can't be compared with another one.
-
-Add `--baseline` to diff against a session saved earlier (*File → Save
-session…* in the GUI), which turns "what does this path look like" into "is it
-worse than it was":
-
-```bash
-python -m pingerplot.headless monitor.json --report 20 --baseline last-week.json
-```
+The exit status is `0` only if every target reached its destination, so a scheduled job can branch on it without
+parsing the output. The table names the probe mode, interval, timeout and any DSCP or source binding. `--baseline`
+diffs against a session saved in the window (**⋯ → Save session…**), which turns "what does this path look like" into
+"is it worse than it was":
 
 ```
 example.net: now vs last-week
@@ -461,132 +269,146 @@ example.net: now vs last-week
     4  198.51.100.20        0.0              9.9          new
 ```
 
-A *rerouted* row deliberately shows no delta: hop 3 is a different box than it
-was, so the difference between its latency and the old one's would not be a
-number that means anything.
+## Platform
 
-## Reading the results
+**Windows 10 and 11: tested**, and the only platform with a download. The ICMP backend (`icmp.py`) uses the Win32
+IP Helper API, so it needs no admin rights and no capture driver.
 
-- **Loss at an intermediate hop while the final hop stays healthy is normal.**
-  Many routers rate-limit or ignore the ICMP "TTL exceeded" they're asked to
-  generate. Only loss that *carries through to the destination* (the last row)
-  indicates a real problem on the path.
-- A latency *step* that appears at one hop and persists through every hop after
-  it is where the delay is being introduced.
-- Sub-millisecond hops show as `<1`; the Win32 RTT is integer-millisecond.
-- **Jitter** is the average change in RTT from one reply to the next (lost
-  probes skipped) — what a jitter buffer has to absorb, and what the MOS
-  formula expects. A path that steps from a steady 20 ms to a steady 60 ms has
-  a latency change, not jitter. (Before 1.3.3 this column was the standard
-  deviation of RTT, which counted that step as jitter for as long as it sat in
-  the window.)
+**Linux: live-tested in CI. macOS: implemented, untested on a Mac.** Both run from source. `icmp_posix.py` uses
+unprivileged `SOCK_DGRAM`/`IPPROTO_ICMP` sockets, the same technique `mtr` uses, and `icmp.ping()` dispatches to it,
+so the engine, window and headless runner don't know which backend answered.
 
-## Tests
+A traceroute on POSIX takes two mechanisms where Windows takes one. The echo reply arrives on the socket; the
+router's "TTL exceeded" does **not**, because on Linux it's an *error* about the datagram we sent rather than a
+message addressed to us, and it goes to the socket's error queue (`IP_RECVERR` + `recvmsg(MSG_ERRQUEUE)`). macOS
+has neither and delivers it as an ordinary readable message. Both paths are implemented.
+
+On Linux each reply is timed by the kernel (`SO_TIMESTAMPNS` on the echo reply and on the error-queue message), not
+by Python reading the clock after `recv` returns: a probe thread has to win the GIL back first, so anything else
+busy in the process (a Timeline redraw holds it for tens of milliseconds) would otherwise be reported as network
+latency and feed the alerts and MOS. macOS, and the TCP/UDP modes everywhere, still time in user space. macOS also
+makes no promise that a socket only sees replies to its own echoes, so every reply is matched to its probe by
+sequence number (and a router's error by the echo header it quotes back).
+
+On Linux the unprivileged socket is gated by a sysctl. If PingerPlot reports the backend unavailable, it names
+this:
 
 ```bash
-python -m pytest
+sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"
 ```
 
-The pure logic (statistics, address encoding, status handling, MOS, alert state
-machine, ICMP-error decoding, baseline comparison) is covered by a
-platform-independent unit suite — the Win32 DLL access is guarded behind
-`sys.platform`, so it runs on Linux/macOS too, and CI runs the matrix on both.
+Honest status: packet building, error-queue decoding, reply matching and status mapping are unit-tested on every
+platform. On the Linux CI runners the live socket path runs on every push (echo replies from loopback, a TTL-1 probe
+answered by the runner's real first hop, and the kernel-timestamp timing under a busy Python thread), and CI fails
+if those tests would skip. An external review for 1.3.3 reported a correct trace, and correct reroute detection,
+across a four-router network-namespace lab. It hasn't yet run across a long real-world path on physical hardware,
+and nothing has run on macOS. Smoke-test it before trusting a trace:
 
-The TCP/UDP round loops are exercised against a **mock router**
-(`tests/mock_router.py`): a loopback socket standing in for the `SIO_RCVALL`
-capture socket, fed router-shaped ICMP errors, so `select()`, `recvfrom()` and
-the timeouts are the real code paths. That covers reply-to-hop correlation,
-out-of-order replies, cross-talk rejection, IP options in either header, and
-socket cleanup — none of which any amount of parser testing would have caught.
+```bash
+python -m pingerplot.selftest 8.8.8.8
+```
 
-The Tk layer is tested too, against the real `gui.App` — a withdrawn root on
-Windows, and `xvfb-run -a python -m pytest` on Linux, which is all Tk needs.
-That covers what persists across launches: settings round-trips, which targets
-are resumed, and which are deliberately not (a loaded session is viewable but
-is not a target). Every GUI fixture redirects `%APPDATA%` first, so a test can
-never clobber a real target list.
+Bug reports from a real Linux or macOS box are very welcome.
 
-CI runs `pytest -rs` so every skipped test and its reason appears in the log: a
-group that silently skips on half the matrix isn't covering what it appears to.
-On the Linux legs that goes further: a live POSIX test that would skip there is
-a failure, so a green tick means the backend really ran against the kernel.
-Two more rules the suite enforces on itself, both learned the hard way:
+## Running from source
 
-- **No test may depend on what the network happens to do.** One assumed
-  `192.0.2.1` black-holes traffic; it does, until you run in a container whose
-  own gateway *is* `192.0.2.1` and refuses the port — at which point correct
-  code fails the test. A green suite that depends on the LAN isn't green.
-- **No workflow may interpolate `${{ }}` into a `run:` script**, and every
-  action is pinned by commit SHA. Checked by a test, so the next step somebody
-  adds can't quietly reintroduce it.
-
-The raw-socket layer needs real hardware; exercise it by running the app or
-`python -m pingerplot.selftest <host>`.
-
-### Building the Windows binaries yourself
-
-CI does this on every tag, but the recipe is in the repo and reproducible:
+| | |
+|---|---|
+| `PingerPlot.vbs` | Double-click launch, no console window. |
+| `Setup.cmd` | A menu: launch, launch elevated, make shortcuts, turn the elevated logon task on or off, status. |
+| `python main.py` | From a terminal, which stays open to show errors. |
 
 ```powershell
+.\launch.ps1 -CreateShortcuts    # Desktop and Start menu icons (normal, and an "(Admin)" one)
+.\launch.ps1 -InstallAutostart   # start at sign-in, elevated, with no UAC prompt
+.\launch.ps1 -UninstallAutostart # undo it
+.\launch.ps1 -Status
+```
+
+The app's own **Start with Windows** starts it unelevated, which is all ICMP and TCP-to-the-destination need.
+`-InstallAutostart` instead registers a **Task Scheduler** logon task with *Run with highest privileges*, so a
+source copy starts already elevated (full TCP/UDP traceroute works) without a UAC prompt. It's opt-in, and one
+command removes it.
+
+> **Security note: where you install matters.** That task launches PingerPlot **elevated with no prompt**, so only
+> turn it on from a folder standard users can't modify, e.g. `C:\Program Files\PingerPlot`. If the program folder
+> *or* your Python install sits somewhere you can write without elevation (your Downloads, your home folder, most
+> data drives), any unelevated process running as you could replace that code and have it run as Administrator at
+> your next sign-in. `-InstallAutostart` checks for this and warns you, but doesn't stop you.
+>
+> What it checks is what runs. The task registers the actual interpreter the `py` launcher resolves to (not the
+> launcher, whose choice comes from per-user registry keys and `py.ini` that anything running as you can change),
+> and checks that interpreter, its standard library and the program folder. Every elevated launch runs Python with
+> `-E -s`, so a per-user `PYTHONPATH` and the `.pth` files in your user site-packages are ignored. One residual: the
+> elevated app still reads its settings, including the probe-log path, from `%APPDATA%\PingerPlot\settings.json`,
+> which you can write without elevation. If you don't need persistence, prefer the one-off **(Admin)** shortcut.
+
+`pip install .` also registers `pingerplot` and `pingerplot-headless` commands.
+
+## Troubleshooting
+
+| What you see | Fix |
+|---|---|
+| Loss at a hop in the middle | Usually normal: that router rate-limits the replies it generates. Only loss that reaches the destination row is a problem. |
+| "Full TCP/UDP traceroute needs Administrator" | Right-click the shortcut → **Run as administrator**, or use ICMP, or TCP with **Destination only**. |
+| A target shows "Cannot resolve" | DNS for that name failed. The window doesn't retry by itself: **⋯ → Start** on its card once the network is up. (The headless runner retries.) |
+| No notification for an alert | **Settings → Show a notification for alerts**, then Windows' *Settings → System → Notifications* for PingerPlot, and Do not disturb. |
+| The window is gone | It's in the notification area: click the tray icon. Starting PingerPlot again also brings it back. |
+| "Windows protected your PC" | **More info → Run anyway**. The app isn't code-signed. |
+| "The probe log couldn't roll over" in Events | The CSV is open in another program, usually Excel. It keeps appending and tries again a minute later. |
+| The update didn't install | Details are in `update.log` in the settings folder. The previous version keeps running; the release page always has the full installer. |
+| "ICMP backend unavailable" on Linux | `sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"` (see [Platform](#platform)). |
+
+## Uninstalling
+
+**Settings → Apps → Installed apps → PingerPlot → Uninstall** removes the program, its shortcuts and its Start with
+Windows entry. Your settings stay in `%APPDATA%\PingerPlot`; delete that folder too if you don't need them. A
+portable copy: delete its folder.
+
+## How it works
+
+Route discovery walks the IP TTL upward and reads the "TTL exceeded" replies, the standard traceroute primitive.
+On Windows, ICMP is sent through the IP Helper API (`IcmpSendEcho` in `iphlpapi.dll`, `IcmpSendEcho2Ex` with a
+source address) via `ctypes`. That API runs in user space, so unlike raw-socket tools it needs **no administrator
+rights and no packet-capture driver**. The TTL is set per probe through `IP_OPTION_INFORMATION`, and a router that
+drops the packet answers with `IP_TTL_EXPIRED_TRANSIT` and its own address: that's the whole trick.
+
+Each round probes every hop at once on a small thread pool, so a round takes about one timeout rather than the sum.
+Statistics are kept per TTL in a ring buffer; the window reads immutable snapshots every 700 ms and redraws a
+graph only when its data changed. Every round is a full traceroute, so a hop whose responding address changes is a
+reroute, and a path that grows or shrinks is seen within a round. MOS is a simplified ITU-T G.107 E-model from the
+destination's latency, jitter and loss. IPv4 only.
+
+## Building and development
+
+```
+python -m pytest                       # ~40 s, offline; the GUI too (xvfb-run -a on Linux)
+python scripts/demo.py                 # the real app against a pretend network
 python -m pip install --require-hashes --only-binary=:all: -r packaging/requirements-build.txt
-python packaging/make_icon.py build/pingerplot.ico
-python -m PyInstaller --noconfirm --clean packaging/pingerplot.spec
+python packaging/build_windows.py      # dist\: the program folder, the zip, and with Inno Setup 6 the installer
 ```
 
-`main.py --version` exits before Tk is created, which is how a windowed build
-gets verified without a display — the whole import graph is walked, so a
-missing module fails there instead of in a message box on somebody's desktop.
+The pure logic (statistics, address encoding, status handling, MOS, the alert state machine, ICMP error decoding,
+baseline comparison) is covered on every platform; the Win32 calls are guarded behind `sys.platform`. The TCP/UDP
+round loops run against a mock router (`tests/mock_router.py`): a loopback socket standing in for the capture
+socket, fed router-shaped ICMP errors, so `select()`, `recvfrom()` and the timeouts are the real code paths. The
+window is tested against the real `App`, with `%APPDATA%` redirected first so a test can never touch a real target
+list. The updater is tested against releases in a temporary folder, its Ed25519 code against RFC 8032's vectors.
 
-## Project layout
-
-```
-main.py            app entry point (python main.py)
-PingerPlot.vbs     no-console double-click launcher
-launch.ps1         launcher engine: launch / elevate / shortcuts / auto-start / status
-Setup.cmd          menu front-end for launch.ps1
-run.bat            console launcher (for debugging)
-pyproject.toml     packaging metadata + pytest config
-pingerplot/
-  icmp.py          Windows ICMP via ctypes (IcmpSendEcho/Echo2Ex); dispatches to icmp_posix
-  icmp_posix.py    Linux/macOS ICMP: unprivileged SOCK_DGRAM + IP_RECVERR (the mtr technique)
-  tcpudp.py        TCP/UDP probes via raw SIO_RCVALL capture (admin), parallel per round
-  model.py         Hop / Sample / stats / MOS / CSV hardening (pure, tested)
-  compare.py       baseline diff: this run vs a saved one (pure, tested)
-  monitor.py       trace + continuous monitor engine, alerts, logging, save/load
-  headless.py      no-GUI runner, target supervision, report mode
-  gui.py           Tkinter UI: summary grid, hop table, graphs, events, map, compare
-  geoip.py         lazy IP geolocation via ipwho.is (Map tab only)
-  worldmap.py      baked Natural Earth coastlines (zero-dependency backdrop)
-  selftest.py      headless trace/monitor for the console
-packaging/
-  pingerplot.spec  PyInstaller recipe for both Windows binaries
-  make_icon.py     builds a multi-size .ico from the procedural app icon
-  headless_entry.py  console entry point for the frozen headless runner
-  requirements-build.txt  release build tooling, pinned by version and hash
-tests/             pytest for the pure layers + a mock router for the socket layer
-```
-
-## Possible extensions
-
-- Field-testing the POSIX backend on real Linux/macOS hardware, and adding a
-  network-namespace multi-hop lab to CI (the 1.3.3 review built one; GitHub's
-  Linux runners reportedly allow it under sudo).
-- IPv6 (`Icmp6SendEcho2` — different structs, needs a source address).
-- Sub-millisecond RTT on Windows ICMP, which `IcmpSendEcho` reports in whole
-  milliseconds. (Linux already has it, from the kernel's receive timestamp.)
-- Email alert actions (webhook POSTs are already built in).
-
-## Contributing
-
-Issues and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
-The hard rules: keep it dependency-free, and keep the Win32 access guarded so the
-test suite keeps running on any OS.
+CI runs the suite on Windows and Linux for Python 3.10 to 3.13 (on Linux a live POSIX test that would skip is a
+failure), then builds the Windows release files, runs the built app's self-test, installs, self-tests and uninstalls
+the installer, and has a copy update itself to the build. A version tag (`v1.4.0`) builds, tests, signs and
+publishes the release. The release workflow's build job is read-only, only a job that installs nothing holds the
+signing key, and only one that runs nothing but `gh` can publish; every action is pinned by commit SHA and the
+build tools by hash, all enforced by tests. [CLAUDE.md](CLAUDE.md) has the architecture, the release process and
+what was learned along the way; [ROADMAP.md](ROADMAP.md) what's planned; [CONTRIBUTING.md](CONTRIBUTING.md) how to
+help.
 
 ## License
 
-[MIT](LICENSE) © James Cupps.
+MIT: see [LICENSE](LICENSE). The libraries inside the Windows build are listed, with their licenses, in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
-PingerPlot is an independent, hobby open-source project and is not affiliated with
-or endorsed by any commercial network-monitoring product. It is a **read-only
-diagnostic**: it sends probes and reads replies; it never writes to or
-reconfigures anything on the network.
+PingerPlot is an independent hobby project, not affiliated with or endorsed by any commercial network-monitoring
+product. It is a **read-only diagnostic**: it sends probes and reads replies, and never writes to or reconfigures
+anything on the network.

@@ -3,18 +3,14 @@
 What's planned or been asked for, roughly in order. Ideas welcome as
 [issues](https://github.com/jamesccupps/PingerPlot/issues/new?template=feature_request.yml).
 
-## Next: 1.4, a proper Windows app
+## Next
 
-Bringing PingerPlot up to the same standard as its sibling projects (Slate, UniFi Stock Watcher):
+1.4 (an installer and a portable zip, signed in-app updates, the notification area, Start with Windows, the
+new window, a project page) is done; see the [CHANGELOG](CHANGELOG.md). Next up:
 
-- **An installer and a portable zip** instead of two bare executables: installs for your Windows user with no admin
-  prompt, Start menu shortcut, uninstalls from Settings → Apps; the zip keeps its settings beside it.
-- **Signed in-app updates**: a daily check of this repository's releases, one-click install, and a download is
-  installed only if it carries the release signature built into the app.
-- **Runs in the background**: a notification-area icon that shows whether any target is alerting, closing the window
-  keeps monitoring, one copy at a time, and *Start with Windows* without elevation.
-- **Follows Windows**: light or dark to match the system theme, at any display scale.
-- **A project page** on GitHub Pages, with screenshots taken from a demo mode (made-up addresses, never a real path).
+- **winget and SourceForge** listings, as the sibling projects have, so `winget install PingerPlot` works.
+- **The Map zooms to the path.** A path within one region is a few pixels across on a world map; 1.4 stops the
+  labels piling up, but the hops still sit in a clump.
 
 ## Later, or if asked
 

@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PingerPlot: see where on the path a connection goes wrong</title>
+<meta name="description" content="PingerPlot is a free, open source continuous-traceroute monitor for Windows, like mtr or WinMTR: per-hop loss, latency, jitter and MOS over time, route changes, alerts on the destination, ICMP/TCP/UDP probes, a headless runner and signed updates. No administrator rights for ICMP.">
+<link rel="canonical" href="https://jamesccupps.github.io/PingerPlot/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="PingerPlot: see where on the path a connection goes wrong">
+<meta property="og:description" content="Free and open source continuous traceroute for Windows: per-hop loss, latency, jitter and MOS over time, route changes, and alerts when the destination degrades.">
+<meta property="og:url" content="https://jamesccupps.github.io/PingerPlot/">
+<meta property="og:image" content="https://jamesccupps.github.io/PingerPlot/images/social-preview.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/png" href="images/icon.png">
+<link rel="apple-touch-icon" href="images/icon.png">
+<meta name="color-scheme" content="light dark">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "PingerPlot",
+  "description": "A continuous-traceroute network path monitor (MTR-style): per-hop packet loss, latency, jitter and MOS over time, route-change detection, alerts on the destination with notifications and webhooks, ICMP, TCP and UDP probes, DSCP marking, saved sessions and baseline comparison, a headless runner, signed in-app updates.",
+  "url": "https://jamesccupps.github.io/PingerPlot/",
+  "codeRepository": "https://github.com/jamesccupps/PingerPlot",
+  "downloadUrl": "https://github.com/jamesccupps/PingerPlot/releases/latest",
+  "applicationCategory": "UtilitiesApplication",
+  "applicationSubCategory": "Network monitoring",
+  "operatingSystem": "Windows 10, Windows 11",
+  "image": "https://jamesccupps.github.io/PingerPlot/images/social-preview.png",
+  "screenshot": "https://jamesccupps.github.io/PingerPlot/images/hops-dark.png",
+  "license": "https://opensource.org/licenses/MIT",
+  "isAccessibleForFree": true,
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+  "author": { "@type": "Person", "name": "James Cupps", "url": "https://jamesccupps.github.io/" }
+}
+</script>
+<style>
+  :root {
+    --bg: #f5f8f7; --panel: #ffffff; --text: #1a2422; --muted: #56645f; --line: #dbe4e1;
+    --accent: #0f7a52; --code: #ecf2f0; --hero: linear-gradient(160deg, #10302a 0%, #0d1214 100%);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #101413; --panel: #191f1d; --text: #e5ebe9; --muted: #98a6a1; --line: #29312e; --accent: #5fd59a; --code: #212a27; }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.55 "Segoe UI", system-ui, -apple-system, Ubuntu, "DejaVu Sans", sans-serif; }
+  a { color: var(--accent); }
+  code { background: var(--code); border-radius: 4px; padding: 1px 5px; font: 14px Consolas, "DejaVu Sans Mono", monospace; overflow-wrap: anywhere; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
+  header.hero { background: var(--hero); color: #fff; padding: 56px 0 40px; }
+  .hero-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 40px; align-items: center; }
+  .brand { display: flex; align-items: center; gap: 16px; }
+  .brand img { width: 64px; height: 64px; }
+  .brand h1 { margin: 0; font-size: 42px; font-weight: 600; letter-spacing: -0.5px; line-height: 1.1; }
+  .tagline { font-size: 22px; margin: 18px 0 6px; }
+  .facts { color: #b0d6c8; margin: 0 0 26px; }
+  .actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  .btn { display: inline-flex; align-items: center; gap: 10px; padding: 12px 22px; border-radius: 8px; font-weight: 600;
+         text-decoration: none; background: #fff; color: #10302a; font-size: 17px; }
+  .btn:hover { background: #e3f4ec; }
+  .btn.ghost { background: transparent; color: #fff; border: 1px solid rgba(255,255,255,.45); font-weight: 500; font-size: 15px; padding: 10px 16px; }
+  .btn.ghost:hover { background: rgba(255,255,255,.1); }
+  .btn small { font-weight: 400; opacity: .75; font-size: 13px; }
+  .sub { color: #b0d6c8; font-size: 14px; margin-top: 12px; }
+  .sub a { color: #d9f0e6; }
+  .demo { margin: 0; }
+  .demo img { width: 100%; height: auto; display: block; border-radius: 8px; box-shadow: 0 18px 50px rgba(0,0,0,.45); }
+  .demo figcaption { color: #8caaa0; font-size: 13px; margin-top: 10px; }
+  section { padding: 44px 0 8px; }
+  h2 { font-size: 26px; margin: 0 0 18px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; }
+  .card h3 { margin: 0 0 6px; font-size: 17px; }
+  .card p { margin: 0; color: var(--muted); font-size: 15px; }
+  .card p + p { margin-top: 8px; }
+  .shots { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); gap: 20px; }
+  .shots figure { margin: 0; }
+  .shots img { width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--line); display: block; }
+  .shots figcaption { color: var(--muted); font-size: 14px; margin-top: 6px; }
+  .note { color: var(--muted); font-size: 14px; margin: 14px 0 0; }
+  .install { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+  footer { color: var(--muted); font-size: 14px; padding: 40px 0 50px; border-top: 1px solid var(--line); margin-top: 44px; }
+  footer p { margin: 0 0 6px; }
+  @media (max-width: 860px) {
+    .hero-grid { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 600px) {
+    header.hero { padding: 36px 0 28px; }
+    .brand h1 { font-size: 32px; }
+    .brand img { width: 52px; height: 52px; }
+    .tagline { font-size: 19px; }
+  }
+</style>
+</head>
+<body>
+<header class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <div class="brand"><img src="images/icon.png" alt=""><h1>PingerPlot</h1></div>
+      <p class="tagline">See where on the path a connection goes wrong.</p>
+      <p class="facts">Like mtr or WinMTR, it finds every router between you and a target, then keeps probing all of them. Loss, latency, jitter and a voice-quality score build up per hop, so a problem shows up at the hop where it starts and every hop after it. It alerts you when the destination degrades, and runs quietly in the notification area.</p>
+      <div class="actions">
+        <a class="btn" id="primary" href="https://github.com/jamesccupps/PingerPlot/releases/latest/download/PingerPlot-Setup.exe">Download for Windows <small id="primary-note">PingerPlot-Setup.exe</small></a>
+        <a class="btn ghost" href="https://github.com/jamesccupps/PingerPlot/releases/latest/download/PingerPlot-win64.zip">Portable zip</a>
+        <a class="btn ghost" href="https://github.com/jamesccupps/PingerPlot">Source on GitHub</a>
+      </div>
+      <p class="sub"><span id="version">Free and open source (MIT).</span> Windows 10 and 11 (64-bit); Linux and macOS from source. <a href="https://github.com/jamesccupps/PingerPlot/releases">All releases</a></p>
+    </div>
+    <figure class="demo">
+      <img src="images/hops-dark.png" width="1769" height="1184" alt="PingerPlot in the dark theme: four targets, the selected one alerting with a red banner, a hop table where trouble starts at hop 4, and the destination's latency graph">
+      <figcaption>Demo mode: simulated paths with documentation addresses.</figcaption>
+    </figure>
+  </div>
+</header>
+
+<main class="wrap">
+  <section>
+    <h2>A traceroute that keeps watching</h2>
+    <div class="grid">
+      <div class="card"><h3>Every hop, all the time</h3><p>Each round is a full traceroute, so every hop gets current, average, best and worst latency, jitter and loss over minutes or days, not one snapshot.</p></div>
+      <div class="card"><h3>The path over time</h3><p>The Timeline draws every hop on one time axis. A latency step shows up as the row where the bars get tall, and stays tall for every hop after it.</p></div>
+      <div class="card"><h3>Alerts that mean something</h3><p>Sustained loss, latency or a poor MOS at the destination, over a window you choose, never a router in the middle that just deprioritises ICMP. A banner, a notification, a sound, and a webhook to Slack, Teams, ntfy or Home Assistant.</p></div>
+      <div class="card"><h3>Route changes, live</h3><p>A hop whose router changes, or a path that grows or shrinks, is caught within a round and written to the Events list.</p></div>
+      <div class="card"><h3>ICMP, TCP and UDP</h3><p>ICMP needs no administrator rights. TCP to a port answers "is this service up, and how fast?". DSCP marking measures the path as voice or video traffic would see it, and a fixed source address picks the interface.</p></div>
+      <div class="card"><h3>MOS for calls</h3><p>The ITU-T E-model's 1 to 5 voice-quality score for the destination: one number for whether the path is good enough for a call, and an alert when it isn't.</p></div>
+      <div class="card"><h3>A record you can compare</h3><p>Every probe to a size-capped CSV per target, sessions you can save and reopen, and a per-hop comparison with an earlier run that calls a changed router "rerouted" rather than inventing a difference.</p></div>
+      <div class="card"><h3>In the background, or headless</h3><p>Closing the window keeps monitoring from the notification area; Start with Windows puts it there when you sign in. A headless runner does the same for a server or Task Scheduler, with one-shot reports for tickets.</p></div>
+      <div class="card"><h3>Signed updates, nothing else sent</h3><p>It checks GitHub once a day and installs a new version with one click, only if the download carries the release signature built into the app. Probes go only to your targets; the map's lookups only when you open it.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>A closer look</h2>
+    <div class="shots">
+      <figure><img src="images/timeline-dark.png" width="1769" height="1184" alt="The Timeline view: six hops stacked on one time axis, loss and latency rising from hop 4 onwards" loading="lazy"><figcaption>Timeline: the whole path on one time axis. The trouble starts at hop 4.</figcaption></figure>
+      <figure><img src="images/hops-light.png" width="1769" height="1184" alt="The Hops view in the light theme" loading="lazy"><figcaption>The Hops view in the light theme. Rows turn amber or red on loss or latency.</figcaption></figure>
+      <figure><img src="images/events-light.png" width="1769" height="1184" alt="The Events view: a route change, alerts raised and cleared, with times" loading="lazy"><figcaption>Events: route changes and alerts as they happen.</figcaption></figure>
+      <figure><img src="images/map-dark.png" width="1769" height="1184" alt="The Map view: the path's public hops on a world map" loading="lazy"><figcaption>Map: the public hops located, when you open it.</figcaption></figure>
+      <figure><img src="images/settings-dark.png" width="1769" height="1184" alt="The Settings page: probing, alert thresholds and the app's options" loading="lazy"><figcaption>Settings: defaults for new targets, and the app's own options.</figcaption></figure>
+    </div>
+    <p class="note">All pictures are from the app's demo mode: simulated paths with documentation addresses.</p>
+  </section>
+
+  <section>
+    <h2>Install</h2>
+    <div class="install">
+      <div class="card" id="windows">
+        <h3>Installer (recommended)</h3>
+        <p><a href="https://github.com/jamesccupps/PingerPlot/releases/latest/download/PingerPlot-Setup.exe">Download PingerPlot-Setup.exe</a> and run it. It installs for your Windows user only, with no admin prompt, adds a Start menu shortcut, and uninstalls from Settings → Apps.</p>
+        <p>The app isn't code-signed, so Windows may show <em>Windows protected your PC</em> the first time: click <strong>More info</strong>, then <strong>Run anyway</strong>.</p>
+      </div>
+      <div class="card" id="portable">
+        <h3>Portable</h3>
+        <p><a href="https://github.com/jamesccupps/PingerPlot/releases/latest/download/PingerPlot-win64.zip">Download the zip</a>, unzip it somewhere of your own (a USB stick works), and run <code>PingerPlot.exe</code>. It keeps its settings in its own folder and updates itself in place.</p>
+        <p>Avoid <code>C:\Program Files</code>, which updates can't write to.</p>
+      </div>
+      <div class="card" id="use">
+        <h3>Then</h3>
+        <p>Type a host name or address, your gateway or a server you care about, and press <strong>Add</strong>. Click a hop to graph it. Full TCP or UDP traceroute needs <strong>Run as administrator</strong>; ICMP never does.</p>
+        <p>Linux or macOS? It runs from source with Python 3.10 or newer: see the <a href="https://github.com/jamesccupps/PingerPlot#platform">README</a>.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Feedback</h2>
+    <p>Found a bug or have an idea? <a href="https://github.com/jamesccupps/PingerPlot/issues">Open an issue</a> on GitHub; in the app, <strong>⋯ → Report a problem…</strong> fills in the version. Reports from real Linux and macOS machines are especially welcome.</p>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>PingerPlot is free and open source under the MIT license, made by <a href="https://jamesccupps.github.io/">James Cupps</a>. <a href="https://github.com/jamesccupps/PingerPlot">github.com/jamesccupps/PingerPlot</a></p>
+    <p>A read-only diagnostic: it sends probes and reads replies, and never changes anything on the network.</p>
+  </div>
+</footer>
+
+<script>
+(function () {
+  // The big button is for a Windows PC. Elsewhere it says so, and a phone gets the release page to send to a PC.
+  var ua = navigator.userAgent || "";
+  var platform = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "";
+  // (an iPad says it's a Mac, but has a touch screen)
+  var phone = /Android|iPhone|iPad|iPod/i.test(ua) || (navigator.userAgentData && navigator.userAgentData.mobile) ||
+    (/Mac/i.test(platform) && navigator.maxTouchPoints > 1);
+  var windows = /Win/i.test(platform + " " + ua) && !phone;
+  var primary = document.getElementById("primary"), note = document.getElementById("primary-note");
+  if (phone) {
+    primary.href = "https://github.com/jamesccupps/PingerPlot/releases/latest";
+    primary.firstChild.nodeValue = "Get it for your PC ";
+    note.textContent = "Windows 10 and 11";
+  } else if (!windows) {
+    note.textContent = "Windows 10 and 11; Linux and macOS from source";
+  }
+  // The latest version, from GitHub (the page works without it).
+  try {
+    fetch("https://api.github.com/repos/jamesccupps/PingerPlot/releases/latest").then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {
+      if (d && d.tag_name) document.getElementById("version").textContent = "Version " + d.tag_name.replace(/^v/, "") + ", free and open source (MIT).";
+    }).catch(function () {});
+  } catch (e) {}
+})();
+</script>
+</body>
+</html>
