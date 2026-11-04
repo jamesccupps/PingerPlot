@@ -90,6 +90,10 @@ def app(tk_root, isolated_settings, monkeypatch):
             except Exception:
                 pass
         a.geo.stop()
+        # Finalisers that other threads queued (see pingerplot/tkthreads.py)
+        # run here, on the main thread, while the interpreter still exists.
+        from pingerplot import tkthreads
+        tkthreads.drain()
 
 
 def write_session(path, target="example.net", hops=(1, 2)):
