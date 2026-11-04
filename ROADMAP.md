@@ -8,7 +8,8 @@ What's planned or been asked for, roughly in order. Ideas welcome as
 1.4 (an installer and a portable zip, signed in-app updates, the notification area, Start with Windows, the
 new window, a project page) is done; see the [CHANGELOG](CHANGELOG.md). Next up:
 
-- **winget and SourceForge** listings, as the sibling projects have, so `winget install PingerPlot` works.
+- **winget and SourceForge** listings, as the sibling projects have, so `winget install PingerPlot` works. The
+  SourceForge listing is ready to paste ([packaging/sourceforge](packaging/sourceforge/README.md)).
 - **The Map zooms to the path.** A path within one region is a few pixels across on a world map; 1.4 stops the
   labels piling up, but the hops still sit in a clump.
 
