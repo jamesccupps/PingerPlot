@@ -136,6 +136,25 @@ def draw_graph(c, ink: Ink, ttl: Optional[int], samples: List[Sample]) -> None:
                   anchor="e", fill=ink.col["axis_text"], font=ink.font(-2))
 
 
+def fit_text(widget, text: str, font, width: int) -> str:
+    """``text``, shortened with "…" to fit ``width`` pixels in ``font``.
+    Measured, not counted: a long router name in a wide font (DejaVu Sans on
+    Linux) ran into the column beside it at the 30 characters that fitted
+    Segoe UI."""
+    from tkinter import font as tkfont
+    f = tkfont.Font(root=widget, font=font)
+    if width <= 0 or f.measure(text) <= width:
+        return text if width > 0 else ""
+    lo, hi = 0, len(text)
+    while lo < hi:                          # the longest prefix that fits with "…"
+        mid = (lo + hi + 1) // 2
+        if f.measure(text[:mid] + "…") <= width:
+            lo = mid
+        else:
+            hi = mid - 1
+    return text[:lo].rstrip() + "…" if lo else ""
+
+
 def draw_timeline(c, ink: Ink, views: List[HopView], data: Dict[int, List[Sample]]) -> str:
     """Every hop as a strip on one shared time and latency scale. Returns the
     caption for the view's header."""
@@ -168,11 +187,13 @@ def draw_timeline(c, ink: Ink, views: List[HopView], data: Dict[int, List[Sample
             c.create_line(0, y0, w, y0, fill=ink.col["strip_sep"])
         c.create_rectangle(gx0, y_top, gx1, y_base, fill=ink.col["graph_bg"],
                            outline=ink.col["strip_border"])
-        label = f"{v.ttl}.  {v.hostname or v.address or '*'}"
-        c.create_text(S(8), (y_top + y_base) / 2, anchor="w", text=label[:30],
+        loss = c.create_text(gutter - S(8), (y_top + y_base) / 2, anchor="e",
+                             text=f"{v.loss_pct:.0f}% loss", fill=ink.col["axis_text"],
+                             font=ink.font(-3))
+        room = (c.bbox(loss) or (gutter - S(8),))[0] - S(8) - S(8)
+        label = fit_text(c, f"{v.ttl}.  {v.hostname or v.address or '*'}", ink.font(-2), room)
+        c.create_text(S(8), (y_top + y_base) / 2, anchor="w", text=label,
                       fill=ink.hop_fg(v, v.ttl == last_ttl), font=ink.font(-2))
-        c.create_text(gutter - S(8), (y_top + y_base) / 2, anchor="e",
-                      text=f"{v.loss_pct:.0f}% loss", fill=ink.col["axis_text"], font=ink.font(-3))
         plot_series(c, ink, data.get(v.ttl, []), gx0, gx1, y_base, y_top, g_max, t_min, span,
                     tick=S(6))
         c.create_text(gx1 - S(4), y_top + S(2), anchor="ne", text=fmt_ms(v.current),

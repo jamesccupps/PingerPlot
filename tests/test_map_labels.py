@@ -166,3 +166,28 @@ def test_a_label_at_the_right_edge_goes_to_the_left(canvas):
     _label_places(canvas, INK, [_hop(2, 990, 200, "Portland")], 7, 4, bounds=(0, 0, 1000, 500))
     (text, box), = _labels(canvas)
     assert box[2] <= 1000 and box[2] < 990
+
+
+# --- the Timeline's hop names ---------------------------------------------------
+
+from pingerplot.gui_charts import fit_text  # noqa: E402
+
+FONT = ("Segoe UI", 9)
+
+
+def test_a_name_that_fits_is_unchanged(canvas):
+    assert fit_text(canvas, "3.  agg2.isp.example.net", FONT, 1000) == "3.  agg2.isp.example.net"
+
+
+def test_a_long_name_is_shortened_to_fit(canvas):
+    """A real-world router name, in the 140-odd pixels the Timeline leaves."""
+    from tkinter import font as tkfont
+    name = "7.  ae-1-3504.edge4.frankfurt1.example.net"
+    out = fit_text(canvas, name, FONT, 140)
+    assert out.endswith("…") and name.startswith(out[:-1])
+    assert tkfont.Font(root=canvas, font=FONT).measure(out) <= 140
+
+
+def test_no_room_means_no_text(canvas):
+    assert fit_text(canvas, "3.  agg2.isp.example.net", FONT, 0) == ""
+    assert fit_text(canvas, "3.  agg2.isp.example.net", FONT, 3) == ""
