@@ -24,6 +24,14 @@ _BORDER = (60, 74, 92)   # subtle lighter rim
 _ARC = (74, 163, 223)    # accent blue (COLORS["line"])
 _DOT = (152, 212, 255)   # bright node
 
+# Tray states: the same mark, greyed out when nothing is being monitored, and
+# with a red badge while any target is alerting.
+STATES = {
+    "normal": dict(arc=_ARC, dot=_DOT, badge=None),
+    "idle": dict(arc=(138, 148, 160), dot=(186, 192, 200), badge=None),
+    "alert": dict(arc=_ARC, dot=_DOT, badge=(232, 72, 72)),
+}
+
 
 def _in_round_rect(x: float, y: float, lo: float, hi: float, r: float) -> bool:
     if x < lo or x > hi or y < lo or y > hi:
@@ -35,10 +43,14 @@ def _in_round_rect(x: float, y: float, lo: float, hi: float, r: float) -> bool:
     return True
 
 
-def _render(n: int = 64, ss: int = 3) -> bytes:
+def _render(n: int = 64, ss: int = 3, arc=_ARC, dot=_DOT, badge=None) -> bytes:
     """Return ``n*n`` RGBA bytes (top-to-bottom) for the icon, supersampled by
-    ``ss`` and downsampled with premultiplied alpha for clean anti-aliasing."""
+    ``ss`` and downsampled with premultiplied alpha for clean anti-aliasing.
+    ``badge`` adds a status dot in the lower-right corner, ringed in the
+    tile's colour so it reads at 16 px."""
     b = n * ss
+    bxc, byc, br = 0.76 * b, 0.76 * b, 0.20 * b      # badge centre and radius
+    ring = 0.06 * b
     x0, y0 = 0.30 * b, 0.74 * b           # ripple origin (lower-left)
     radii = ((0.21 * b, 255), (0.35 * b, 225), (0.49 * b, 185))  # (radius, alpha)
     half_t = 0.038 * b                    # arc half-thickness
@@ -67,10 +79,16 @@ def _render(n: int = 64, ss: int = 3) -> bytes:
                 if dx >= qx and dy <= qy:
                     for rr, aa in radii:
                         if abs(d - rr) <= half_t:
-                            r, g, bl, a = _ARC[0], _ARC[1], _ARC[2], aa
+                            r, g, bl, a = arc[0], arc[1], arc[2], aa
                             break
                 if d <= dot_r:
-                    r, g, bl, a = _DOT[0], _DOT[1], _DOT[2], 255
+                    r, g, bl, a = dot[0], dot[1], dot[2], 255
+            if badge is not None:
+                bd = math.hypot(px - bxc, py - byc)
+                if bd <= br:
+                    r, g, bl, a = badge[0], badge[1], badge[2], 255
+                elif bd <= br + ring:
+                    r, g, bl, a = _TILE[0], _TILE[1], _TILE[2], 255
             idx = row + (bx // ss)
             f = a / 255.0
             pr[idx] += r * f; pg[idx] += g * f; pb[idx] += bl * f; pa[idx] += a
@@ -107,9 +125,9 @@ def _png(rgba: bytes, w: int, h: int) -> bytes:
             + chunk(b"IEND", b""))
 
 
-def png_bytes(size: int = 64) -> bytes:
-    """The icon as PNG bytes."""
-    return _png(_render(size), size, size)
+def png_bytes(size: int = 64, state: str = "normal") -> bytes:
+    """The icon as PNG bytes; ``state`` is one of STATES (the tray's)."""
+    return _png(_render(size, **STATES[state]), size, size)
 
 
 def png_base64(size: int = 64) -> str:

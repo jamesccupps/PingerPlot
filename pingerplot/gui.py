@@ -13,6 +13,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import queue
 import sys
 import time
 import tkinter as tk
@@ -22,7 +23,7 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Dict, List, Optional
 
 from . import __version__, appicon, compare as cmpmod, geoip, icmp, settings
-from . import theme as themes, tkthreads, winplatform
+from . import theme as themes, tkthreads, tray as traymod, winplatform
 from .gui_charts import BAD_MS, WARN_MS, Ink, draw_graph, draw_map, draw_timeline, fmt_ms, row_tag
 from .gui_settings import REPO_URL, EditTargetDialog, OptionVars, SettingsPage
 from .gui_widgets import Nav, ScrollFrame, TargetCard
@@ -62,9 +63,13 @@ def _csv_num(v: Optional[float]) -> str:
 
 
 class App:
-    def __init__(self, root: tk.Tk) -> None:
+    def __init__(self, root: tk.Tk, use_tray: bool = False, start_minimized: bool = False) -> None:
         tkthreads.install()     # before the first Variable or image: see tkthreads
         self.root = root
+        self.tray: Optional[traymod.TrayIcon] = None
+        self._tray_state = None
+        self._ui_jobs: "queue.SimpleQueue" = queue.SimpleQueue()
+        self._notify_seq: Dict[str, int] = {}   # per target: newest event already notified
         self._monitors: "dict[str, Monitor]" = {}   # target name -> its Monitor
         self._active: Optional[str] = None           # which one the detail shows
         self._empty = Monitor()                      # placeholder when nothing selected
@@ -95,6 +100,9 @@ class App:
             pref = "system"
         self.theme_var = tk.StringVar(value=pref)
         self.resume_var = tk.BooleanVar(value=True)   # resume last targets on launch
+        self.keep_tray_var = tk.BooleanVar(value=True)  # closing hides to the tray
+        self.notify_var = tk.BooleanVar(value=True)     # a notification per alert
+        self.autostart_var = tk.BooleanVar(value=winplatform.autostart_enabled())
         self.target_var = tk.StringVar(value="")
         self._theme_checked = time.monotonic()
         # Before any widget is built: every ttk style comes from here.
@@ -123,6 +131,11 @@ class App:
                 "TCP and UDP probe modes do not use this backend and may still work.",
             )
 
+        if use_tray:
+            self._start_tray()
+            winplatform.refresh_autostart()     # the folder moved: point the Run key here
+        if start_minimized and self.tray is not None:
+            self.root.withdraw()                # Start with Windows: straight to the tray
         self._restore_targets()          # optionally resume the last session's targets
         self._refresh_once()
         self.root.after(REFRESH_MS, self._refresh)
@@ -451,9 +464,127 @@ class App:
         self._draw_active_view()
 
     def build_app_settings(self, card) -> None:
-        """App rows on the Settings page that depend on the window (the
-        notification area, Start with Windows): added in a later step."""
-        return
+        """The Settings page's rows for running in the background."""
+        from .gui_widgets import setting_row
+
+        def switch(var, command=None, enabled=True):
+            def make(parent):
+                cb = ttk.Checkbutton(parent, variable=var, style="Card.Switch.TCheckbutton",
+                                     command=command)
+                if not enabled:
+                    cb.state(["disabled"])
+                return cb
+            return make
+        has_tray = self.tray is not None
+        if winplatform.IS_WINDOWS:
+            setting_row(card, self.look, "Start with Windows",
+                        "Starts in the notification area when you sign in, and resumes your targets. "
+                        "It runs without administrator rights, so ICMP and TCP to the destination "
+                        "work but full TCP/UDP traceroute doesn't (launch.ps1 -InstallAutostart "
+                        "starts it elevated instead).",
+                        switch(self.autostart_var, self._toggle_autostart))
+        setting_row(card, self.look, "Keep running in the notification area when closed",
+                    "Closing the window keeps every target monitored. Quit from the tray icon's "
+                    "menu or the ⋯ menu." if has_tray else
+                    "Not available here: there's no notification area to keep running in.",
+                    switch(self.keep_tray_var, enabled=has_tray))
+        setting_row(card, self.look, "Show a notification for alerts",
+                    "When an alert starts or ends. Click it to open that target.",
+                    switch(self.notify_var, enabled=has_tray))
+
+    def _toggle_autostart(self) -> None:
+        on = bool(self.autostart_var.get())
+        if winplatform.set_autostart(on) and on:
+            self.resume_var.set(True)       # starting with nothing to resume is pointless
+        self.autostart_var.set(winplatform.autostart_enabled())
+
+    # --- the notification area ---------------------------------------------------
+    def _start_tray(self) -> None:
+        if not traymod.AVAILABLE:
+            return
+        t = traymod.TrayIcon(
+            lambda state, size: appicon.png_bytes(size, state), "PingerPlot", self._tray_menu,
+            on_open=lambda: self._post(self._show_window),
+            on_show=lambda: self._post(self._show_window),
+            on_theme=lambda: self._post(self._on_system_theme))
+        if t.start():
+            self.tray = t
+            self.root.after(50, self._drain_ui)
+
+    def _post(self, fn) -> None:
+        """Run ``fn`` on Tk's thread. The tray's callbacks come from its own
+        thread, and a Tk call from another thread waits for the main loop."""
+        self._ui_jobs.put(fn)
+
+    def _drain_ui(self) -> None:
+        try:
+            while True:
+                try:
+                    fn = self._ui_jobs.get_nowait()
+                except queue.Empty:
+                    break
+                fn()
+        finally:
+            self.root.after(50, self._drain_ui)
+
+    def _tray_menu(self) -> list:
+        """Built on the tray thread: reads state, never touches Tk."""
+        M = traymod.MenuItem
+        running = any(m.running for n, m in self._monitors.items() if n not in self._loaded)
+        items = [M("Open PingerPlot", lambda: self._post(self._show_window), default=True), M(),
+                 M("Stop all", lambda: self._post(self._stop_all), enabled=running)]
+        if winplatform.IS_WINDOWS:
+            items.append(M("Start with Windows", lambda: self._post(self._tray_toggle_autostart),
+                           checked=winplatform.autostart_enabled()))
+        items += [M(), M("Quit", lambda: self._post(self._quit))]
+        return items
+
+    def _tray_toggle_autostart(self) -> None:
+        self.autostart_var.set(not winplatform.autostart_enabled())
+        self._toggle_autostart()
+
+    def _show_window(self) -> None:
+        self.root.deiconify()
+        if self.root.state() == "iconic":
+            self.root.state("normal")
+        self.root.lift()
+        self.root.focus_force()
+        self._draw_ver = None
+
+    def _on_system_theme(self) -> None:
+        if self.theme_var.get() == "system":
+            self._theme_checked = 0.0
+            self._follow_system_theme()
+
+    def _update_tray(self) -> None:
+        if self.tray is None:
+            return
+        live = [(n, m) for n, m in self._monitors.items() if n not in self._loaded]
+        running = sum(1 for _n, m in live if m.running and not m.paused)
+        alerting = sum(1 for _n, m in live if m.running and m.active_alerts())
+        state = "alert" if alerting else ("normal" if running else "idle")
+        tip = "PingerPlot" + (f" · {alerting} alerting" if alerting else "") + (
+            f" · monitoring {running}" if running else " · not monitoring")
+        if (state, tip) != self._tray_state:
+            self._tray_state = (state, tip)
+            self.tray.set_state(state, tip)
+        if not self.notify_var.get():
+            return
+        for name, mon in live:
+            new, last = mon.events_after(self._notify_seq.get(name, -1))
+            self._notify_seq[name] = last
+            for e in new:
+                if e.kind not in ("alert", "clear"):
+                    continue
+                text = e.text.split(": ", 1)[1] if e.kind == "alert" and ": " in e.text else e.text
+                self.tray.notify(f"{name}: {'alert' if e.kind == 'alert' else 'back to normal'}",
+                                 text, on_click=lambda n=name: self._post(lambda: self._open_target(n)))
+
+    def _open_target(self, name: str) -> None:
+        self._show_window()
+        self.nav.select("targets", notify=True)
+        if name in self._monitors:
+            self._select_card(name)
 
     def report_url(self) -> str:
         """The bug-report form, with the version filled in (an issue form
@@ -509,6 +640,7 @@ class App:
             mon = Monitor()
             self._monitors[target] = mon
         mon.start(target, **options)
+        self._notify_seq[target] = -1       # a restart numbers its events from 0 again
         if from_box:
             self.target_var.set("")
         self._activate(target)
@@ -619,7 +751,7 @@ class App:
         m.add_command(label="Report a problem…", command=lambda: webbrowser.open(self.report_url()))
         m.add_command(label="Project page", command=lambda: webbrowser.open(REPO_URL))
         m.add_separator()
-        m.add_command(label="Quit", command=self._on_close)
+        m.add_command(label="Quit", command=self._quit)
         self._popup(m, button.winfo_rootx(), button.winfo_rooty() + button.winfo_height())
 
     def _target_menu(self, name: str, x: int, y: int) -> None:
@@ -673,7 +805,24 @@ class App:
         self._note_until = time.monotonic() + seconds
 
     def _on_close(self) -> None:
+        """The window's close button: to the tray if it's there and wanted,
+        otherwise quit."""
+        if self.tray is not None and self.keep_tray_var.get():
+            self._save_settings()           # a crash later shouldn't cost the target list
+            self.root.withdraw()
+            if not self._settings.get("told_hidden"):
+                self._settings["told_hidden"] = True
+                self.tray.notify("PingerPlot is still running",
+                                 "Your targets are still being monitored. Quit from this icon's menu.",
+                                 on_click=lambda: self._post(self._show_window))
+            return
+        self._quit()
+
+    def _quit(self) -> None:
         self._save_settings()
+        if self.tray is not None:
+            self.tray.stop()
+            self.tray = None
         self.geo.stop()
         mons = list(self._monitors.values())
         for mon in mons:
@@ -689,13 +838,18 @@ class App:
         """The saved defaults and app options, into their controls."""
         s = self._settings
         self.defaults.load_settings(s)
-        if isinstance(s.get("resume_on_launch"), bool):
-            self.resume_var.set(s["resume_on_launch"])
+        for var, key in ((self.resume_var, "resume_on_launch"), (self.keep_tray_var, "keep_in_tray"),
+                         (self.notify_var, "notify")):
+            if isinstance(s.get(key), bool):
+                var.set(s[key])
 
     def _save_settings(self) -> None:
         """Persist the defaults, app options and the target list."""
         data = {"theme": self.theme_var.get(),
-                "resume_on_launch": bool(self.resume_var.get())}
+                "resume_on_launch": bool(self.resume_var.get()),
+                "keep_in_tray": bool(self.keep_tray_var.get()),
+                "notify": bool(self.notify_var.get()),
+                "told_hidden": bool(self._settings.get("told_hidden", False))}
         self.defaults.save_settings(data)
         # Live targets only. A loaded session lives in the same dict so the
         # detail views can render it, but its key is "<name> (loaded)" -- not
@@ -949,6 +1103,9 @@ class App:
     def _refresh_once(self) -> None:
         self._follow_system_theme()
         self._update_header()
+        self._update_tray()
+        if self.root.state() == "withdrawn":
+            return              # in the tray: nothing on screen to update
         self._update_cards()
         views, status, target_ip, _target_input = self.monitor.snapshot()
         self._update_detail(views, status, target_ip)
@@ -1189,9 +1346,15 @@ def main() -> None:
         return
     winplatform.enable_dpi_awareness()
     winplatform.set_app_id()
+    # One copy at a time: two would each restore and save the same target list
+    # and probe every target twice. A second launch shows the first instead.
+    instance = winplatform.SingleInstance()
+    if instance.already_running and instance.signal_existing():
+        return
     root = tk.Tk()
-    App(root)
+    App(root, use_tray=True, start_minimized="--minimized" in sys.argv[1:])
     root.mainloop()
+    instance.release()
 
 
 if __name__ == "__main__":
