@@ -112,7 +112,8 @@ def test_the_spec_does_not_exclude_anything_the_app_imports():
     urllib.request, which geoip and the webhook both need."""
     spec = (REPO / "packaging" / "pingerplot.spec").read_text(encoding="utf-8")
     dangerous = ("email", "urllib", "http", "json", "socket", "ctypes",
-                 "tkinter", "select", "csv", "queue", "ipaddress", "zlib")
+                 "tkinter", "select", "csv", "queue", "ipaddress", "zlib",
+                 "zipfile", "subprocess", "hashlib", "tempfile")
     for mod in dangerous:
         assert f'"{mod}"' not in spec.split("EXCLUDES")[1].split("]")[0], \
             f"the spec excludes {mod!r}, which the app imports"
