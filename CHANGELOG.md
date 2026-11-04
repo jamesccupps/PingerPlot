@@ -4,7 +4,7 @@ All notable changes to PingerPlot are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.4.2] — 2026-11-04
 
 Linux, properly: installed with one `pipx` command, and the parts of the
 window that only worked on Windows now have Linux equivalents. CI starts the
@@ -37,6 +37,9 @@ app on Ubuntu on every push.
   Windows-only at any privilege.
 - Turning alert notifications on no longer replays the alerts that happened
   while they were off.
+- Timeline hop names were cut at 30 characters, which fitted Segoe UI; in a
+  wider font (DejaVu Sans on Linux), or for a long router name anywhere, they
+  ran into the loss column. They're measured and shortened with "…" to fit.
 
 ## [1.4.1] — 2026-11-04
 
@@ -517,6 +520,7 @@ have relied on — see **Changed** before comparing old exports with new ones.
 
 - Initial public release.
 
+[1.4.2]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.4.2
 [1.4.1]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.4.1
 [1.4.0]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.4.0
 [1.3.3]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.3.3
