@@ -121,7 +121,10 @@ def test_theme_builds_and_switches_in_place(tk_root):
 # --- winplatform -----------------------------------------------------------------
 
 @pytest.mark.skipif(winplatform.IS_WINDOWS, reason="the non-Windows path")
-def test_every_windows_call_is_a_no_op_elsewhere():
+def test_every_windows_call_is_a_no_op_elsewhere(monkeypatch):
+    # Linux asks the desktop's portal instead (tests/test_linux_theme.py);
+    # without gdbus there's nothing to ask.
+    monkeypatch.setattr(winplatform.shutil, "which", lambda name: None)
     assert winplatform.system_prefers_dark() is None
     assert winplatform.system_accent(True) is None
     assert winplatform.autostart_value() is None

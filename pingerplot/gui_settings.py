@@ -9,7 +9,7 @@ import webbrowser
 from tkinter import filedialog, messagebox, ttk
 from typing import Callable, Dict
 
-from . import __version__, monitor, tcpudp
+from . import __version__, monitor, tcpudp, winplatform
 from .gui_widgets import ScrollFrame, section, setting_row
 
 REPO_URL = "https://github.com/jamesccupps/PingerPlot"
@@ -234,10 +234,10 @@ class SettingsPage(ScrollFrame):
         card = section(body, look, "App")
 
         def theme_control(row):
-            labels = {"system": "Match Windows", "dark": "Dark", "light": "Light"}
-            shown = tk.StringVar(master=row, value=labels.get(app.theme_var.get(), "Match Windows"))
+            labels = {"system": winplatform.THEME_LABEL, "dark": "Dark", "light": "Light"}
+            shown = tk.StringVar(master=row, value=labels.get(app.theme_var.get(), labels["system"]))
             box = ttk.Combobox(row, textvariable=shown, values=list(labels.values()),
-                               state="readonly", width=15, style="Card.TCombobox")
+                               state="readonly", width=17, style="Card.TCombobox")
             back = {v: k for k, v in labels.items()}
             box.bind("<<ComboboxSelected>>", lambda _e: app._apply_theme(back[shown.get()]))
             app.theme_var.trace_add("write", lambda *_a: shown.set(labels.get(app.theme_var.get(), "")))

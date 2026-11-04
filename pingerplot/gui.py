@@ -210,13 +210,14 @@ class App:
                 self.look.style_window(win)
 
     def _follow_system_theme(self) -> None:
-        """With "Match Windows", notice Windows switching light/dark. A
-        registry read every few seconds is cheaper than it sounds and needs
-        no hidden window to receive the broadcast."""
+        """With "Match Windows" ("Match the system" on Linux), notice the
+        system switching light/dark. A registry read every few seconds is
+        cheaper than it sounds and needs no hidden window to receive the
+        broadcast; Linux's portal read is a process, so it's less often."""
         if self.theme_var.get() != "system":
             return
         now = time.monotonic()
-        if now - self._theme_checked < 3.0:
+        if now - self._theme_checked < winplatform.THEME_POLL_S:
             return
         self._theme_checked = now
         if themes.resolve_dark("system") != self.look.dark:

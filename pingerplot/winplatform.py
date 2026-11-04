@@ -1,12 +1,16 @@
 """Windows integration: DPI, title bar colours, theme and accent, Start with
 Windows, single instance. Every function is a harmless no-op elsewhere, so
-the GUI runs (and its tests run) on Linux and macOS too.
+the GUI runs (and its tests run) on Linux and macOS too; on Linux the
+light/dark preference comes from the desktop's settings portal.
 
 Adapted from UniFi Stock Watcher, a sibling project with the same conventions.
 """
 from __future__ import annotations
 
 import logging
+import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
@@ -62,13 +66,45 @@ def _reg_value(path: str, name: str):
         return None
 
 
+THEME_LABEL = "Match Windows" if IS_WINDOWS else "Match the system"
+# How often the window re-asks: a registry read on Windows, a process
+# (gdbus) on Linux.
+THEME_POLL_S = 3.0 if IS_WINDOWS else 30.0
+
+_PORTAL_READ = ["call", "--session", "--dest", "org.freedesktop.portal.Desktop",
+                "--object-path", "/org/freedesktop/portal/desktop",
+                "--method", "org.freedesktop.portal.Settings.Read",
+                "org.freedesktop.appearance", "color-scheme"]
+
+
 def system_prefers_dark() -> Optional[bool]:
-    """Windows' app light/dark setting; None where there isn't one to ask."""
+    """The system's light/dark preference: Windows' app setting, or on Linux
+    the desktop's (below). None where there isn't one to ask."""
+    if sys.platform.startswith("linux"):
+        return _portal_prefers_dark()
     if not IS_WINDOWS:
         return None
     v = _reg_value(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
                    "AppsUseLightTheme")
     return None if v is None else v == 0
+
+
+def _portal_prefers_dark() -> Optional[bool]:
+    """The freedesktop settings portal's org.freedesktop.appearance
+    color-scheme, which GNOME, KDE Plasma and others answer: 1 prefers dark,
+    2 prefers light, 0 no preference (None, as is no portal at all). Read
+    through gdbus (GLib's, on any desktop that has the portal) so no D-Bus
+    module is needed."""
+    gdbus = shutil.which("gdbus")
+    if not gdbus:
+        return None
+    try:
+        out = subprocess.run([gdbus, *_PORTAL_READ], capture_output=True, text=True,
+                             timeout=2).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.search(r"uint32 (\d+)", out)
+    return {"1": True, "2": False}.get(m.group(1)) if m else None
 
 
 def system_accent(dark: bool) -> Optional[str]:
