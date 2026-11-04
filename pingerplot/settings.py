@@ -19,8 +19,29 @@ APP_NAME = "PingerPlot"
 FILE_NAME = "settings.json"
 
 
+PORTABLE_MARKER = "portable.txt"
+
+
+def portable_dir() -> "Path | None":
+    """The program's own folder, when it's a portable copy: a frozen build
+    with ``portable.txt`` beside it keeps its settings there, so a copy on a
+    USB stick carries them along. Running from source never is."""
+    if not getattr(sys, "frozen", False):
+        return None
+    here = Path(sys.executable).resolve().parent
+    return here if (here / PORTABLE_MARKER).exists() else None
+
+
 def config_dir() -> Path:
-    """Per-user config directory for PingerPlot."""
+    """Where PingerPlot keeps its settings: PINGERPLOT_DATA_DIR if set (the
+    self-test and the demo point it at a scratch folder), a portable copy's
+    own folder, or the per-user config directory."""
+    override = os.environ.get("PINGERPLOT_DATA_DIR")
+    if override:
+        return Path(override)
+    portable = portable_dir()
+    if portable is not None:
+        return portable
     if sys.platform == "win32":
         base = os.environ.get("APPDATA") or str(Path.home())
         return Path(base) / APP_NAME

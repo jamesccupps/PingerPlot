@@ -1344,6 +1344,12 @@ def main() -> None:
         # hypothetical: it is exactly how the first build of this was broken.
         print(f"PingerPlot {__version__}")
         return
+    if "--self-test" in sys.argv[1:]:
+        # Before the single-instance check: a copy already running on the
+        # machine mustn't stop a build being tested.
+        from . import selfcheck
+        winplatform.enable_dpi_awareness()
+        raise SystemExit(selfcheck.run())
     winplatform.enable_dpi_awareness()
     winplatform.set_app_id()
     # One copy at a time: two would each restore and save the same target list
