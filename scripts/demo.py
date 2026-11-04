@@ -170,10 +170,22 @@ def capture(win, path):
     """The window (with its title bar) to PNG, by PrintWindow. Everything is
     invalidated first and the picture taken a moment later: on a locked or
     covered desktop Windows sends no WM_PAINT for what changed, and Tk draws
-    the Expose events it turns them into from the event loop."""
+    the Expose events it turns them into from the event loop.
+
+    Elsewhere (Linux under X11, e.g. CI's Xvfb) ImageMagick's ``import``
+    grabs the window's frame from the X server."""
+    if sys.platform != "win32":
+        win.after(700, lambda: _grab_x11(win, path))
+        return
     hwnd = int(win.wm_frame(), 16)
     ctypes.windll.user32.RedrawWindow(hwnd, None, None, 0x1 | 0x4 | 0x80 | 0x400)
     win.after(700, lambda: _grab(win, path))
+
+
+def _grab_x11(win, path):
+    win.update_idletasks()
+    subprocess.run(["import", "-window", win.wm_frame(), str(path)], check=True, timeout=30)
+    print("wrote", path)
 
 
 def _grab(win, path):

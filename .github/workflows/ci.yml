@@ -85,6 +85,56 @@ jobs:
         if: runner.os != 'Linux'
         run: python -m pytest -q -rs
 
+  linux-app:
+    # The app on Linux as someone running it from source would: the real
+    # window's self-test under a virtual display, the headless runner probing
+    # loopback, and the demo's pictures (an artifact, for looking at). The
+    # pytest legs build the window too, but never as `python main.py`.
+    name: Linux app (from source)
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Install Tk, a display and a screenshot tool
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq python3-tk xvfb imagemagick
+
+      - name: Allow unprivileged ICMP sockets
+        # What systemd-based distros set by default; GitHub's runners don't.
+        run: sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"
+
+      - name: Self-test the window
+        run: |
+          export PINGERPLOT_DATA_DIR="$RUNNER_TEMP/pp-data"
+          xvfb-run -a -s "-screen 0 1920x1200x24" python main.py --self-test || rc=$?
+          cat "$PINGERPLOT_DATA_DIR/self-test.txt"
+          exit "${rc:-0}"
+
+      - name: Probe loopback with the headless runner
+        run: |
+          cfg="$RUNNER_TEMP/smoke.json"
+          printf '%s' '{"status_interval": 0, "defaults": {"interval": 0.5, "timeout_ms": 1000}, "targets": [{"target": "127.0.0.1", "final_hop_only": true}]}' > "$cfg"
+          python -m pingerplot.headless "$cfg" --report 2
+
+      - name: Take the demo's pictures
+        run: xvfb-run -a -s "-screen 0 1920x1200x24" python scripts/demo.py --shots linux-pictures
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: PingerPlot-linux-pictures
+          path: linux-pictures
+          retention-days: 7
+
   package:
     # The release files built and tested on every push, so a change that
     # breaks the installer or the portable zip turns a push red, not the next
