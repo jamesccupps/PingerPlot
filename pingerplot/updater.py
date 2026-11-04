@@ -67,6 +67,8 @@ MAX_MANIFEST = 64 * 1024
 MAX_DOWNLOAD = 300 * 1024 * 1024
 
 _VERSION_RE = re.compile(r"^(\d{1,4})\.(\d{1,4})\.(\d{1,6})$")
+STAGING_PREFIX = "PingerPlot-update-"       # + the version: a download's folder in %TEMP%
+_STAGING_RE = re.compile(re.escape(STAGING_PREFIX) + r"\d{1,4}\.\d{1,4}\.\d{1,6}")
 _FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 _SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 _GITHUB_LATEST = re.compile(
@@ -239,7 +241,7 @@ def download(update: Update, dest_dir: Optional[Path] = None,
     if not update.can_install:
         raise UpdateError("nothing to download for this kind of copy")
     a = update.asset
-    dest_dir = Path(dest_dir or Path(tempfile.gettempdir()) / f"PingerPlot-update-{update.version}")
+    dest_dir = Path(dest_dir or Path(tempfile.gettempdir()) / f"{STAGING_PREFIX}{update.version}")
     dest_dir.mkdir(parents=True, exist_ok=True)
     final, part = dest_dir / a["file"], dest_dir / (a["file"] + ".part")
     where = asset_location(update.source, update.version, a["file"])
@@ -448,5 +450,9 @@ def cleanup_after_update() -> None:
                 _remove(p)
             except OSError:
                 pass
-    for p in Path(tempfile.gettempdir()).glob("PingerPlot-update-*"):
-        shutil.rmtree(p, ignore_errors=True)
+    # Exactly the folders download() makes. Not glob("PingerPlot-update-*"):
+    # on Windows that matches without regard to case, and it once deleted a
+    # test's own pingerplot-update-test-NNN folder, the updated copy in it.
+    for p in Path(tempfile.gettempdir()).iterdir():
+        if _STAGING_RE.fullmatch(p.name) and p.is_dir():
+            shutil.rmtree(p, ignore_errors=True)

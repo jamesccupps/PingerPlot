@@ -385,6 +385,20 @@ def test_cleanup_removes_what_a_swap_leaves(tmp_path, monkeypatch):
     assert list((tmp_path / "temp").iterdir()) == []
 
 
+def test_cleanup_leaves_other_temp_folders_alone(tmp_path, monkeypatch):
+    """glob("PingerPlot-update-*") is case-insensitive on Windows: it deleted
+    the update test's own pingerplot-update-test-NNN folder, with the copy it
+    had just updated inside."""
+    monkeypatch.setattr(updater.tempfile, "gettempdir", lambda: str(tmp_path))
+    keep = ["pingerplot-update-test-123", "PingerPlot-update-notes", "PingerPlot-update-1.4",
+            "PingerPlot-update-1.4.0-extra"]
+    for name in keep + ["PingerPlot-update-1.4.0"]:
+        (tmp_path / name).mkdir()
+    (tmp_path / "PingerPlot-update-9.9.9").write_text("a file, not a staging folder")
+    updater.cleanup_after_update()
+    assert sorted(p.name for p in tmp_path.iterdir()) == sorted(keep + ["PingerPlot-update-9.9.9"])
+
+
 # --- the shipped key and the signing tool -------------------------------------------------
 
 def test_the_shipped_public_key_is_a_real_key():
