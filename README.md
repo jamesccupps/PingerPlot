@@ -81,7 +81,7 @@ logon task.
      on loss or high latency, over a latency graph. Click a row to graph that hop; until you do, it follows the
      destination.
    - **Timeline**: every hop stacked on one time axis.
-   - **Map**: the public hops located on a world map (see [privacy](#updates-and-privacy)).
+   - **Map**: the public hops located on a map zoomed to the path (see [privacy](#updates-and-privacy)).
    - **Events**: route changes, alerts raised and cleared, warnings.
 3. **Pause**, **Stop** and **Edit settings** are at the top right. Editing a target's settings restarts it with
    them.

@@ -4,7 +4,10 @@ All notable changes to PingerPlot are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.4.1] — 2026-11-04
+
+The Map, zoomed to the path. The first release the in-app updater delivers:
+1.4.0 copies offer it by themselves.
 
 ### Changed
 
@@ -480,6 +483,7 @@ have relied on — see **Changed** before comparing old exports with new ones.
 
 - Initial public release.
 
+[1.4.1]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.4.1
 [1.4.0]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.4.0
 [1.3.3]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.3.3
 [1.3.2]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.3.2
