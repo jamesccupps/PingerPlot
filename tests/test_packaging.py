@@ -199,17 +199,29 @@ def test_ci_builds_and_tests_the_release_files_on_every_push():
     ci = (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     job = ci[ci.index("\n  package:"):]
     for step in ("packaging/build_windows.py", "packaging/test_portable.ps1",
-                 "packaging/test_installer.ps1", "--require-hashes"):
+                 "packaging/test_installer.ps1", "packaging/test_update.ps1", "--require-hashes"):
         assert step in job, f"the package job doesn't run {step}"
 
 
 def test_the_release_workflow_verifies_before_it_uploads():
-    """An unverified upload is how a broken binary reaches people."""
+    """An unverified upload is how a broken binary reaches people; one the
+    previous version can't update to is how it stops reaching them."""
     wf = (REPO / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
     smoke_gui = wf.index("Smoke-test the frozen GUI")
     smoke_cli = wf.index("Smoke-test the frozen headless")
+    update = wf.index("./packaging/test_update.ps1")
     upload = wf.index("Attach to the release")
     assert smoke_gui < upload and smoke_cli < upload
+    assert update < wf.index("\n  sign:"), "the update test belongs to the build job"
+
+
+def test_the_update_test_never_uses_the_release_key():
+    """It signs its own release folder with a throwaway key; the release key
+    belongs to the sign job alone."""
+    helper = (REPO / "packaging" / "update_test_helper.py").read_text(encoding="utf-8")
+    assert "os.urandom(32)" in helper and "key_file" not in helper
+    ps1 = (REPO / "packaging" / "test_update.ps1").read_text(encoding="utf-8")
+    assert "UPDATE_SIGNING_KEY" not in ps1 and "PINGERPLOT_SIGNING_KEY" not in ps1
 
 
 def test_the_workflow_checks_the_gui_exit_code_correctly():

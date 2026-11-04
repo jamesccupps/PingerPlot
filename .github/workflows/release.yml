@@ -181,6 +181,16 @@ jobs:
           TAG: ${{ steps.tag.outputs.name }}
         run: ./packaging/test_installer.ps1 -Setup dist\PingerPlot-Setup.exe -Version ($env:TAG.TrimStart('v'))
 
+      - name: Update an older copy to these files
+        # These exact files, signed for the test with a throwaway key (never
+        # the release key, which this job doesn't have): a release that the
+        # previous one -- or, until there is one with an updater, this build
+        # itself -- can't update to is never published.
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ./packaging/test_update.ps1
+
       - name: Checksums
         # Published alongside the downloads: they are unsigned, so a SHA256 a
         # reader can compare is the only integrity story on offer.

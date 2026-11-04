@@ -129,6 +129,15 @@ jobs:
           $v = python -c "from pingerplot import __version__; print(__version__)"
           ./packaging/test_installer.ps1 -Setup dist\PingerPlot-Setup.exe -Version $v
 
+      - name: Update an older copy to this build
+        # The previous release with an updater (or this build itself, until
+        # there is one) updates to these files, portable and installed, with a
+        # throwaway key standing in for the release key.
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ./packaging/test_update.ps1
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: PingerPlot-windows
