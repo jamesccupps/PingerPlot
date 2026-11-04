@@ -28,6 +28,7 @@ import json
 import os
 import re
 import socket
+import sys
 import threading
 import time
 import urllib.parse
@@ -724,7 +725,7 @@ class Monitor:
                 if problem:
                     self._set_status(
                         f"Source IP {self.source_ip} is not an address on this machine "
-                        f"({problem}). Fix it in Engine options or leave it blank.", gen)
+                        f"({problem}). Fix the source address in its settings, or leave it blank.", gen)
                     if gen == self._generation:
                         self.running = False
                     return
@@ -733,11 +734,16 @@ class Monitor:
                 self.final_hop_only and self.packet_type == "tcp"
             )
             if needs_capture and not tcpudp.capture_supported(self._local_ip):
-                self._set_status(
-                    f"{self.packet_type.upper()} traceroute needs Administrator (raw capture). "
-                    "Re-run elevated, switch to ICMP, or use TCP with 'Final hop only'.",
-                    gen,
-                )
+                kind = self.packet_type.upper()
+                # The option names are the Settings page's. Elevation is the
+                # fix only where the capture exists: SIO_RCVALL is Windows'.
+                if sys.platform == "win32":
+                    why = (f"Full {kind} traceroute needs Administrator (raw capture). Run "
+                           "PingerPlot as administrator, switch")
+                else:
+                    why = (f"Full {kind} traceroute is Windows-only for now: the raw capture it "
+                           "uses doesn't exist here. Switch")
+                self._set_status(why + " to ICMP, or use TCP with Destination only.", gen)
                 if gen == self._generation:
                     self.running = False
                 return
