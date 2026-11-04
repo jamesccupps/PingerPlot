@@ -23,7 +23,7 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Dict, List, Optional
 
 from . import __version__, appicon, compare as cmpmod, geoip, icmp, settings
-from . import theme as themes, tkthreads, tray as traymod, updater, winplatform
+from . import theme as themes, tkthreads, tray as traymod, updater, winplatform, xdg
 from .gui_charts import BAD_MS, WARN_MS, Ink, draw_graph, draw_map, draw_timeline, fmt_ms, row_tag
 from .gui_settings import REPO_URL, EditTargetDialog, OptionVars, SettingsPage
 from .gui_updates import Updates
@@ -69,6 +69,7 @@ class App:
         tkthreads.install()     # before the first Variable or image: see tkthreads
         self.root = root
         self.tray: Optional[traymod.TrayIcon] = None
+        self._desktop_notifier = None                # notify-send, where there's no tray (Linux)
         self._tray_state = None
         self._ui_jobs: "queue.SimpleQueue" = queue.SimpleQueue()
         self._notify_seq: Dict[str, int] = {}   # per target: newest event already notified
@@ -136,6 +137,8 @@ class App:
 
         if use_tray:
             self._start_tray()
+            if self.tray is None:
+                self._desktop_notifier = xdg.notifier()
             winplatform.refresh_autostart()     # the folder moved: point the Run key here
         if start_minimized and self.tray is not None:
             self.root.withdraw()                # Start with Windows: straight to the tray
@@ -497,9 +500,16 @@ class App:
                     "menu or the ⋯ menu." if has_tray else
                     "Not available here: there's no notification area to keep running in.",
                     switch(self.keep_tray_var, enabled=has_tray))
-        setting_row(card, self.look, "Show a notification for alerts",
-                    "When an alert starts or ends. Click it to open that target.",
-                    switch(self.notify_var, enabled=has_tray))
+        notifier = self._notifier()
+        if notifier is None:
+            about = ("Not available here: install notify-send (libnotify) for notifications."
+                     if xdg.IS_LINUX else "Not available here: there's no notification area.")
+        elif getattr(notifier, "can_click", True):
+            about = "When an alert starts or ends. Click it to open that target."
+        else:
+            about = "When an alert starts or ends."
+        setting_row(card, self.look, "Show a notification for alerts", about,
+                    switch(self.notify_var, enabled=notifier is not None))
 
     def _toggle_autostart(self) -> None:
         on = bool(self.autostart_var.get())
@@ -565,29 +575,39 @@ class App:
             self._theme_checked = 0.0
             self._follow_system_theme()
 
+    def _notifier(self):
+        """What shows notifications: the tray icon (Windows), notify-send
+        (Linux), or nothing."""
+        return self.tray if self.tray is not None else self._desktop_notifier
+
     def _update_tray(self) -> None:
-        if self.tray is None:
-            return
         live = [(n, m) for n, m in self._monitors.items() if n not in self._loaded]
-        running = sum(1 for _n, m in live if m.running and not m.paused)
-        alerting = sum(1 for _n, m in live if m.running and m.active_alerts())
-        state = "alert" if alerting else ("normal" if running else "idle")
-        tip = "PingerPlot" + (f" · {alerting} alerting" if alerting else "") + (
-            f" · monitoring {running}" if running else " · not monitoring")
-        if (state, tip) != self._tray_state:
-            self._tray_state = (state, tip)
-            self.tray.set_state(state, tip)
-        if not self.notify_var.get():
-            return
+        if self.tray is not None:
+            running = sum(1 for _n, m in live if m.running and not m.paused)
+            alerting = sum(1 for _n, m in live if m.running and m.active_alerts())
+            state = "alert" if alerting else ("normal" if running else "idle")
+            tip = "PingerPlot" + (f" · {alerting} alerting" if alerting else "") + (
+                f" · monitoring {running}" if running else " · not monitoring")
+            if (state, tip) != self._tray_state:
+                self._tray_state = (state, tip)
+                self.tray.set_state(state, tip)
+        notifier = self._notifier() if self.notify_var.get() else None
+        # Every new event is consumed whether or not it's shown, so turning
+        # notifications on later doesn't replay old ones.
         for name, mon in live:
             new, last = mon.events_after(self._notify_seq.get(name, -1))
             self._notify_seq[name] = last
             for e in new:
                 if e.kind not in ("alert", "clear"):
                     continue
+                if e.kind == "alert" and not winplatform.IS_WINDOWS \
+                        and getattr(mon, "alert_sound", False):
+                    self.root.bell()        # the engine's beep is Windows' winsound
+                if notifier is None:
+                    continue
                 text = e.text.split(": ", 1)[1] if e.kind == "alert" and ": " in e.text else e.text
-                self.tray.notify(f"{name}: {'alert' if e.kind == 'alert' else 'back to normal'}",
-                                 text, on_click=lambda n=name: self._post(lambda: self._open_target(n)))
+                notifier.notify(f"{name}: {'alert' if e.kind == 'alert' else 'back to normal'}",
+                                text, on_click=lambda n=name: self._post(lambda: self._open_target(n)))
 
     def _open_target(self, name: str) -> None:
         self._show_window()
