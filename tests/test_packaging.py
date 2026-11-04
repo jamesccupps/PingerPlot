@@ -129,7 +129,51 @@ def test_the_spec_does_not_upx_pack():
     """UPX packing is a large share of PyInstaller AV false positives, and this
     binary already looks suspicious to a heuristic scanner without help."""
     spec = (REPO / "packaging" / "pingerplot.spec").read_text(encoding="utf-8")
-    assert spec.count("upx=False") == 2
+    builders = spec.count("EXE(") + spec.count("COLLECT(")
+    assert builders == 3, "expected two programs and one shared folder"
+    assert spec.count("upx=False") == builders
+
+
+# --- the installer and the portable zip (1.4) ---------------------------------
+
+ISS = REPO / "packaging" / "PingerPlot.iss"
+
+
+def test_the_installer_keeps_its_appid():
+    """Windows recognises an existing install by AppId. Changing it would make
+    every upgrade a second, parallel installation."""
+    assert "AppId={{64B8717F-5BDB-4070-9A45-47C311BC5DB5}" in ISS.read_text(encoding="utf-8")
+
+
+def test_the_installer_is_per_user_and_waits_for_the_app():
+    iss = ISS.read_text(encoding="utf-8")
+    from pingerplot import winplatform
+    assert "PrivilegesRequired=lowest" in iss, "the installer must not ask for admin"
+    assert f'#define AppMutex "{winplatform.MUTEX_NAME}"' in iss
+    assert f'#define AppUserModelID "{winplatform.APP_ID}"' in iss
+    assert 'ValueName: "{#AppName}"' in iss and winplatform.RUN_VALUE == "PingerPlot", \
+        "uninstalling must remove the Start with Windows entry the app writes"
+
+
+def test_the_release_publishes_what_the_build_makes():
+    sys.path.insert(0, str(REPO / "packaging"))
+    try:
+        import build_windows
+    finally:
+        sys.path.pop(0)
+    wf = (REPO / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    attach = wf[wf.index("gh release upload"):]
+    for name in (build_windows.INSTALLER_NAME, build_windows.PORTABLE_NAME, "SHA256SUMS.txt"):
+        assert f"dist/{name}" in attach, f"the release doesn't attach {name}"
+    assert "dist/PingerPlot.exe" not in attach, "1.3's bare executables are gone"
+
+
+def test_ci_builds_and_tests_the_release_files_on_every_push():
+    ci = (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    job = ci[ci.index("\n  package:"):]
+    for step in ("packaging/build_windows.py", "packaging/test_portable.ps1",
+                 "packaging/test_installer.ps1", "--require-hashes"):
+        assert step in job, f"the package job doesn't run {step}"
 
 
 def test_the_release_workflow_verifies_before_it_uploads():

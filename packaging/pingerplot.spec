@@ -1,32 +1,35 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec: the windowed GUI and the console headless runner.
+"""PyInstaller build: one folder, two programs sharing it.
 
-Run from the repo root:
+    python packaging/build_windows.py      (runs this, then makes the zip and the installer)
 
-    python packaging/make_icon.py build/pingerplot.ico
-    python -m PyInstaller --noconfirm --clean packaging/pingerplot.spec
+dist/PingerPlot/
+    PingerPlot.exe              the app (windowed)
+    pingerplot-headless.exe     the headless runner (console), for Task Scheduler
+    _internal/                  Python, Tk, the package
 
-A spec rather than a pile of command-line flags, because the flags are the part
-that goes wrong quietly. An early attempt at this passed
-``--exclude-module email`` to save space; ``urllib.request`` imports ``email``,
-``geoip`` imports ``urllib.request``, and the frozen app died at import with a
-message box. It cost 0.3 MB and the whole application. Excludes here are
-therefore limited to packages the app provably never imports, and the release
-workflow runs both binaries before it will attach either.
+A folder rather than 1.3's single-file executables: a single-file build unpacks
+itself to %TEMP% on every start (slower, and what antivirus engines dislike
+most about PyInstaller), and a folder is what the installer and the portable
+zip carry.
+
+Excludes are limited to packages the app provably never imports. An early
+build passed --exclude-module email to save space; urllib.request imports
+email, geoip imports urllib.request, and the frozen app died at import with a
+message box. It cost 0.3 MB and the whole application.
 
 The app has zero third-party dependencies and zero data files -- the world map
-is a Python module and the icon is drawn from math at runtime -- so there is
-nothing to bundle beyond the interpreter, Tk, and the package itself.
+is a Python module and the icon is drawn at run time -- so there is nothing to
+bundle beyond the interpreter, Tk and the package. build_windows.py writes the
+icon (build/pingerplot.ico) and the version resource (build/version_info.txt)
+before this runs.
 """
 import os
 
 ROOT = os.path.abspath(os.path.join(SPECPATH, os.pardir))
 ICON = os.path.join(ROOT, "build", "pingerplot.ico")
-if not os.path.exists(ICON):
-    ICON = None  # build without one rather than fail; make_icon.py writes it
+VERSION = os.path.join(ROOT, "build", "version_info.txt")
 
-# Only things the package genuinely never imports. Verified against the import
-# graph, not guessed at.
 EXCLUDES = ["pytest", "numpy", "setuptools", "pip", "pkg_resources"]
 
 
@@ -44,42 +47,39 @@ def analyse(script):
     )
 
 
-# --- windowed GUI ----------------------------------------------------------
 gui_a = analyse("main.py")
-gui_pyz = PYZ(gui_a.pure)
-gui_exe = EXE(
-    gui_pyz,
-    gui_a.scripts,
-    gui_a.binaries,
-    gui_a.datas,
-    [],
-    name="PingerPlot",
-    console=False,          # no console window for the everyday launcher
-    icon=ICON,
-    upx=False,              # UPX packing is a large share of AV false
-                            # positives, and this binary is already suspicious
-                            # enough to a heuristic scanner: ctypes into
-                            # iphlpapi, raw sockets, path enumeration.
-    strip=False,
+cli_a = analyse(os.path.join("packaging", "headless_entry.py"))
+
+common = dict(
+    exclude_binaries=True,      # one shared _internal, collected below
     debug=False,
     bootloader_ignore_signals=False,
-    disable_windowed_traceback=False,  # a crash should say so, not vanish
+    strip=False,
+    icon=ICON if os.path.exists(ICON) else None,
+    version=VERSION if os.path.exists(VERSION) else None,
 )
 
-# --- console headless runner ----------------------------------------------
-cli_a = analyse(os.path.join("packaging", "headless_entry.py"))
-cli_pyz = PYZ(cli_a.pure)
+gui_exe = EXE(
+    PYZ(gui_a.pure), gui_a.scripts, [],
+    name="PingerPlot",
+    console=False,              # no console window for the everyday app
+    upx=False,                  # UPX packing is a large share of AV false positives
+    disable_windowed_traceback=False,   # a crash should say so, not vanish
+    **common,
+)
+
 cli_exe = EXE(
-    cli_pyz,
-    cli_a.scripts,
-    cli_a.binaries,
-    cli_a.datas,
-    [],
+    PYZ(cli_a.pure), cli_a.scripts, [],
     name="pingerplot-headless",
-    console=True,           # it prints tables; it needs somewhere to print
-    icon=ICON,
+    console=True,               # it prints tables and events; it needs somewhere to print
     upx=False,
+    **common,
+)
+
+COLLECT(
+    gui_exe, gui_a.binaries, gui_a.datas,
+    cli_exe, cli_a.binaries, cli_a.datas,
     strip=False,
-    debug=False,
-    bootloader_ignore_signals=False,
+    upx=False,
+    name="PingerPlot",
 )

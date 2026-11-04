@@ -499,7 +499,9 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         prog="pingerplot.headless",
         description="Run PingerPlot monitors from a config file, no GUI.")
-    ap.add_argument("config", help="path to a JSON config file")
+    ap.add_argument("config", nargs="?", help="path to a JSON config file")
+    ap.add_argument("--version", action="store_true",
+                    help="print the version and how this copy runs, then exit")
     ap.add_argument("--init", action="store_true",
                     help="write a starter config to CONFIG and exit")
     ap.add_argument("--status-interval", type=float, default=None,
@@ -516,6 +518,13 @@ def main(argv=None) -> int:
                          "'is this path worse than it was' rather than only "
                          "'what does it look like now'.")
     args = ap.parse_args(argv)
+    if args.version:
+        frozen = "Windows executable" if getattr(sys, "frozen", False) else "from source"
+        print(f"PingerPlot {__version__} headless ({frozen}, Python {sys.version.split()[0]})")
+        print(f"ICMP backend: {'available' if icmp.is_available() else icmp.unavailable_reason()}")
+        return 0
+    if not args.config:
+        ap.error("the config file is required (or --init CONFIG to write one)")
     cfg_path = Path(args.config)
 
     if args.init:

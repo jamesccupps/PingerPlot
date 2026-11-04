@@ -116,16 +116,37 @@ jobs:
         run: |
           python -m pip install --require-hashes --only-binary=:all: -r packaging/requirements-build.txt
 
+      - name: Check the tag matches the version
+        # An installer whose Settings > Apps entry, Properties and About box
+        # disagree with its own download name is a support question waiting.
+        shell: bash
+        env:
+          TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          v=$(python -c "from pingerplot import __version__; print(__version__)")
+          if [ "v$v" != "$TAG" ]; then
+            echo "::error::$TAG does not match pingerplot.__version__ ($v)"
+            exit 1
+          fi
+
       - name: Test the source before freezing it
         # Freezing a broken tree just produces a broken binary more slowly.
         run: python -m pytest -q -rs
 
-      - name: Generate the application icon
-        # Drawn from the same code as the in-app icon, so the two cannot drift.
-        run: python packaging/make_icon.py build/pingerplot.ico
+      - name: Make sure Inno Setup is there
+        # The Windows runner image carries Inno Setup 6. If a new image ever
+        # drops it, install it rather than publish a release with no installer.
+        shell: pwsh
+        run: |
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue) -and -not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup --no-progress -y
+          }
 
-      - name: Build
-        run: python -m PyInstaller --noconfirm --clean packaging/pingerplot.spec
+      - name: Build the program folder, the portable zip and the installer
+        # build_windows.py draws the icon (from the same code as the in-app
+        # one), writes the version resource, runs PyInstaller, then makes the
+        # zip, Setup.exe and SHA256SUMS.txt.
+        run: python packaging/build_windows.py
 
       - name: Smoke-test the frozen GUI binary
         # --version exits before Tk is created, so this runs without a display
@@ -139,40 +160,36 @@ jobs:
         # broken build. Verified the other way too -- a deliberately broken
         # build (--exclude-module email) exits 1 here and prints its traceback.
         run: |
-          $p = Start-Process .\dist\PingerPlot.exe -ArgumentList '--version' -Wait -PassThru -NoNewWindow
+          $p = Start-Process .\dist\PingerPlot\PingerPlot.exe -ArgumentList '--version' -Wait -PassThru -NoNewWindow
           if ($p.ExitCode -ne 0) { throw "frozen GUI exited $($p.ExitCode)" }
           Write-Host "GUI binary import graph OK"
 
-      - name: Smoke-test the frozen headless binary
-        # Goes further: a real ICMP probe to loopback through the frozen
-        # backend, so the ctypes/iphlpapi path is exercised too, not just
-        # imported.
-        run: |
-          .\dist\pingerplot-headless.exe --help
-          if ($LASTEXITCODE -ne 0) { throw "frozen headless exited $LASTEXITCODE" }
-          $cfg = "smoke.json"
-          $json = '{ "status_interval": 0, "defaults": { "interval": 0.5, "timeout_ms": 1000, "max_hops": 4 }, "targets": [ { "target": "127.0.0.1", "final_hop_only": true } ] }'
-          [IO.File]::WriteAllText("$PWD\$cfg", $json, (New-Object Text.UTF8Encoding $false))
-          .\dist\pingerplot-headless.exe $cfg --report 2
-          if ($LASTEXITCODE -ne 0) { throw "frozen headless probe exited $LASTEXITCODE" }
-          Write-Host "headless binary probed loopback OK"
+      - name: Smoke-test the frozen headless binary, from the portable zip
+        # The zip as people will download it: unzipped to a scratch folder, its
+        # GUI's --self-test (builds the window, round-trips settings in its
+        # own folder, probes loopback, makes the tray icons) and a real ICMP
+        # probe of loopback through the frozen headless runner.
+        shell: pwsh
+        run: ./packaging/test_portable.ps1
+
+      - name: Install, self-test and uninstall the installer
+        shell: pwsh
+        env:
+          TAG: ${{ steps.tag.outputs.name }}
+        run: ./packaging/test_installer.ps1 -Setup dist\PingerPlot-Setup.exe -Version ($env:TAG.TrimStart('v'))
 
       - name: Checksums
-        # Published alongside the binaries: they are unsigned, so a hash a
+        # Published alongside the downloads: they are unsigned, so a SHA256 a
         # reader can compare is the only integrity story on offer.
-        run: |
-          cd dist
-          Get-FileHash *.exe -Algorithm SHA256 |
-            ForEach-Object { "{0}  {1}" -f $_.Hash.ToLower(), (Split-Path $_.Path -Leaf) } |
-            Tee-Object -FilePath SHA256SUMS.txt
         shell: pwsh
+        run: Get-Content dist\SHA256SUMS.txt
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: pingerplot-windows-${{ steps.tag.outputs.name }}
           path: |
-            dist/PingerPlot.exe
-            dist/pingerplot-headless.exe
+            dist/PingerPlot-Setup.exe
+            dist/PingerPlot-win64.zip
             dist/SHA256SUMS.txt
 
   publish:
@@ -205,21 +222,27 @@ jobs:
         # Creates the release if it does not exist. Pushing a tag does NOT
         # create one -- GitHub leaves that to you -- so on the ordinary path
         # (tag a version, let CI build it) there is nothing to upload to yet,
-        # and `gh release upload` alone fails with "release not found". Notes
-        # come from the annotated tag message, which is written at tag time and
-        # is the right place for them.
+        # and `gh release upload` alone fails with "release not found". The
+        # text is release-notes/<tag>.md when there is one (written with the
+        # release, like the siblings'), otherwise the annotated tag's message.
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.windows.outputs.tag }}
         shell: bash
         run: |
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            echo "No release for $TAG yet; creating one from the tag message."
-            gh release create "$TAG" --title "PingerPlot ${TAG#v}" --notes-from-tag --verify-tag
+            notes="release-notes/$TAG.md"
+            if [ -f "$notes" ]; then
+              echo "No release for $TAG yet; creating one from $notes."
+              gh release create "$TAG" --title "PingerPlot ${TAG#v}" --notes-file "$notes" --verify-tag
+            else
+              echo "No release for $TAG yet; creating one from the tag message."
+              gh release create "$TAG" --title "PingerPlot ${TAG#v}" --notes-from-tag --verify-tag
+            fi
           fi
           gh release upload "$TAG" \
-            dist/PingerPlot.exe \
-            dist/pingerplot-headless.exe \
+            dist/PingerPlot-Setup.exe \
+            dist/PingerPlot-win64.zip \
             dist/SHA256SUMS.txt \
             --clobber
           echo "Attached to $TAG:"

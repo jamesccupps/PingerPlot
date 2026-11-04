@@ -84,3 +84,56 @@ jobs:
       - name: Run tests
         if: runner.os != 'Linux'
         run: python -m pytest -q -rs
+
+  package:
+    # The release files built and tested on every push, so a change that
+    # breaks the installer or the portable zip turns a push red, not the next
+    # tagged release. Unsigned, never published: the artifact is for looking at.
+    name: Windows installer and portable zip
+    needs: test
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --require-hashes --only-binary=:all: -r packaging/requirements-build.txt
+
+      - name: Make sure Inno Setup is there
+        shell: pwsh
+        run: |
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue) -and -not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup --no-progress -y
+          }
+
+      - name: Build
+        run: python packaging/build_windows.py
+
+      - name: Self-test the portable zip
+        shell: pwsh
+        run: ./packaging/test_portable.ps1
+
+      - name: Install, self-test and uninstall the installer
+        shell: pwsh
+        run: |
+          $v = python -c "from pingerplot import __version__; print(__version__)"
+          ./packaging/test_installer.ps1 -Setup dist\PingerPlot-Setup.exe -Version $v
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: PingerPlot-windows
+          path: |
+            dist/PingerPlot-Setup.exe
+            dist/PingerPlot-win64.zip
+            dist/SHA256SUMS.txt
+          retention-days: 7
