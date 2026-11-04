@@ -23,7 +23,8 @@ class FakeTray:
 
 
 def _update(kind="installed", version="9.9.9"):
-    asset = None if kind == "source" else {"file": updater.INSTALLER_NAME, "size": 1, "sha256": "0" * 64}
+    asset = (None if kind in ("source", "pip") else
+             {"file": updater.INSTALLER_NAME, "size": 1, "sha256": "0" * 64})
     return updater.Update(version, "now", kind, asset, "here")
 
 
@@ -140,6 +141,15 @@ def test_a_source_copy_is_told_to_git_pull(app, monkeypatch):
     _drain(app)
     shown = _texts(app.updates._bar_holder)
     assert "PingerPlot 9.9.9 is out: update with git pull." in shown
+    assert "Install and restart" not in shown
+
+
+def test_a_pip_install_is_told_to_reinstall_with_pipx(app, monkeypatch):
+    monkeypatch.setattr(updater, "check", lambda: _update("pip"))
+    app.updates.check()
+    _drain(app)
+    shown = _texts(app.updates._bar_holder)
+    assert "PingerPlot 9.9.9 is out: update with pipx reinstall pingerplot." in shown
     assert "Install and restart" not in shown
 
 

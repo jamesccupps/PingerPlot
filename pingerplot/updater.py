@@ -96,10 +96,13 @@ def program_dir() -> Path:
 
 
 def install_kind() -> str:
-    """'source', 'installed' (Setup.exe), 'portable' (the zip), or 'folder'
-    (a frozen build that is neither, e.g. copied by hand)."""
+    """'source' (a checkout: main.py beside the package), 'pip' (installed
+    with pip or pipx, the Linux way), 'installed' (Setup.exe), 'portable'
+    (the zip), or 'folder' (a frozen build that is neither, e.g. copied by
+    hand)."""
     if not getattr(sys, "frozen", False):
-        return "source"
+        here = Path(__file__).resolve().parent.parent
+        return "source" if (here / "main.py").is_file() else "pip"
     if settings.portable_dir() is not None:
         return "portable"
     if (program_dir() / "unins000.exe").exists():

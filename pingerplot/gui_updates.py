@@ -26,7 +26,11 @@ KINDS = {"installed": "Installed for this Windows user.",
          "portable": "A portable copy: updates replace the program files in this folder "
                      "and keep its settings.",
          "folder": "A copy in a folder of its own: updates replace its program files.",
+         "pip": "Installed with pip or pipx: update with pipx reinstall pingerplot.",
          "source": "Running from source: update with git pull."}
+
+# How a copy that can't install updates itself gets one.
+UPDATE_BY = {"pip": "pipx reinstall pingerplot", "source": "git pull"}
 
 
 class Updates:
@@ -235,7 +239,8 @@ class Updates:
         bar.pack(fill="x")
         text = (self.status if self.busy else
                 f"PingerPlot {u.version} is available." if u.can_install else
-                f"PingerPlot {u.version} is out: update with git pull.")
+                f"PingerPlot {u.version} is out: update with "
+                f"{UPDATE_BY.get(u.kind, 'git pull')}.")
         ttk.Label(bar, text=text, style="Card.Strong.TLabel").pack(side="left")
         ttk.Button(bar, text=self.app.look.icon("close"), style="Card.Icon.Subtle.TButton",
                    command=self.dismiss, takefocus=False).pack(side="right")

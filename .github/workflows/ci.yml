@@ -126,6 +126,16 @@ jobs:
           printf '%s' '{"status_interval": 0, "defaults": {"interval": 0.5, "timeout_ms": 1000}, "targets": [{"target": "127.0.0.1", "final_hop_only": true}]}' > "$cfg"
           python -m pingerplot.headless "$cfg" --report 2
 
+      - name: Install with pipx, as the README says
+        # pipx is on the runner image, with the system Python and its Tk.
+        # From this checkout rather than the GitHub URL, so it's this commit.
+        run: |
+          pipx install .
+          bin="$(pipx environment --value PIPX_BIN_DIR)"
+          "$bin/pingerplot" --version
+          "$bin/pingerplot-headless" --version
+          "$(pipx environment --value PIPX_LOCAL_VENVS)/pingerplot/bin/python" -c "from pingerplot import updater; k = updater.install_kind(); print('install kind:', k); assert k == 'pip'"
+
       - name: Validate the applications-menu and autostart entries
         # Written by the app's own code into a scratch XDG folder, then checked
         # by freedesktop's reference validator.

@@ -113,7 +113,8 @@ def test_versions():
 # --- checking -----------------------------------------------------------------------
 
 @pytest.mark.parametrize("kind,asset", [("installed", "installer"), ("portable", "portable"),
-                                        ("folder", "portable"), ("source", None)])
+                                        ("folder", "portable"), ("source", None),
+                                        ("pip", None)])
 def test_check_offers_the_right_file(release, monkeypatch, kind, asset):
     monkeypatch.setattr(updater, "install_kind", lambda: kind)
     u = updater.check(current="1.4.0", source=str(release))
@@ -370,6 +371,17 @@ def test_install_kind(tmp_path, monkeypatch):
     assert updater.install_kind() == "installed"
     (tmp_path / "portable.txt").write_text("")
     assert updater.install_kind() == "portable"
+
+
+def test_a_pip_install_is_told_apart_from_a_checkout(tmp_path, monkeypatch):
+    """A checkout has main.py beside the package; pip and pipx install the
+    package alone, and git pull is no use there."""
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    (tmp_path / "pingerplot").mkdir()
+    monkeypatch.setattr(updater, "__file__", str(tmp_path / "pingerplot" / "updater.py"))
+    assert updater.install_kind() == "pip"
+    (tmp_path / "main.py").write_text("")
+    assert updater.install_kind() == "source"
 
 
 def test_cleanup_removes_what_a_swap_leaves(tmp_path, monkeypatch):
