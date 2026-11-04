@@ -14,9 +14,11 @@ touched or sent anywhere.
 """
 from __future__ import annotations
 
+import atexit
 import ctypes
 import os
 import random
+import shutil
 import socket
 import subprocess
 import sys
@@ -29,6 +31,7 @@ sys.path.insert(0, str(ROOT))
 
 # Settings into a throwaway folder before anything reads them.
 _DATA = tempfile.mkdtemp(prefix="pingerplot-demo-")
+atexit.register(shutil.rmtree, _DATA, True)
 os.environ["APPDATA"] = _DATA
 os.environ["XDG_CONFIG_HOME"] = _DATA
 
