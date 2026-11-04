@@ -1,0 +1,19 @@
+name: Idea or feature request
+description: Something PingerPlot could do, or do better
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        PingerPlot tries to stay a small, dependency-free tool that answers one question well: where along this path is the problem? Ideas that help with that are the most welcome. [ROADMAP.md](https://github.com/jamesccupps/PingerPlot/blob/main/ROADMAP.md) has what's already planned.
+  - type: textarea
+    id: what
+    attributes:
+      label: What would you like it to do?
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: What would it help with?
+      description: What you're monitoring, and what you do today instead.

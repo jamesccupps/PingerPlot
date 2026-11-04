@@ -1,0 +1,6 @@
+# Blank issues stay allowed: a plain question shouldn't have to fit a form.
+blank_issues_enabled: true
+contact_links:
+  - name: Security problem
+    url: https://github.com/jamesccupps/PingerPlot/security/advisories/new
+    about: Please report it privately (see SECURITY.md), not in a public issue.
