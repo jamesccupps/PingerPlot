@@ -10,8 +10,6 @@ new window, a project page) is done; see the [CHANGELOG](CHANGELOG.md). Next up:
 
 - **winget and SourceForge** listings, as the sibling projects have, so `winget install PingerPlot` works. The
   SourceForge listing is ready to paste ([packaging/sourceforge](packaging/sourceforge/README.md)).
-- **The Map zooms to the path.** A path within one region is a few pixels across on a world map; 1.4 stops the
-  labels piling up, but the hops still sit in a clump.
 
 ## Later, or if asked
 

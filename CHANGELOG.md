@@ -4,6 +4,18 @@ All notable changes to PingerPlot are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- **The Map zooms to the path.** It fits the located hops with some room around
+  them, at least 16 degrees across (the bundled coastlines are too coarse for
+  closer), without stretching: a degree of longitude is drawn cos(latitude) as
+  wide. A path within one region used to sit in a clump of a few pixels on a
+  world map. With nothing located yet it's still the whole world.
+- Map labels step off the path's line where they can, and stay on the map;
+  one that has to cross the line sits on a plate in the map's colour.
+
 ## [1.4.0] — 2026-11-04
 
 PingerPlot as a proper Windows app, to the standard of its sibling projects

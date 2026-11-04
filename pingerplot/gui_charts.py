@@ -7,6 +7,7 @@ changed, see model.draw_version).
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional
 
@@ -186,12 +187,40 @@ def _ttl_list(ttls: List[int]) -> str:
     return ", ".join(str(t) for t in ttls)
 
 
-def _label_places(c, ink: Ink, located, gap: int, rad: int = 0) -> None:
-    """One label per place, in path order: hops at the same spot share it
-    ("5–6. Denver"), and a label that would cover another label or a dot
-    tries the dot's left, then above and below, and is left off if all four
-    are taken. At world scale a path within one region is a few pixels
-    across, and one label per hop piled up into an unreadable smear."""
+def _overlaps(a, b) -> bool:
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+
+def _crosses(seg, box) -> bool:
+    """Whether the line segment ((x0, y0), (x1, y1)) passes through ``box``
+    (Liang–Barsky clipping)."""
+    (x0, y0), (x1, y1) = seg
+    t0, t1 = 0.0, 1.0
+    dx, dy = x1 - x0, y1 - y0
+    for p, q in ((-dx, x0 - box[0]), (dx, box[2] - x0), (-dy, y0 - box[1]), (dy, box[3] - y0)):
+        if p == 0:
+            if q < 0:
+                return False
+            continue
+        r = q / p
+        if p < 0:
+            t0 = max(t0, r)
+        else:
+            t1 = min(t1, r)
+        if t0 > t1:
+            return False
+    return True
+
+
+def _label_places(c, ink: Ink, located, gap: int, rad: int = 0, bounds=None) -> None:
+    """One label per place, in path order. Hops at the same spot share one
+    ("5–6. Denver"). Each label goes right of its dot, left, above or below:
+    the first of those that covers no other label or dot, stays inside
+    ``bounds`` (x0, y0, x1, y1) and doesn't cross the path's line; failing
+    that, the first that only crosses the line, on a plate in the map's
+    colour so it stays readable; failing that, it's left off. At world scale
+    a path within one region is a few pixels across, and one label per hop
+    piled up into an unreadable smear."""
     places: List[list] = []                 # [x, y, ttls, name]
     for v, g, x, y in located:
         name = g.city or g.country or ""
@@ -201,33 +230,87 @@ def _label_places(c, ink: Ink, located, gap: int, rad: int = 0) -> None:
                 break
         else:
             places.append([x, y, [v.ttl], name])
+    path = [(located[i - 1][2:4], located[i][2:4]) for i in range(1, len(located))]
     taken: List[tuple] = [(x - rad, y - rad, x + rad, y + rad) for x, y, _t, _n in places]
+    font = ink.font(-2)
     for x, y, ttls, name in places:
         text = f"{_ttl_list(ttls)}. {name}".strip()
+        clear, on_line = None, None
         for anchor, dx, dy in (("w", gap, 0), ("e", -gap, 0), ("s", 0, -gap), ("n", 0, gap)):
-            item = c.create_text(x + dx, y + dy, anchor=anchor, text=text,
-                                 fill=ink.col["title"], font=ink.font(-2))
+            item = c.create_text(x + dx, y + dy, anchor=anchor, text=text, font=font)
             box = c.bbox(item)
-            if box and any(box[0] < b[2] and b[0] < box[2] and box[1] < b[3] and b[1] < box[3]
-                           for b in taken):
-                c.delete(item)
+            c.delete(item)
+            if not box or any(_overlaps(box, b) for b in taken):
                 continue
-            if box:
-                taken.append(box)
+            if bounds and (box[0] < bounds[0] or box[1] < bounds[1]
+                           or box[2] > bounds[2] or box[3] > bounds[3]):
+                continue
+            if any(_crosses(s, box) for s in path):
+                on_line = on_line or (anchor, dx, dy, box)
+                continue
+            clear = (anchor, dx, dy, box)
             break
+        chosen = clear or on_line
+        if chosen is None:
+            continue
+        anchor, dx, dy, box = chosen
+        taken.append(box)
+        if chosen is on_line and ink.col.get("graph_bg"):
+            c.create_rectangle(box[0] - 2, box[1], box[2] + 2, box[3],
+                               fill=ink.col["graph_bg"], outline="")
+        c.create_text(x + dx, y + dy, anchor=anchor, text=text, fill=ink.col["title"], font=font)
+
+
+MAP_MIN_SPAN = 16.0    # degrees: the coastlines are Natural Earth 110m, about 0.8 deg a step
+MAP_PAD = 0.25         # of the hops' extent, on each side
+
+
+def map_view(points, w: float, h: float, margin: float = 0.0):
+    """The Map's projection, ``(lon, lat) -> (x, y)``, for a ``w`` x ``h``
+    canvas: zoomed to ``points`` (the located hops, as (lon, lat)) with some
+    room around them, but never narrower than MAP_MIN_SPAN degrees, where the
+    coarse coastlines would turn to zigzags. A degree of longitude is drawn
+    cos(latitude) as wide as one of latitude, at the middle of the view, so
+    nothing is stretched. With no points it's the whole world, as before.
+
+    A path across the Pacific (lon jumping from about -120 to +140) gets a
+    view nearly the world's width, as it did before; it isn't wrapped round
+    the date line."""
+    if not points:
+        return lambda lon, lat: ((lon + 180.0) / 360.0 * w, (90.0 - lat) / 180.0 * h)
+    lons = [p[0] for p in points]
+    lats = [p[1] for p in points]
+    lat_mid = (min(lats) + max(lats)) / 2.0
+    k = max(0.2, math.cos(math.radians(lat_mid)))
+    x0, x1 = min(lons) * k, max(lons) * k
+    y0, y1 = min(lats), max(lats)
+    span_x = max((x1 - x0) * (1 + 2 * MAP_PAD), MAP_MIN_SPAN)
+    span_y = max((y1 - y0) * (1 + 2 * MAP_PAD), MAP_MIN_SPAN / 2)
+    scale = min(max(w - 2 * margin, 1) / span_x, max(h - 2 * margin, 1) / span_y)
+    cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+    return lambda lon, lat: (w / 2.0 + (lon * k - cx) * scale, h / 2.0 - (lat - cy) * scale)
 
 
 def draw_map(c, ink: Ink, views: List[HopView], geo) -> str:
-    """Located public hops on the coastline backdrop, joined in path order.
-    Asks ``geo`` for any it hasn't looked up. Returns the header caption."""
+    """Located public hops on the coastline backdrop, joined in path order,
+    zoomed to the path (map_view). Asks ``geo`` for any it hasn't looked up.
+    Returns the header caption."""
     S = ink.s
     c.delete("all")
     w, h = c.winfo_width(), c.winfo_height()
     if w < 80 or h < 80:
         return ""
 
-    def proj(lon, lat):
-        return ((lon + 180.0) / 360.0 * w, (90.0 - lat) / 180.0 * h)
+    public = 0
+    found = []
+    for v in views:
+        if v.address and geoip._is_public(v.address):
+            public += 1
+            geo.request(v.address)
+            g = geo.get(v.address)
+            if g:
+                found.append((v, g))
+    proj = map_view([(g.lon, g.lat) for _v, g in found], w, h, margin=S(24))
 
     for poly in worldmap.COASTLINES:
         pts = []
@@ -236,15 +319,7 @@ def draw_map(c, ink: Ink, views: List[HopView], geo) -> str:
         if len(pts) >= 4:
             c.create_line(pts, fill=ink.col["grid"], width=1)
 
-    public = 0
-    located = []
-    for v in views:
-        if v.address and geoip._is_public(v.address):
-            public += 1
-            geo.request(v.address)
-            g = geo.get(v.address)
-            if g:
-                located.append((v, g) + proj(g.lon, g.lat))
+    located = [(v, g) + proj(g.lon, g.lat) for v, g in found]
 
     for i in range(1, len(located)):
         c.create_line(located[i - 1][2], located[i - 1][3], located[i][2], located[i][3],
@@ -254,7 +329,7 @@ def draw_map(c, ink: Ink, views: List[HopView], geo) -> str:
     for v, g, x, y in located:
         c.create_oval(x - rad, y - rad, x + rad, y + rad,
                       fill=ink.hop_fg(v, v.ttl == last_ttl), outline=ink.col["graph_bg"])
-    _label_places(c, ink, located, rad + S(3), rad)
+    _label_places(c, ink, located, rad + S(3), rad, bounds=(0, 0, w, h))
 
     if not views:
         return "No data yet: start a target to map its hops."
