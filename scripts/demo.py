@@ -153,7 +153,7 @@ DEMO_OPTIONS = dict(interval=1.0, timeout_ms=400, alert_window=10, alert_loss_pc
 
 def start_demo(app):
     for name in ("dns.example.net", "voip.example.com", "vpn.example.org", "192.168.1.1"):
-        opts = app._toolbar_options()
+        opts = app._default_options()
         opts.update(DEMO_OPTIONS)
         if name == "192.168.1.1":
             opts["final_hop_only"] = True
@@ -217,12 +217,13 @@ def _grab(win, path):
 
 
 SHOTS = [
-    # (file, theme, tab)
-    ("overview-dark.png", "dark", "Overview"),
-    ("overview-light.png", "light", "Overview"),
-    ("timeline-dark.png", "dark", "Timeline"),
-    ("map-dark.png", "dark", "Map"),
-    ("events-light.png", "light", "Events"),
+    # (file, theme, view): a target view (hops/timeline/map/events) or settings
+    ("hops-dark.png", "dark", "hops"),
+    ("hops-light.png", "light", "hops"),
+    ("timeline-dark.png", "dark", "timeline"),
+    ("map-dark.png", "dark", "map"),
+    ("events-light.png", "light", "events"),
+    ("settings-dark.png", "dark", "settings"),
 ]
 
 
@@ -230,18 +231,20 @@ def take(out, name, theme_name, tab, warmup):
     """One picture, in a process of its own, so each is built in its theme
     before the window first appears."""
     import tkinter as tk
-    from pingerplot import gui, settings
+    from pingerplot import gui, settings, winplatform
     settings.save({"theme": theme_name, "resume_on_launch": False})
     install()
-    gui._enable_windows_dpi_awareness()
+    winplatform.enable_dpi_awareness()
     root = tk.Tk()
     app = gui.App(root)
     root.geometry(f"{app.s(1180)}x{app.s(760)}+40+40")
     start_demo(app)
 
     def shoot():
-        tabs = {app.notebook.tab(t, "text"): t for t in app.notebook.tabs()}
-        app.notebook.select(tabs[tab])
+        if tab == "settings":
+            app.nav.select("settings", notify=True)
+        else:
+            app.detail_nav.select(tab, notify=True)
         app._refresh_once()
         root.after(1500, lambda: capture(root, out / name))
         root.after(3500, app._on_close)
@@ -264,9 +267,9 @@ def main():
                            check=True, timeout=180)
         return
     import tkinter as tk
-    from pingerplot import gui
+    from pingerplot import gui, winplatform
     install()
-    gui._enable_windows_dpi_awareness()
+    winplatform.enable_dpi_awareness()
     root = tk.Tk()
     app = gui.App(root)
     root.after(200, lambda: start_demo(app))

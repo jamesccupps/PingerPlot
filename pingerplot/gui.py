@@ -1,90 +1,90 @@
-"""Tkinter UI: hop table, single-hop graph, stacked all-hops timeline, and an
-event log, plus a live alert banner.
+"""The PingerPlot window: a header with the overall state, the targets on the
+left as cards, the selected target on the right (its hops and their graph, a
+timeline of every hop, a map, its events), and a Settings page.
 
-Pure standard library. The GUI never touches monitor internals; it polls the
-snapshot accessors on a timer and renders immutable copies, so there are no
-cross-thread Tk calls. Heavy canvases are redrawn only while their tab is
-visible; the table, banner, and event log update every tick (they are cheap).
+Pure standard library. The window never touches monitor internals: it polls
+the snapshot accessors on a timer and renders immutable copies, so there are no
+cross-thread Tk calls. Canvases are redrawn only while visible and only when
+their data changed. Drawing lives in gui_charts, small widgets in gui_widgets,
+the option forms in gui_settings.
 """
 from __future__ import annotations
 
 import csv
-import ctypes
 import json
 import os
 import sys
 import time
 import tkinter as tk
+import urllib.parse
+import webbrowser
 from tkinter import filedialog, messagebox, ttk
 from typing import Dict, List, Optional
 
-from . import __version__, appicon, compare as cmpmod, geoip, icmp, settings, tcpudp, worldmap
-from . import theme as themes, winplatform
-from .model import HopView, Sample, csv_safe, draw_version, mos, mos_label
+from . import __version__, appicon, compare as cmpmod, geoip, icmp, settings
+from . import theme as themes, tkthreads, winplatform
+from .gui_charts import BAD_MS, WARN_MS, Ink, draw_graph, draw_map, draw_timeline, fmt_ms, row_tag
+from .gui_settings import REPO_URL, EditTargetDialog, OptionVars, SettingsPage
+from .gui_widgets import Nav, ScrollFrame, TargetCard
+from .model import HopView, csv_safe, draw_version, mos, mos_label
 from . import monitor
 from .monitor import Monitor
 
-REFRESH_MS = 700
+__all__ = ["App", "main", "BAD_MS", "WARN_MS", "COLORS"]
 
-WARN_MS = 120.0   # row/label goes amber at/above this average latency
-BAD_MS = 250.0    # ...and at/above this it is treated as a problem
+REFRESH_MS = 700
 
 # The drawing code's colours, under the keys it has always read. They come
 # from the theme engine (theme.legacy_colours) and are replaced in place on
 # every theme change, so draw code that reads COLORS at call time follows.
 COLORS: Dict[str, str] = {}
 
+# Only Hostname stretches (and shrinks): the numbers keep their width, so all
+# ten columns fit the detail pane at the window's minimum size.
 COLUMNS = [
     ("ttl", "Hop", 44, "center"),
-    ("address", "IP Address", 130, "w"),
-    ("hostname", "Hostname", 240, "w"),
-    ("loss", "Loss", 60, "e"),
-    ("sent", "Sent", 55, "e"),
-    ("cur", "Cur", 60, "e"),
-    ("avg", "Avg", 60, "e"),
-    ("best", "Min", 60, "e"),
-    ("worst", "Max", 60, "e"),
-    ("jitter", "Jitter", 60, "e"),
+    ("address", "Address", 118, "w"),
+    ("hostname", "Hostname", 170, "w"),
+    ("loss", "Loss", 52, "e"),
+    ("sent", "Sent", 50, "e"),
+    ("cur", "Last", 50, "e"),
+    ("avg", "Avg", 50, "e"),
+    ("best", "Best", 50, "e"),
+    ("worst", "Worst", 56, "e"),
+    ("jitter", "Jitter", 56, "e"),
 ]
 
-
-def _ms(v: Optional[float]) -> str:
-    if v is None:
-        return "—"
-    if v < 1:
-        return "<1"
-    if v < 10:
-        return f"{v:.1f}"
-    return f"{v:.0f}"
+_ms = fmt_ms
 
 
 def _csv_num(v: Optional[float]) -> str:
     return "" if v is None else f"{v:.1f}"
 
 
-
 class App:
     def __init__(self, root: tk.Tk) -> None:
+        tkthreads.install()     # before the first Variable or image: see tkthreads
         self.root = root
         self._monitors: "dict[str, Monitor]" = {}   # target name -> its Monitor
-        self._active: Optional[str] = None           # which one the detail tabs show
+        self._active: Optional[str] = None           # which one the detail shows
         self._empty = Monitor()                      # placeholder when nothing selected
         self._loaded: "set[str]" = set()             # offline sessions, not live targets
-        self.geo = geoip.GeoResolver()               # for the Map tab (lazy/opt-in)
+        self.geo = geoip.GeoResolver()               # for the Map view (lazy/opt-in)
         self._geo_started = False
-        self._selected_ttl: Optional[int] = None   # hop currently graphed
-        self._last_ttl: Optional[int] = None        # destination hop, per refresh
-        self._pinned = False                        # True once the user picks a row
+        self._selected_ttl: Optional[int] = None    # hop currently graphed
+        self._last_ttl: Optional[int] = None         # destination hop, per refresh
+        self._pinned = False                         # True once the user picks a row
         self._last_event_seq = -1
-        self._banner_shown = False
-        self._draw_ver = None                        # last-drawn (target, round, hop, theme)
+        self._draw_ver = None                        # what the visible canvas last showed
+        self._note_until = 0.0
+        self._cards: Dict[str, TargetCard] = {}
         self._settings = settings.load()             # persisted UI/engine/alert state
 
         self.scale = self._init_scaling()
-        root.title(f"PingerPlot {__version__}")
+        root.title("PingerPlot")
         self._set_window_icon()
-        root.geometry(f"{self.s(1120)}x{self.s(740)}")
-        root.minsize(self.s(820), self.s(520))
+        root.geometry(f"{self.s(1180)}x{self.s(780)}")
+        root.minsize(self.s(900), self.s(560))
         root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         # "system" (follow Windows), "dark" or "light". Before 1.4 the choice
@@ -95,22 +95,23 @@ class App:
             pref = "system"
         self.theme_var = tk.StringVar(value=pref)
         self.resume_var = tk.BooleanVar(value=True)   # resume last targets on launch
-        self._engine_win: Optional[tk.Toplevel] = None
+        self.target_var = tk.StringVar(value="")
         self._theme_checked = time.monotonic()
         # Before any widget is built: every ttk style comes from here.
         self.look = themes.Theme(root, {"theme": pref})
         self.style = self.look.style
         self._sync_colours()
 
-        self._init_engine_vars()
-        self._build_menubar()
-        self._build_controls()
-        self._build_alert_controls()
-        self._build_banner()
-        self._build_statusbar()
-        self._build_main()
-        self._recolor_widgets()          # tk-widget colors + tree tags for the theme
-        self._apply_saved_settings()     # restore last engine/alert/interval values
+        # Defaults for new targets (the Settings page edits them).
+        self.defaults = OptionVars(root)
+        self.interval_var = self.defaults["interval"]
+        self.logpath_var = self.defaults["log_path"]
+        self.alert_loss_var = self.defaults["alert_loss_pct"]
+
+        self._build_header()
+        self._build_pages()
+        self._recolor_widgets()
+        self._apply_saved_settings()     # restore last defaults and app options
 
         if not icmp.is_available():
             # Say what to do about it. On Linux this is one sysctl away, and
@@ -123,32 +124,31 @@ class App:
             )
 
         self._restore_targets()          # optionally resume the last session's targets
+        self._refresh_once()
         self.root.after(REFRESH_MS, self._refresh)
 
     @property
     def monitor(self) -> Monitor:
-        """The monitor whose data the detail tabs (table/graph/timeline/events)
-        currently render. Falls back to an empty monitor when nothing is selected
-        so all the existing single-target rendering code Just Works."""
+        """The monitor the detail views render: the selected target, or an
+        empty one when nothing is selected, so the rendering code needs no
+        special case."""
         m = self._monitors.get(self._active) if self._active else None
         return m if m is not None else self._empty
 
-    # --- DPI / HiDPI scaling ----------------------------------------------
+    # --- DPI / HiDPI scaling ----------------------------------------------------
     def _init_scaling(self) -> float:
-        """Size Tk's fonts to the real display DPI and return a pixel-scale
-        factor (1.0 at 96 dpi/100%, 1.5 at 150%, 2.0 at 200%) for the explicit
-        pixel dimensions in the layout. Requires the process to already be
-        DPI-aware (see :func:`_enable_windows_dpi_awareness`), otherwise Windows
-        reports a flat 96 dpi and bitmap-stretches the window — the blur."""
+        """Size Tk's fonts to the real display DPI and return the pixel scale
+        (1.0 at 96 dpi). Needs the process to be DPI aware already (see
+        winplatform.enable_dpi_awareness), or Windows reports a flat 96 dpi and
+        bitmap-stretches the window."""
         try:
-            dpi = float(self.root.winfo_fpixels("1i"))  # pixels per inch
+            dpi = float(self.root.winfo_fpixels("1i"))
         except tk.TclError:
             dpi = 96.0
         if dpi <= 0:
             dpi = 96.0
         try:
-            # Tk 'scaling' is points->pixels; 1 pt is 1/72 in, so dpi/72 makes
-            # point-sized fonts render at their true physical size and crisp.
+            # Tk 'scaling' is points->pixels; 1 pt is 1/72 in.
             self.root.tk.call("tk", "scaling", dpi / 72.0)
         except tk.TclError:
             pass
@@ -159,25 +159,24 @@ class App:
         return int(round(px * self.scale))
 
     def _set_window_icon(self) -> None:
-        """Replace Tk's default feather with the themed 'signal ripples' mark
-        (title bar, taskbar, Alt-Tab). Kept as an instance attribute so Tk does
-        not garbage-collect it. Silently leaves the default if Tk/the platform
-        can't set it (e.g. headless)."""
+        """The 'signal ripples' mark in the title bar, taskbar and Alt-Tab, kept
+        on self so Tk doesn't garbage-collect it."""
         try:
             self._app_icon = tk.PhotoImage(data=appicon.png_base64(64))
             self.root.iconphoto(True, self._app_icon)
-        except Exception:
+        except tk.TclError:
             pass
 
-    # --- theming -----------------------------------------------------------
+    # --- theming ----------------------------------------------------------------
     def _apply_theme(self, name: str) -> None:
         """``name`` is the setting (system, dark or light): redraw every
         element in the palette it resolves to, then the canvases."""
-        self.theme_var.set(name)          # keep the View-menu radio in sync
+        self.theme_var.set(name)
         self.look.apply({"theme": name})
         self._sync_colours()
         self._recolor_widgets()
-        self._refresh_once()  # redraw canvases with the new palette
+        self._draw_ver = None
+        self._refresh_once()
 
     def _sync_colours(self) -> None:
         """Point the drawing code's COLORS at the current palette, and give
@@ -185,8 +184,9 @@ class App:
         COLORS.clear()
         COLORS.update(themes.legacy_colours(self.look.c))
         self.theme = "dark" if self.look.dark else "light"
-        for win in (self.root, self._engine_win):
-            if win is not None and win.winfo_exists():
+        wins = [self.root] + [w for w in self.root.winfo_children() if isinstance(w, tk.Toplevel)]
+        for win in wins:
+            if win.winfo_exists():
                 self.look.style_window(win)
 
     def _follow_system_theme(self) -> None:
@@ -203,438 +203,358 @@ class App:
             self._apply_theme("system")
 
     def _recolor_widgets(self) -> None:
-        """Recolour the non-ttk (classic tk) widgets and Treeview row tags, which
-        don't follow ttk styles."""
+        """What doesn't follow ttk styles: canvases, row tags, scroll areas."""
         p = COLORS
-        self.root.configure(bg=p["win_bg"])
-        self.banner.configure(bg=p["banner_bg"])
-        self.banner_label.configure(bg=p["banner_bg"], fg=p["banner_fg"])
-        self.mos_label_w.configure(bg=p["status_bg"])
-        self.canvas.configure(bg=p["graph_bg"])
-        self.timeline_canvas.configure(bg=p["graph_bg"])
-        self.map_canvas.configure(bg=p["graph_bg"])
+        self.root.configure(bg=self.look.c["bg"])
+        for c in (self.canvas, self.timeline_canvas, self.map_canvas):
+            c.configure(bg=p["graph_bg"])
         for t in ("ok", "warn", "bad", "dest"):
             self.tree.tag_configure(t, background=p[t], foreground=p["fg"])
-            self.summary_tree.tag_configure(t, background=p[t], foreground=p["fg"])
-        self.events_tree.tag_configure("alert", background=p["ev_alert"], foreground=p["fg"])
-        self.events_tree.tag_configure("clear", background=p["ev_clear"], foreground=p["fg"])
-        self.events_tree.tag_configure("route", background=p["ev_route"], foreground=p["fg"])
-        self.events_tree.tag_configure("warn", background=p["ev_warn"], foreground=p["fg"])
+        for kind in ("alert", "clear", "route", "warn"):
+            self.events_tree.tag_configure(kind, background=p[f"ev_{kind}"], foreground=p["fg"])
+        for sf in (self.cards_scroll, getattr(self, "settings_page", None)):
+            if sf is not None:
+                sf.recolor()
+        self.header_icon.configure(image=self._header_icon_image())
 
-    # --- layout ------------------------------------------------------------
-    def _build_controls(self) -> None:
-        bar = ttk.Frame(self.root, padding=(self.s(8), self.s(8), self.s(8), self.s(3)))
-        bar.pack(side="top", fill="x")
-        gap, group = self.s(4), self.s(16)   # within-group vs between-group spacing
+    def _ink(self) -> Ink:
+        return Ink(COLORS, self.look.font, self.s)
 
-        ttk.Label(bar, text="Target:").pack(side="left", padx=(0, gap))
-        self.target_var = tk.StringVar(value="8.8.8.8")
-        self.target_entry = ttk.Entry(bar, textvariable=self.target_var, width=20)
-        self.target_entry.pack(side="left", padx=(0, group))
-        self.target_entry.bind("<Return>", lambda _e: self._start())
-        self.target_entry.focus_set()
+    # --- layout -----------------------------------------------------------------
+    def _header_icon_image(self) -> tk.PhotoImage:
+        self._hdr_img = tk.PhotoImage(data=appicon.png_base64(self.s(30)))
+        return self._hdr_img
 
-        ttk.Label(bar, text="Interval (s):").pack(side="left", padx=(0, gap))
-        self.interval_var = tk.StringVar(value="2.5")
-        ttk.Spinbox(bar, from_=0.5, to=60, increment=0.5, width=5,
-                    textvariable=self.interval_var).pack(side="left", padx=(0, group))
+    def _build_header(self) -> None:
+        S = self.s
+        head = ttk.Frame(self.root, padding=(S(24), S(16), S(20), S(6)))
+        head.pack(side="top", fill="x")
+        self.header_icon = ttk.Label(head, image=self._header_icon_image())
+        self.header_icon.pack(side="left")
+        ttk.Label(head, text="PingerPlot", style="Title.TLabel").pack(side="left", padx=(S(12), 0))
+        more = ttk.Button(head, text=self.look.icon("more"), style="Icon.Subtle.TButton",
+                          command=lambda: self._header_menu(more))
+        more.pack(side="right")
+        self.note_label = ttk.Label(head, text="", style="Faint.TLabel")
+        self.note_label.pack(side="right", padx=(0, S(14)))
+        self.status_text = ttk.Label(head, text="", style="TLabel")
+        self.status_text.pack(side="right", padx=(0, S(10)))
+        self.status_dot = ttk.Label(head, text="●", style="Dot.TLabel")
+        self.status_dot.pack(side="right", padx=(0, S(6)))
 
-        ttk.Button(bar, text="Engine…", command=self._open_engine_dialog).pack(side="left", padx=(0, group))
+        nav_row = ttk.Frame(self.root, padding=(S(24), 0, S(24), 0))
+        nav_row.pack(side="top", fill="x")
+        self.nav = Nav(nav_row, self.look, [("targets", "Targets"), ("settings", "Settings")],
+                       self._show_page)
+        self.nav.pack(side="left")
+        self.nav.select("targets")
+        ttk.Frame(self.root, style="Divider.TFrame", height=1).pack(side="top", fill="x")
 
-        self.start_btn = ttk.Button(bar, text="Add / Start", command=self._start,
-                                    style="Accent.TButton")
-        self.start_btn.pack(side="left", padx=(0, gap))
-        self.stop_btn = ttk.Button(bar, text="Stop", command=self._stop, state="disabled")
-        self.stop_btn.pack(side="left", padx=(0, gap))
-        ttk.Button(bar, text="Remove", command=self._remove_target).pack(side="left")
-        # File actions (Export / Save / Load) and the theme toggle live in the
-        # menu bar — keeps the toolbar to the core controls so it never overflows.
+    def _build_pages(self) -> None:
+        self.pages = ttk.Frame(self.root)
+        self.pages.pack(side="top", fill="both", expand=True)
+        self.targets_page = ttk.Frame(self.pages)
+        self.targets_page.pack(fill="both", expand=True)
+        self.settings_page: Optional[SettingsPage] = None
+        S = self.s
+        split = ttk.Panedwindow(self.targets_page, orient="horizontal")
+        split.pack(fill="both", expand=True)
+        left = ttk.Frame(split, padding=(S(20), S(14), S(8), S(14)))
+        right = ttk.Frame(split, padding=(S(8), S(10), S(20), S(14)))
+        split.add(left, weight=1)
+        split.add(right, weight=4)
+        self._build_target_list(left)
+        self._build_detail(right)
+        self.root.bind_all("<Control-n>", lambda _e: self._focus_add())
 
-    def _build_menubar(self) -> None:
-        menubar = tk.Menu(self.root)
+    def _show_page(self, key: str) -> None:
+        if key == "settings":
+            if self.settings_page is None:     # built on first use: it's long
+                self.settings_page = SettingsPage(self.pages, self)
+            self.targets_page.pack_forget()
+            self.settings_page.pack(fill="both", expand=True)
+        else:
+            if self.settings_page is not None:
+                self.settings_page.pack_forget()
+            self.targets_page.pack(fill="both", expand=True)
+            self._draw_ver = None
 
-        file_menu = tk.Menu(menubar, tearoff=0)
-        file_menu.add_command(label="Export CSV…", command=self._export)
-        file_menu.add_command(label="Save session…", command=self._save_session)
-        file_menu.add_command(label="Load session…", command=self._load_session)
-        file_menu.add_separator()
-        file_menu.add_command(label="Compare with saved session…",
-                              command=self._compare_with_baseline)
-        file_menu.add_separator()
-        file_menu.add_command(label="Exit", command=self._on_close)
-        menubar.add_cascade(label="File", menu=file_menu)
+    def _build_target_list(self, parent: ttk.Frame) -> None:
+        S = self.s
+        add = ttk.Frame(parent)
+        add.pack(side="top", fill="x")
+        self.add_entry = ttk.Entry(add, textvariable=self.target_var)
+        self.add_entry.pack(side="left", fill="x", expand=True)
+        self.add_entry.bind("<Return>", lambda _e: self._start())
+        ttk.Button(add, text="Add", style="Accent.TButton", command=self._start).pack(
+            side="left", padx=(S(8), 0))
+        ttk.Label(parent, text="A host name or IP address. Ctrl+N comes back here.",
+                  style="Faint.TLabel").pack(side="top", anchor="w", pady=(S(4), 0))
 
-        view_menu = tk.Menu(menubar, tearoff=0)
-        view_menu.add_radiobutton(label="Match Windows", variable=self.theme_var,
-                                  value="system", command=lambda: self._apply_theme("system"))
-        view_menu.add_radiobutton(label="Dark", variable=self.theme_var,
-                                  value="dark", command=lambda: self._apply_theme("dark"))
-        view_menu.add_radiobutton(label="Light", variable=self.theme_var,
-                                  value="light", command=lambda: self._apply_theme("light"))
-        view_menu.add_separator()
-        view_menu.add_checkbutton(label="Resume targets on launch", variable=self.resume_var)
-        menubar.add_cascade(label="View", menu=view_menu)
+        caption = ttk.Frame(parent)
+        caption.pack(side="top", fill="x", pady=(S(16), S(6)))
+        self.targets_caption = ttk.Label(caption, text="TARGETS", style="Caps.TLabel")
+        self.targets_caption.pack(side="left")
+        ttk.Button(caption, text="Stop all", style="Subtle.TButton", command=self._stop_all).pack(
+            side="right")
 
-        help_menu = tk.Menu(menubar, tearoff=0)
-        help_menu.add_command(label="About PingerPlot", command=self._about)
-        menubar.add_cascade(label="Help", menu=help_menu)
+        self.cards_scroll = ScrollFrame(parent, self.look)
+        self.cards_scroll.pack(side="top", fill="both", expand=True)
+        self.cards_empty = ttk.Label(
+            self.cards_scroll.inner, style="Muted.TLabel", wraplength=S(230), justify="left",
+            text="Nothing monitored yet. Type a host name or IP address above and press Add: "
+                 "8.8.8.8, your gateway, a server you care about.")
+        self.cards_empty.pack(side="top", anchor="w", pady=(S(4), 0))
 
-        self.root.config(menu=menubar)
+    def _build_detail(self, parent: ttk.Frame) -> None:
+        S = self.s
+        top = ttk.Frame(parent)
+        top.pack(side="top", fill="x")
+        top.columnconfigure(0, weight=1)
+        self.detail_title = ttk.Label(top, text="", style="Heading.TLabel")
+        self.detail_title.grid(row=0, column=0, sticky="w")
+        self.detail_status = ttk.Label(top, text="", style="Muted.TLabel")
+        self.detail_status.grid(row=1, column=0, sticky="w")
+        buttons = ttk.Frame(top)
+        buttons.grid(row=0, column=1, rowspan=2, sticky="e")
+        self.pause_btn = ttk.Button(buttons, text="Pause", command=self._toggle_pause)
+        self.pause_btn.pack(side="left")
+        self.stop_btn = ttk.Button(buttons, text="Stop", command=self._toggle_run)
+        self.stop_btn.pack(side="left", padx=(S(6), 0))
+        self.edit_btn = ttk.Button(buttons, text="Edit settings", command=self._edit_active)
+        self.edit_btn.pack(side="left", padx=(S(6), 0))
 
-    def _about(self) -> None:
-        messagebox.showinfo(
-            "About PingerPlot",
-            f"PingerPlot {__version__}\n\n"
-            "A continuous-traceroute network path monitor for Windows (MTR-style).\n"
-            "Pure Python standard library — no third-party dependencies.\n\n"
-            "MIT licensed.",
-        )
+        stats = ttk.Frame(parent)
+        stats.pack(side="top", fill="x", pady=(S(6), 0))
+        self.mos_label_w = ttk.Label(stats, text="", style="Strong.TLabel")
+        self.mos_label_w.pack(side="left")
+        self.detail_stats = ttk.Label(stats, text="", style="Muted.TLabel")
+        self.detail_stats.pack(side="left", padx=(S(10), 0))
 
-    def _build_alert_controls(self) -> None:
-        bar = ttk.Frame(self.root, padding=(self.s(8), 0, self.s(8), self.s(5)))
-        bar.pack(side="top", fill="x")
-        gap, group = self.s(4), self.s(14)
-
-        self.alerts_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(bar, text="Alerts", variable=self.alerts_var).pack(side="left", padx=(0, group))
-
-        ttk.Label(bar, text="loss ≥").pack(side="left", padx=(0, gap))
-        self.alert_loss_var = tk.StringVar(value="20")
-        ttk.Spinbox(bar, from_=0, to=100, increment=5, width=4, textvariable=self.alert_loss_var).pack(side="left", padx=(0, gap))
-        ttk.Label(bar, text="%").pack(side="left", padx=(0, group))
-
-        ttk.Label(bar, text="latency ≥").pack(side="left", padx=(0, gap))
-        self.alert_lat_var = tk.StringVar(value="250")
-        ttk.Spinbox(bar, from_=0, to=5000, increment=25, width=6, textvariable=self.alert_lat_var).pack(side="left", padx=(0, gap))
-        ttk.Label(bar, text="ms").pack(side="left", padx=(0, group))
-
-        ttk.Label(bar, text="over").pack(side="left", padx=(0, gap))
-        self.alert_win_var = tk.StringVar(value="20")
-        ttk.Spinbox(bar, from_=2, to=300, increment=1, width=4, textvariable=self.alert_win_var).pack(side="left", padx=(0, gap))
-        ttk.Label(bar, text="probes").pack(side="left", padx=(0, group))
-
-        # MOS folds latency, jitter and loss into one score, so it catches the
-        # combination that ruins a call while each part sits under its own
-        # threshold. Lower is worse, hence "<=" rather than the ">=" above.
-        ttk.Label(bar, text="MOS ≤").pack(side="left", padx=(0, gap))
-        self.alert_mos_var = tk.StringVar(value="0")
-        ttk.Spinbox(bar, from_=0, to=5, increment=0.1, format="%.1f", width=4,
-                    textvariable=self.alert_mos_var).pack(side="left", padx=(0, group))
-
-        self.alert_sound_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(bar, text="Sound", variable=self.alert_sound_var).pack(side="left", padx=(0, group))
-
-        ttk.Label(bar, text="(0 disables a threshold; alerts use the destination hop)",
-                  style="Muted.TLabel").pack(side="left")
-
-    def _build_banner(self) -> None:
-        self.banner = tk.Frame(self.root, bg=COLORS["banner_bg"])
-        self.banner_label = tk.Label(
-            self.banner, bg=COLORS["banner_bg"], fg=COLORS["banner_fg"],
-            anchor="w", font=self.look.font(0, "semibold"), padx=self.s(10), pady=self.s(5),
-        )
+        self.banner = ttk.Frame(parent, style="Banner.TFrame", padding=(S(14), S(8)))
+        self.banner_label = ttk.Label(self.banner, text="", style="Banner.TLabel",
+                                      wraplength=S(760), justify="left")
         self.banner_label.pack(side="left", fill="x", expand=True)
+        self._banner_shown = False
 
-    def _build_statusbar(self) -> None:
-        bar = ttk.Frame(self.root, padding=(self.s(8), self.s(3), self.s(8), self.s(6)))
-        bar.pack(side="bottom", fill="x")
-        self.status_var = tk.StringVar(value="Idle — enter a target and press Start.")
-        ttk.Label(bar, textvariable=self.status_var, anchor="w").pack(side="left", fill="x", expand=True)
-        self.mos_var = tk.StringVar(value="")
-        self.mos_label_w = tk.Label(bar, textvariable=self.mos_var, font=self.look.font(0, "semibold"))
-        self.mos_label_w.pack(side="right")
+        nav_row = ttk.Frame(parent)
+        nav_row.pack(side="top", fill="x", pady=(S(8), 0))
+        self._banner_anchor = nav_row
+        self.views: Dict[str, ttk.Frame] = {}
+        self.detail_nav = Nav(nav_row, self.look, [("hops", "Hops"), ("timeline", "Timeline"),
+                                                   ("map", "Map"), ("events", "Events")],
+                              self._show_view)
+        self.detail_nav.pack(side="left")
+        self.view_host = ttk.Frame(parent)
+        self.view_host.pack(side="top", fill="both", expand=True, pady=(S(8), 0))
 
-    def _build_main(self) -> None:
-        paned = ttk.Panedwindow(self.root, orient="horizontal")
-        paned.pack(side="top", fill="both", expand=True)
-        sidebar = ttk.Frame(paned)
-        right = ttk.Frame(paned)
-        paned.add(sidebar, weight=1)
-        paned.add(right, weight=4)
-        self._build_summary(sidebar)
-        self._build_notebook(right)
+        self.views["hops"] = self._build_hops_view(self.view_host)
+        self.views["timeline"] = self._build_timeline_view(self.view_host)
+        self.views["map"] = self._build_map_view(self.view_host)
+        self.views["events"] = self._build_events_view(self.view_host)
+        self.detail_nav.select("hops")
+        self._show_view("hops")
 
-    def _build_summary(self, parent: ttk.Frame) -> None:
-        ttk.Label(parent, text="Targets", padding=(self.s(6), self.s(5)),
-                  style="Strong.TLabel").pack(side="top", anchor="w")
-        footer = ttk.Frame(parent)
-        footer.pack(side="bottom", fill="x")
-        ttk.Button(footer, text="Stop all", command=self._stop_all).pack(
-            side="left", padx=self.s(5), pady=self.s(5))
+    def _card(self, parent) -> ttk.Frame:
+        """A rounded surface for a table or a canvas to sit on."""
+        S = self.s
+        card = ttk.Frame(parent, style="Tile.TFrame", padding=(S(6), S(6)))
+        return card
 
-        cols = ("target", "hops", "loss", "avg", "mos")
-        self.summary_tree = ttk.Treeview(parent, columns=cols, show="headings", selectmode="browse")
-        for key, title, width, anchor in (
-            ("target", "Target", 150, "w"), ("hops", "Hops", 42, "e"),
-            ("loss", "Loss", 48, "e"), ("avg", "Avg", 52, "e"), ("mos", "MOS", 42, "e"),
-        ):
-            self.summary_tree.heading(key, text=title)
-            self.summary_tree.column(key, width=self.s(width), anchor=anchor, stretch=(key == "target"))
-        for tag in ("ok", "warn", "bad", "dest"):
-            self.summary_tree.tag_configure(tag, background=COLORS[tag])
-        sb = ttk.Scrollbar(parent, orient="vertical", command=self.summary_tree.yview)
-        self.summary_tree.configure(yscrollcommand=sb.set)
-        sb.pack(side="right", fill="y")
-        self.summary_tree.pack(side="left", fill="both", expand=True)
-        self.summary_tree.bind("<<TreeviewSelect>>", self._on_summary_select)
-        self.summary_tree.bind("<Button-3>", self._on_target_menu)
+    def _build_hops_view(self, host) -> ttk.Frame:
+        S = self.s
+        view = ttk.Frame(host)
+        split = ttk.Panedwindow(view, orient="vertical")
+        split.pack(fill="both", expand=True)
+        table_card = self._card(split)
+        graph_card = self._card(split)
+        split.add(table_card, weight=3)
+        split.add(graph_card, weight=2)
 
-    def _build_notebook(self, parent: ttk.Frame) -> None:
-        self.notebook = ttk.Notebook(parent)
-        self.notebook.pack(side="top", fill="both", expand=True)
+        cols = [c[0] for c in COLUMNS]
+        self.tree = ttk.Treeview(table_card, columns=cols, show="headings", selectmode="browse")
+        for key, title, width, anchor in COLUMNS:
+            self.tree.heading(key, text=title, anchor=anchor if anchor != "center" else "center")
+            self.tree.column(key, width=S(width), anchor=anchor, stretch=(key == "hostname"),
+                             minwidth=S(80) if key == "hostname" else S(width))
+        self.tree.bind("<ButtonRelease-1>", self._on_user_select)
+        self.tree.bind("<KeyRelease-Up>", self._on_user_select)
+        self.tree.bind("<KeyRelease-Down>", self._on_user_select)
+        self.tree.bind("<Button-3>", self._on_hop_menu)
+        vsb = ttk.Scrollbar(table_card, orient="vertical", command=self.tree.yview,
+                            style="Card.Vertical.TScrollbar")
+        self.tree.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
+        self.tree.pack(side="left", fill="both", expand=True)
 
-        # --- Overview tab: hop table over a single-hop graph ---------------
-        overview = ttk.Frame(self.notebook)
-        self.notebook.add(overview, text="Overview")
-        paned = ttk.Panedwindow(overview, orient="vertical")
-        paned.pack(fill="both", expand=True)
-        table_frame = ttk.Frame(paned)
-        graph_frame = ttk.Frame(paned)
-        paned.add(table_frame, weight=3)
-        paned.add(graph_frame, weight=2)
-        self._build_table(table_frame)
-        self._build_graph(graph_frame)
+        self.canvas = tk.Canvas(graph_card, highlightthickness=0, bd=0)
+        self.canvas.pack(fill="both", expand=True)
+        self.canvas.bind("<Configure>", lambda _e: self._draw_graph())
+        return view
 
-        # --- Timeline tab: all hops, shared axis ---------------------------
-        timeline = ttk.Frame(self.notebook)
-        self.notebook.add(timeline, text="Timeline")
-        self.timeline_header = ttk.Label(timeline, text="No data yet.", padding=(8, 4))
-        self.timeline_header.pack(side="top", fill="x")
-        self.timeline_canvas = tk.Canvas(timeline, bg=COLORS["graph_bg"], highlightthickness=0)
-        tl_vsb = ttk.Scrollbar(timeline, orient="vertical", command=self.timeline_canvas.yview)
+    def _build_timeline_view(self, host) -> ttk.Frame:
+        view = ttk.Frame(host)
+        self.timeline_header = ttk.Label(view, text="No data yet.", style="Muted.TLabel")
+        self.timeline_header.pack(side="top", anchor="w", pady=(0, self.s(6)))
+        card = self._card(view)
+        card.pack(side="top", fill="both", expand=True)
+        self.timeline_canvas = tk.Canvas(card, highlightthickness=0, bd=0)
+        tl_vsb = ttk.Scrollbar(card, orient="vertical", command=self.timeline_canvas.yview,
+                               style="Card.Vertical.TScrollbar")
         self.timeline_canvas.configure(yscrollcommand=tl_vsb.set)
         tl_vsb.pack(side="right", fill="y")
         self.timeline_canvas.pack(side="left", fill="both", expand=True)
         self.timeline_canvas.bind("<Configure>", lambda _e: self._draw_timeline())
         self.timeline_canvas.bind(
-            "<MouseWheel>",
-            lambda e: self.timeline_canvas.yview_scroll(int(-e.delta / 120), "units"),
-        )
+            "<MouseWheel>", lambda e: self.timeline_canvas.yview_scroll(int(-e.delta / 120), "units"))
+        return view
 
-        # --- Events tab: route changes + alerts ----------------------------
-        events = ttk.Frame(self.notebook)
-        self.notebook.add(events, text="Events")
+    def _build_map_view(self, host) -> ttk.Frame:
+        view = ttk.Frame(host)
+        self.map_header = ttk.Label(
+            view, style="Muted.TLabel",
+            text="Opening this view looks up public hop addresses with ipwho.is. "
+                 "Private and LAN addresses are never sent.")
+        self.map_header.pack(side="top", anchor="w", pady=(0, self.s(6)))
+        card = self._card(view)
+        card.pack(side="top", fill="both", expand=True)
+        self.map_canvas = tk.Canvas(card, highlightthickness=0, bd=0)
+        self.map_canvas.pack(fill="both", expand=True)
+        self.map_canvas.bind("<Configure>", lambda _e: self._draw_map())
+        return view
+
+    def _build_events_view(self, host) -> ttk.Frame:
+        S = self.s
+        view = ttk.Frame(host)
+        card = self._card(view)
+        card.pack(fill="both", expand=True)
         cols = ("time", "type", "detail")
-        self.events_tree = ttk.Treeview(events, columns=cols, show="headings")
-        for key, title, width, stretch in (
-            ("time", "Time", 90, False), ("type", "Type", 80, False), ("detail", "Detail", 600, True)
-        ):
-            self.events_tree.heading(key, text=title)
-            self.events_tree.column(key, width=width, stretch=stretch, anchor="w")
-        self.events_tree.tag_configure("alert", background=COLORS["ev_alert"])
-        self.events_tree.tag_configure("clear", background=COLORS["ev_clear"])
-        self.events_tree.tag_configure("route", background=COLORS["ev_route"])
-        self.events_tree.tag_configure("warn", background=COLORS["ev_warn"])
-        ev_vsb = ttk.Scrollbar(events, orient="vertical", command=self.events_tree.yview)
+        self.events_tree = ttk.Treeview(card, columns=cols, show="headings")
+        for key, title, width, stretch in (("time", "Time", 90, False), ("type", "Type", 80, False),
+                                           ("detail", "Detail", 600, True)):
+            self.events_tree.heading(key, text=title, anchor="w")
+            self.events_tree.column(key, width=S(width), stretch=stretch, anchor="w")
+        ev_vsb = ttk.Scrollbar(card, orient="vertical", command=self.events_tree.yview,
+                               style="Card.Vertical.TScrollbar")
         self.events_tree.configure(yscrollcommand=ev_vsb.set)
         ev_vsb.pack(side="right", fill="y")
         self.events_tree.pack(side="left", fill="both", expand=True)
+        return view
 
-        # --- Map tab: geo-located hops on a world map ----------------------
-        map_tab = ttk.Frame(self.notebook)
-        self.notebook.add(map_tab, text="Map")
-        self.map_header = ttk.Label(map_tab, text="Open this tab to geo-locate hops.", padding=(8, 4))
-        self.map_header.pack(side="top", fill="x")
-        self.map_canvas = tk.Canvas(map_tab, bg=COLORS["graph_bg"], highlightthickness=0)
-        self.map_canvas.pack(side="top", fill="both", expand=True)
-        self.map_canvas.bind("<Configure>", lambda _e: self._draw_map())
+    def _show_view(self, key: str) -> None:
+        for k, v in self.views.items():
+            if k == key:
+                v.pack(fill="both", expand=True)
+            else:
+                v.pack_forget()
+        self._draw_ver = None
+        self._draw_active_view()
 
-        self.notebook.bind("<<NotebookTabChanged>>", lambda _e: self._draw_active_tab())
+    def build_app_settings(self, card) -> None:
+        """App rows on the Settings page that depend on the window (the
+        notification area, Start with Windows): added in a later step."""
+        return
 
-    def _build_table(self, parent: ttk.Frame) -> None:
-        cols = [c[0] for c in COLUMNS]
-        self.tree = ttk.Treeview(parent, columns=cols, show="headings", selectmode="browse")
-        for key, title, width, anchor in COLUMNS:
-            self.tree.heading(key, text=title)
-            self.tree.column(key, width=self.s(width), anchor=anchor, stretch=(key == "hostname"))
-        for tag in ("ok", "warn", "bad", "dest"):
-            self.tree.tag_configure(tag, background=COLORS[tag])
-        self.tree.bind("<ButtonRelease-1>", self._on_user_select)
-        self.tree.bind("<KeyRelease-Up>", self._on_user_select)
-        self.tree.bind("<KeyRelease-Down>", self._on_user_select)
-        self.tree.bind("<Button-3>", self._on_hop_menu)
-        vsb = ttk.Scrollbar(parent, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=vsb.set)
-        self.tree.pack(side="left", fill="both", expand=True)
-        vsb.pack(side="right", fill="y")
+    def report_url(self) -> str:
+        """The bug-report form, with the version filled in (an issue form
+        takes a field's value from the query string by the field's id)."""
+        return f"{REPO_URL}/issues/new?" + urllib.parse.urlencode(
+            {"template": "bug_report.yml", "version": __version__})
 
-    def _build_graph(self, parent: ttk.Frame) -> None:
-        self.canvas = tk.Canvas(parent, background=COLORS["graph_bg"], highlightthickness=0)
-        self.canvas.pack(fill="both", expand=True)
-        self.canvas.bind("<Configure>", lambda _e: self._draw_graph())
-
-    # --- engine options ----------------------------------------------------
-    def _init_engine_vars(self) -> None:
-        self.maxhops_var = tk.StringVar(value="30")
-        self.resolve_var = tk.BooleanVar(value=True)
-        self.timeout_var = tk.StringVar(value="1000")
-        self.psize_var = tk.StringVar(value="32")
-        self.senddelay_var = tk.StringVar(value="0")
-        self.finalhop_var = tk.BooleanVar(value=False)
-        self.packettype_var = tk.StringVar(value="ICMP")
-        self.port_var = tk.StringVar(value="443")
-        self.dscp_var = tk.StringVar(value="0")
-        self.sourceip_var = tk.StringVar(value="")
-        self.logpath_var = tk.StringVar(value="")
-        self.webhook_var = tk.StringVar(value="")
-
-    def _open_engine_dialog(self) -> None:
-        if self._engine_win is not None and self._engine_win.winfo_exists():
-            self._engine_win.lift()
-            return
-        win = tk.Toplevel(self.root)
-        win.title("Engine options")
-        win.transient(self.root)
-        win.resizable(False, False)
-        self.look.style_window(win)
-        self._engine_win = win
-        frm = ttk.Frame(win, padding=self.s(12))
-        frm.pack(fill="both", expand=True)
-
-        ptype = ttk.Combobox(frm, width=7, textvariable=self.packettype_var, state="readonly",
-                             values=["ICMP", "TCP", "UDP"])
-        ptype.bind("<<ComboboxSelected>>", self._on_packettype_change)
-        rows = [
-            ("Packet type:", ptype),
-            ("Port (TCP/UDP):", ttk.Spinbox(frm, from_=1, to=65535, increment=1, width=9, textvariable=self.port_var)),
-            ("Max hops:", ttk.Spinbox(frm, from_=1, to=64, increment=1, width=9, textvariable=self.maxhops_var)),
-            ("Reply timeout (ms):", ttk.Spinbox(frm, from_=100, to=10000, increment=100, width=9, textvariable=self.timeout_var)),
-            ("Payload size (bytes):", ttk.Spinbox(frm, from_=0, to=1472, increment=8, width=9, textvariable=self.psize_var)),
-            ("Send delay (ms):", ttk.Spinbox(frm, from_=0, to=1000, increment=5, width=9, textvariable=self.senddelay_var)),
-            # DSCP marks the probe with the traffic class you actually care
-            # about, so a QoS-marked path can be measured as itself instead of
-            # as best-effort.
-            ("DSCP (0-63):", ttk.Spinbox(frm, from_=0, to=63, increment=1, width=9, textvariable=self.dscp_var)),
-            # Pins the outgoing interface on a multi-homed box, so you can ask
-            # what a path looks like from a particular VLAN.
-            ("Source IP (blank = auto):", ttk.Entry(frm, width=18, textvariable=self.sourceip_var)),
-        ]
-        for i, (label, widget) in enumerate(rows):
-            ttk.Label(frm, text=label).grid(row=i, column=0, sticky="w", pady=3, padx=(0, 10))
-            widget.grid(row=i, column=1, sticky="w")
-        base = len(rows)
-        ttk.Checkbutton(frm, text="Resolve hostnames (reverse DNS)", variable=self.resolve_var).grid(
-            row=base, column=0, columnspan=2, sticky="w", pady=3)
-        ttk.Checkbutton(frm, text="Final hop only (ping destination, skip route mapping)", variable=self.finalhop_var).grid(
-            row=base + 1, column=0, columnspan=2, sticky="w", pady=3)
-
-        ttk.Label(frm, text="Log probes to CSV:").grid(row=base + 2, column=0, sticky="w", pady=3, padx=(0, 10))
-        logrow = ttk.Frame(frm)
-        logrow.grid(row=base + 2, column=1, sticky="w")
-        ttk.Entry(logrow, textvariable=self.logpath_var, width=22).pack(side="left")
-        ttk.Button(logrow, text="Browse…", command=self._browse_log).pack(side="left", padx=(4, 0))
-
-        ttk.Label(frm, text="Webhook URL (alerts):").grid(row=base + 3, column=0, sticky="w", pady=3, padx=(0, 10))
-        ttk.Entry(frm, textvariable=self.webhook_var, width=30).grid(row=base + 3, column=1, sticky="w")
-
-        ttk.Label(frm, text="DSCP marks the probe (46 = EF/voice, 34 = AF41/video, 0 = best effort); ICMP mode marks "
-                            "via the IP Helper API, but Windows silently ignores it on TCP/UDP sockets unless "
-                            "DisableUserTOSSetting is cleared - confirm with a capture before trusting a TCP/UDP QoS "
-                            "result. A source IP that this machine does not hold is rejected outright rather than "
-                            "falling back. "
-                            "In UDP traceroute mode the destination port is walked upward from Port, one per hop, to "
-                            "correlate the replies - so Port is the literal port probed only for TCP and for "
-                            "final-hop-only. "
-                            "TCP/UDP modes need Administrator (raw socket); ICMP does not. Send delay throttles the "
-                            "probe rate. Logging is crash-safe (flushed every probe), and each target writes its "
-                            "own file: probe.csv becomes probe_<target>.csv. A webhook URL (http/https) gets "
-                            "a JSON POST when the destination alert raises or clears. TCP mode raises the reply timeout "
-                            f"to at least {monitor.TCP_REFUSAL_FLOOR_MS} ms, because Windows takes about that long to "
-                            "report a closed port and a shorter wait cannot tell one from an unreachable host. "
-                            "Changes apply on next Start.",
-                  style="Muted.TLabel", wraplength=self.s(380)).grid(
-            row=base + 4, column=0, columnspan=2, sticky="w", pady=(8, 2))
-        if not tcpudp.is_admin():
-            ttk.Label(frm, text="⚠ Not running as Administrator — TCP/UDP will be refused.",
-                      foreground=COLORS["fg_bad"], wraplength=self.s(380)).grid(
-                row=base + 5, column=0, columnspan=2, sticky="w", pady=(0, 4))
-        ttk.Button(frm, text="Close", command=win.destroy).grid(row=base + 6, column=1, sticky="e", pady=(4, 0))
-
-    def _on_packettype_change(self, _event: object = None) -> None:
-        ptype = self.packettype_var.get().lower()
-        if ptype in tcpudp.DEFAULT_PORTS:
-            self.port_var.set(str(tcpudp.DEFAULT_PORTS[ptype]))
-
-    def _browse_log(self) -> None:
-        path = filedialog.asksaveasfilename(
-            title="Log probes to CSV", defaultextension=".csv",
-            initialfile="pingerplot_log.csv", confirmoverwrite=False,
-            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
-        )
-        if path:
-            self.logpath_var.set(path)
-
-    # --- actions -----------------------------------------------------------
-    def _toolbar_options(self) -> Optional[dict]:
-        """start() keyword arguments from the toolbar and Engine dialog, or
-        None (after saying why) when a numeric field does not parse."""
+    # --- defaults and starting ---------------------------------------------------
+    def _default_options(self) -> Optional[dict]:
+        """start() options from the Settings page, or None (after saying
+        why) when a number field doesn't parse."""
         try:
-            return dict(
-                interval=float(self.interval_var.get()),
-                timeout_ms=int(self.timeout_var.get()),
-                max_hops=int(self.maxhops_var.get()),
-                resolve_names=self.resolve_var.get(),
-                packet_size=int(self.psize_var.get()),
-                send_delay_ms=int(self.senddelay_var.get()),
-                final_hop_only=self.finalhop_var.get(),
-                packet_type=self.packettype_var.get().lower(),
-                port=int(self.port_var.get()),
-                dscp=int(self.dscp_var.get()),
-                source_ip=self.sourceip_var.get(),
-                log_path=self.logpath_var.get().strip(),
-                alert_enabled=self.alerts_var.get(),
-                alert_loss_pct=float(self.alert_loss_var.get()),
-                alert_latency_ms=float(self.alert_lat_var.get()),
-                alert_window=int(self.alert_win_var.get()),
-                alert_sound=self.alert_sound_var.get(),
-                alert_mos=float(self.alert_mos_var.get()),
-                webhook_url=self.webhook_var.get(),
-            )
-        except ValueError:
-            messagebox.showwarning("Invalid input", "Interval, engine and alert fields must be numbers.")
+            return self.defaults.to_options()
+        except ValueError as exc:
+            messagebox.showwarning("Check the settings", str(exc))
             return None
 
+    def _focus_add(self) -> None:
+        self.nav.select("targets", notify=True)
+        self.add_entry.focus_set()
+        self.add_entry.select_range(0, "end")
+
     def _start(self, target: Optional[str] = None, options: Optional[dict] = None) -> None:
-        """Start (or restart) ``target`` -- the Target box by default -- with
-        ``options``, or with the toolbar's values when none are given."""
+        """Start (or restart) ``target`` -- the Add box by default.
+
+        Without ``options``: a target already in the list that's running is
+        just selected; one that's stopped starts again with its own settings;
+        a new one gets the Settings page's defaults. With ``options`` (Edit
+        settings, a restored session) it (re)starts with exactly those."""
+        from_box = target is None
         target = (self.target_var.get() if target is None else target).strip()
         if not target:
-            messagebox.showwarning("No target", "Enter a hostname or IP address.")
+            messagebox.showwarning("No target", "Enter a host name or IP address.")
             return
+        mon = self._monitors.get(target)
         if options is None:
-            options = self._toolbar_options()
-            if options is None:
-                return
+            if mon is not None and target not in self._loaded:
+                if mon.running:
+                    self._activate(target)
+                    return
+                options = mon.start_options()
+            else:
+                options = self._default_options()
+                if options is None:
+                    return
         options = dict(options)
-        # One field, many targets: each gets its own file, or their rows
+        # One log setting, many targets: each gets its own file, or their rows
         # interleave in a CSV that has no target column.
         options["log_path"] = monitor.per_target_log_path(
             str(options.get("log_path") or "").strip(), target)
 
-        mon = self._monitors.get(target)
         if mon is None:
             mon = Monitor()
             self._monitors[target] = mon
         mon.start(target, **options)
+        if from_box:
+            self.target_var.set("")
         self._activate(target)
 
     def _activate(self, name: Optional[str]) -> None:
-        """Make ``name`` the target shown in the detail tabs; reset detail state."""
+        """Show ``name`` in the detail views, from a clean slate."""
         self._active = name
         self._selected_ttl = None
         self._last_ttl = None
         self._pinned = False
         self._last_event_seq = -1
+        self._draw_ver = None
         for iid in self.tree.get_children():
             self.tree.delete(iid)
         for iid in self.events_tree.get_children():
             self.events_tree.delete(iid)
         self._refresh_once()
-        if name and self.summary_tree.exists(name) and self.summary_tree.selection() != (name,):
-            self.summary_tree.selection_set(name)
+
+    def _active_monitor(self) -> Optional[Monitor]:
+        return self._monitors.get(self._active) if self._active else None
+
+    def _toggle_pause(self) -> None:
+        mon = self._active_monitor()
+        if mon is not None and mon.running:
+            (mon.resume if mon.paused else mon.pause)()
+        self._refresh_once()
+
+    def _toggle_run(self) -> None:
+        mon = self._active_monitor()
+        if mon is None or self._active in self._loaded:
+            return
+        if mon.running:
+            mon.stop()
+            self._refresh_once()
+        else:
+            self._start(self._active, mon.start_options())
+
+    def _edit_active(self) -> None:
+        if self._active and self._active not in self._loaded:
+            self._edit_target(self._active)
+
+    def _edit_target(self, name: str) -> None:
+        EditTargetDialog(self, name)
 
     def _stop(self) -> None:
-        mon = self._monitors.get(self._active) if self._active else None
+        mon = self._active_monitor()
         if mon is not None:
             mon.stop()
 
@@ -647,6 +567,7 @@ class App:
             mon.request_stop()
         for mon in mons:
             mon.stop()
+        self._refresh_once()
 
     def _remove_target(self) -> None:
         self._remove_named(self._active)
@@ -656,15 +577,17 @@ class App:
             return
         self._monitors.pop(name).shutdown()
         self._loaded.discard(name)
-        if self.summary_tree.exists(name):
-            self.summary_tree.delete(name)
+        card = self._cards.pop(name, None)
+        if card is not None:
+            card.destroy()
         if self._active == name:
             self._activate(next(iter(self._monitors), None))
+        else:
+            self._refresh_once()
 
-    def _on_summary_select(self, _event: object) -> None:
-        sel = self.summary_tree.selection()
-        if sel and sel[0] != self._active:
-            self._activate(sel[0])
+    def _select_card(self, name: str) -> None:
+        if name != self._active:
+            self._activate(name)
 
     def _on_user_select(self, _event: object) -> None:
         sel = self.tree.selection()
@@ -676,8 +599,51 @@ class App:
                 pass
         self._draw_graph()
 
-    # --- right-click menus (copy a hop; pause/stop a target) --------------
-    def _on_hop_menu(self, event: object) -> None:
+    # --- menus --------------------------------------------------------------------
+    def _menu(self, parent) -> tk.Menu:
+        return tk.Menu(parent, tearoff=0, **self.look.menu_colours())
+
+    def _popup(self, menu: tk.Menu, x: int, y: int) -> None:
+        try:
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
+
+    def _header_menu(self, button) -> None:
+        m = self._menu(self.root)
+        m.add_command(label="Export hops as CSV…", command=self._export)
+        m.add_command(label="Save session…", command=self._save_session)
+        m.add_command(label="Open a saved session…", command=self._load_session)
+        m.add_command(label="Compare with a saved session…", command=self._compare_with_baseline)
+        m.add_separator()
+        m.add_command(label="Report a problem…", command=lambda: webbrowser.open(self.report_url()))
+        m.add_command(label="Project page", command=lambda: webbrowser.open(REPO_URL))
+        m.add_separator()
+        m.add_command(label="Quit", command=self._on_close)
+        self._popup(m, button.winfo_rootx(), button.winfo_rooty() + button.winfo_height())
+
+    def _target_menu(self, name: str, x: int, y: int) -> None:
+        if name not in self._monitors:
+            return
+        self._select_card(name)
+        mon = self._monitors[name]
+        loaded = name in self._loaded
+        m = self._menu(self.root)
+        if not loaded:
+            m.add_command(label="Edit settings…", command=lambda: self._edit_target(name))
+            m.add_separator()
+            if mon.running:
+                m.add_command(label="Resume" if mon.paused else "Pause",
+                              command=lambda: ((mon.resume if mon.paused else mon.pause)(),
+                                               self._refresh_once()))
+                m.add_command(label="Stop", command=lambda: (mon.stop(), self._refresh_once()))
+            else:
+                m.add_command(label="Start", command=lambda: self._start(name, mon.start_options()))
+            m.add_separator()
+        m.add_command(label="Remove" if not loaded else "Close", command=lambda: self._remove_named(name))
+        self._popup(m, x, y)
+
+    def _on_hop_menu(self, event) -> None:
         iid = self.tree.identify_row(event.y)
         if not iid:
             return
@@ -686,92 +652,25 @@ class App:
         vals = self.tree.item(iid, "values")
         ip = str(vals[1]) if len(vals) > 1 else ""
         host = str(vals[2]) if len(vals) > 2 else ""
-        menu = tk.Menu(self.tree, tearoff=0)
+        m = self._menu(self.tree)
         if ip and ip != "*":
-            menu.add_command(label=f"Copy IP   {ip}", command=lambda: self._clip(ip))
+            m.add_command(label=f"Copy address   {ip}", command=lambda: self._clip(ip))
         if host and host not in ("", "(resolving…)"):
-            menu.add_command(label=f"Copy hostname   {host}", command=lambda: self._clip(host))
-        menu.add_command(label="Copy row", command=lambda: self._clip("\t".join(str(v) for v in vals)))
-        try:
-            menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            menu.grab_release()
+            m.add_command(label=f"Copy hostname   {host}", command=lambda: self._clip(host))
+        m.add_command(label="Copy row", command=lambda: self._clip("\t".join(str(v) for v in vals)))
+        self._popup(m, event.x_root, event.y_root)
 
     def _clip(self, text: str) -> None:
         if not text:
             return
         self.root.clipboard_clear()
         self.root.clipboard_append(text)
-        self.status_var.set(f"Copied: {text}")
+        self._note("Copied")
 
-    def _on_target_menu(self, event: object) -> None:
-        iid = self.summary_tree.identify_row(event.y)
-        if not iid or iid not in self._monitors:
-            return
-        self.summary_tree.selection_set(iid)
-        self._activate(iid)
-        mon = self._monitors[iid]
-        menu = tk.Menu(self.summary_tree, tearoff=0)
-        menu.add_command(label="Edit settings…", command=lambda: self._edit_target(iid))
-        menu.add_separator()
-        if mon.running and not mon.paused:
-            menu.add_command(label="Pause", command=lambda: self._pause_target(iid))
-        elif mon.running and mon.paused:
-            menu.add_command(label="Resume", command=lambda: self._resume_target(iid))
-        if mon.running:
-            menu.add_command(label="Stop", command=mon.stop)
-        menu.add_separator()
-        menu.add_command(label="Remove", command=lambda: self._remove_named(iid))
-        try:
-            menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            menu.grab_release()
-
-    def _pause_target(self, name: str) -> None:
-        mon = self._monitors.get(name)
-        if mon is not None:
-            mon.pause()
-        self._refresh_once()
-
-    def _resume_target(self, name: str) -> None:
-        mon = self._monitors.get(name)
-        if mon is not None:
-            mon.resume()
-        self._refresh_once()
-
-    def _load_target_into_controls(self, name: str) -> None:
-        """Load a target's *own* engine/alert settings back into the toolbar so
-        you can see and re-apply them — settings are stored per-target (set when
-        you Add / Start), not shared, so this is how you inspect/change one."""
-        mon = self._monitors.get(name)
-        if mon is None:
-            return
-        self.target_var.set(name)
-        self.interval_var.set(f"{mon.interval:g}")
-        self.maxhops_var.set(str(mon.max_hops))
-        self.timeout_var.set(str(mon.timeout_ms))
-        self.psize_var.set(str(mon.packet_size))
-        self.senddelay_var.set(str(mon.send_delay_ms))
-        self.port_var.set(str(mon.port))
-        self.packettype_var.set(mon.packet_type.upper())
-        self.dscp_var.set(str(mon.dscp))
-        self.sourceip_var.set(mon.source_ip)
-        self.logpath_var.set(monitor.log_path_template(mon.log_path, name))
-        self.webhook_var.set(mon.webhook_url)
-        self.resolve_var.set(mon.resolve_names)
-        self.finalhop_var.set(mon.final_hop_only)
-        self.alerts_var.set(mon.alert_enabled)
-        self.alert_loss_var.set(f"{mon.alert_loss_pct:g}")
-        self.alert_lat_var.set(f"{mon.alert_latency_ms:g}")
-        self.alert_win_var.set(str(mon.alert_window))
-        self.alert_mos_var.set(f"{mon.alert_mos:g}")
-        self.alert_sound_var.set(mon.alert_sound)
-
-    def _edit_target(self, name: str) -> None:
-        """Inspect/change one target's settings: load them into the controls and
-        open the engine dialog. Press Add / Start to re-apply (restarts it)."""
-        self._load_target_into_controls(name)
-        self._open_engine_dialog()
+    def _note(self, text: str, seconds: float = 5.0) -> None:
+        """A passing confirmation in the header (copied, exported, saved)."""
+        self.note_label.configure(text=text)
+        self._note_until = time.monotonic() + seconds
 
     def _on_close(self) -> None:
         self._save_settings()
@@ -782,80 +681,40 @@ class App:
         for mon in mons:
             mon.shutdown()
         self._empty.shutdown()
+        tkthreads.drain()
         self.root.destroy()
 
-    # --- settings persistence ---------------------------------------------
+    # --- settings persistence ---------------------------------------------------
     def _apply_saved_settings(self) -> None:
-        """Push the loaded settings into the toolbar/engine/alert variables so
-        the user's last choices are in effect on launch."""
+        """The saved defaults and app options, into their controls."""
         s = self._settings
-        for var, key in (
-            (self.interval_var, "interval"), (self.target_var, "target"),
-            (self.maxhops_var, "max_hops"), (self.timeout_var, "timeout_ms"),
-            (self.psize_var, "packet_size"), (self.senddelay_var, "send_delay_ms"),
-            (self.port_var, "port"), (self.logpath_var, "log_path"),
-            (self.dscp_var, "dscp"), (self.sourceip_var, "source_ip"),
-            (self.webhook_var, "webhook_url"), (self.packettype_var, "packet_type"),
-            (self.alert_loss_var, "alert_loss"), (self.alert_lat_var, "alert_latency"),
-            (self.alert_win_var, "alert_window"), (self.alert_mos_var, "alert_mos"),
-        ):
-            if s.get(key) is not None:
-                var.set(str(s[key]))
-        for var, key in (
-            (self.resolve_var, "resolve_names"), (self.finalhop_var, "final_hop_only"),
-            (self.alerts_var, "alerts_enabled"), (self.alert_sound_var, "alert_sound"),
-            (self.resume_var, "resume_on_launch"),
-        ):
-            if isinstance(s.get(key), bool):
-                var.set(s[key])
+        self.defaults.load_settings(s)
+        if isinstance(s.get("resume_on_launch"), bool):
+            self.resume_var.set(s["resume_on_launch"])
 
     def _save_settings(self) -> None:
-        """Persist the current UI/engine/alert state and the target list."""
-        settings.save({
-            "theme": self.theme_var.get(),
-            "interval": self.interval_var.get(),
-            "target": self.target_var.get(),
-            "max_hops": self.maxhops_var.get(),
-            "timeout_ms": self.timeout_var.get(),
-            "packet_size": self.psize_var.get(),
-            "send_delay_ms": self.senddelay_var.get(),
-            "port": self.port_var.get(),
-            "dscp": self.dscp_var.get(),
-            "source_ip": self.sourceip_var.get(),
-            "log_path": self.logpath_var.get(),
-            "webhook_url": self.webhook_var.get(),
-            "packet_type": self.packettype_var.get(),
-            "resolve_names": bool(self.resolve_var.get()),
-            "final_hop_only": bool(self.finalhop_var.get()),
-            "alerts_enabled": bool(self.alerts_var.get()),
-            "alert_loss": self.alert_loss_var.get(),
-            "alert_latency": self.alert_lat_var.get(),
-            "alert_window": self.alert_win_var.get(),
-            "alert_mos": self.alert_mos_var.get(),
-            "alert_sound": bool(self.alert_sound_var.get()),
-            "resume_on_launch": bool(self.resume_var.get()),
-            # Live targets only. A loaded session lives in the same dict so
-            # the detail tabs can render it, but its key is
-            # "<name> (loaded)" -- not a hostname. Saving it meant
-            # _restore_targets called _start() on it next launch, leaving a
-            # permanently-dead row reading "Cannot resolve 'x (loaded)'".
-            # Self-perpetuating, too: every save rewrote it.
-            "targets": [n for n in self._monitors if n not in self._loaded],
-            # Each target's own configuration. The toolbar holds whichever
-            # target was edited last, so restoring from it alone gave every
-            # target those values.
-            "target_options": {n: m.start_options() for n, m in self._monitors.items()
-                               if n not in self._loaded},
-        })
+        """Persist the defaults, app options and the target list."""
+        data = {"theme": self.theme_var.get(),
+                "resume_on_launch": bool(self.resume_var.get())}
+        self.defaults.save_settings(data)
+        # Live targets only. A loaded session lives in the same dict so the
+        # detail views can render it, but its key is "<name> (loaded)" -- not
+        # a hostname. Saving it meant _restore_targets called _start() on it
+        # next launch, leaving a permanently dead "Cannot resolve" target.
+        data["targets"] = [n for n in self._monitors if n not in self._loaded]
+        # Each target's own configuration: restoring from the defaults alone
+        # gave every target the same values.
+        data["target_options"] = {n: m.start_options() for n, m in self._monitors.items()
+                                  if n not in self._loaded}
+        settings.save(data)
 
     def _restore_targets(self) -> None:
-        """If enabled, re-add and start the targets from the last session,
-        each with the options it was running with."""
+        """If enabled, re-add and start the last session's targets, each with
+        the options it was running with."""
         if not self.resume_var.get():
             return
         saved = self._settings.get("target_options")
         saved = saved if isinstance(saved, dict) else {}
-        entry = self.target_var.get()
         for name in self._settings.get("targets", []) or []:
             if not (isinstance(name, str) and name.strip()):
                 continue
@@ -864,27 +723,25 @@ class App:
                 opts = {k: v for k, v in opts.items() if k in monitor.START_OPTION_KEYS}
             else:
                 opts = None              # 1.3.x settings: names only
-            self.target_var.set(name)
             try:
                 self._start(name, opts)
             except (ValueError, TypeError):
                 # A hand-edited or corrupt entry. This runs inside __init__, so
-                # raising would stop the app opening at all; the toolbar's
-                # values are the 1.3.x behaviour.
-                self._start(name)
-        self.target_var.set(entry)   # leave the box showing the saved entry text
+                # raising would stop the app opening at all; the defaults are
+                # the 1.3.x behaviour.
+                self._start(name, self._default_options())
+        self.target_var.set("")
 
+    # --- export, sessions, comparison ------------------------------------------
     def _export(self) -> None:
         views, _status, target_ip, target_input = self.monitor.snapshot()
         if not views:
             messagebox.showinfo("Nothing to export", "No hop data yet.")
             return
         path = filedialog.asksaveasfilename(
-            title="Export hop statistics",
-            defaultextension=".csv",
+            title="Export hop statistics", defaultextension=".csv",
             initialfile=f"pingerplot_{target_input or 'route'}.csv",
-            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
-        )
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")])
         if not path:
             return
         info = self.monitor.run_summary()
@@ -925,7 +782,7 @@ class App:
         except OSError as exc:
             messagebox.showerror("Export failed", str(exc))
             return
-        self.status_var.set(f"Exported {len(views)} hops to {path}")
+        self._note(f"Exported {len(views)} hops")
 
     def _save_session(self) -> None:
         data = self.monitor.to_dict()
@@ -933,11 +790,9 @@ class App:
             messagebox.showinfo("Nothing to save", "No hop data yet.")
             return
         path = filedialog.asksaveasfilename(
-            title="Save session",
-            defaultextension=".json",
+            title="Save session", defaultextension=".json",
             initialfile=f"pingerplot_{data.get('target_input') or 'session'}.json",
-            filetypes=[("PingerPlot session", "*.json"), ("All files", "*.*")],
-        )
+            filetypes=[("PingerPlot session", "*.json"), ("All files", "*.*")])
         if not path:
             return
         try:
@@ -948,13 +803,12 @@ class App:
         except OSError as exc:
             messagebox.showerror("Save failed", str(exc))
             return
-        self.status_var.set(f"Saved session ({len(data['hops'])} hops) to {path}")
+        self._note(f"Saved session ({len(data['hops'])} hops)")
 
     def _load_session(self) -> None:
         path = filedialog.askopenfilename(
-            title="Load session",
-            filetypes=[("PingerPlot session", "*.json"), ("All files", "*.*")],
-        )
+            title="Open a saved session",
+            filetypes=[("PingerPlot session", "*.json"), ("All files", "*.*")])
         if not path:
             return
         try:
@@ -980,25 +834,20 @@ class App:
             old.shutdown()
         self._monitors[name] = mon
         self._loaded.add(name)
+        self.nav.select("targets", notify=True)
         self._activate(name)
 
-    # --- baseline comparison ----------------------------------------------
     def _compare_with_baseline(self) -> None:
-        """Diff the active target against a session saved earlier.
-
-        The tool could always say what a path looks like now; this is what says
-        whether that differs from last Tuesday, which is the question people
-        actually turn up with.
-        """
+        """Diff the selected target against a session saved earlier: what says
+        whether today's path differs from last Tuesday's."""
         views, _status, _ip, target_input = self.monitor.snapshot()
         if not views:
             messagebox.showinfo("Nothing to compare",
-                                "Start a target first - there is no current data.")
+                                "Select a target with data first: there is nothing to compare yet.")
             return
         path = filedialog.askopenfilename(
             title="Choose a saved session to compare against",
-            filetypes=[("PingerPlot session", "*.json"), ("All files", "*.*")],
-        )
+            filetypes=[("PingerPlot session", "*.json"), ("All files", "*.*")])
         if not path:
             return
         try:
@@ -1010,11 +859,9 @@ class App:
         if not isinstance(data, dict):
             messagebox.showerror("Compare failed", "Not a PingerPlot session file.")
             return
-
         base = cmpmod.stats_from_session(data)
         if not base:
-            messagebox.showerror("Compare failed",
-                                 "That session has no hop data to compare against.")
+            messagebox.showerror("Compare failed", "That session has no hop data to compare against.")
             return
         base_target = str(data.get("target_input") or os.path.basename(path))
         if base_target and target_input and base_target != target_input:
@@ -1023,26 +870,31 @@ class App:
             # the same host is legitimately reachable under two names.
             if not messagebox.askyesno(
                     "Different target",
-                    f"The saved session is for '{base_target}' but the current "
-                    f"target is '{target_input}'.\n\nCompare anyway?"):
+                    f"The saved session is for '{base_target}' but this target is "
+                    f"'{target_input}'.\n\nCompare anyway?"):
                 return
-
         now = cmpmod.stats_from_views(views)
-        self._show_comparison(cmpmod.compare(base, now, target=target_input),
-                              base_target)
+        self._show_comparison(cmpmod.compare(base, now, target=target_input), base_target)
 
     def _show_comparison(self, cmp_, baseline_label: str) -> None:
+        S = self.s
         win = tk.Toplevel(self.root)
-        win.title(f"Compare - now vs {baseline_label}")
+        win.title(f"Compare: now and {baseline_label}")
         win.transient(self.root)
-        win.geometry(f"{self.s(900)}x{self.s(460)}")
+        win.geometry(f"{S(920)}x{S(480)}")
         self.look.style_window(win)
-
-        ttk.Label(win, text=cmp_.summary(), padding=(self.s(10), self.s(8)),
-                  style="Strong.TLabel").pack(side="top", anchor="w")
-
+        body = ttk.Frame(win, padding=(S(20), S(16)))
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text=cmp_.summary(), style="Strong.TLabel").pack(side="top", anchor="w")
+        foot = ttk.Frame(body, padding=(0, S(12), 0, 0))
+        foot.pack(side="bottom", fill="x")
+        ttk.Button(foot, text="Copy as text", command=lambda: self._clip(
+            "\n".join(cmpmod.format_comparison(cmp_, baseline_label)))).pack(side="left")
+        ttk.Button(foot, text="Close", command=win.destroy).pack(side="right")
+        card = self._card(body)
+        card.pack(side="top", fill="both", expand=True, pady=(S(10), 0))
         cols = ("ttl", "address", "loss", "d_loss", "avg", "d_avg", "verdict")
-        tree = ttk.Treeview(win, columns=cols, show="headings", selectmode="browse")
+        tree = ttk.Treeview(card, columns=cols, show="headings", selectmode="browse")
         for key, title, width, anchor in (
             ("ttl", "Hop", 44, "center"), ("address", "Address", 150, "w"),
             ("loss", "Loss", 62, "e"), ("d_loss", "Δ Loss", 74, "e"),
@@ -1050,35 +902,24 @@ class App:
             ("verdict", "Change", 260, "w"),
         ):
             tree.heading(key, text=title)
-            tree.column(key, width=self.s(width), anchor=anchor,
-                        stretch=(key == "verdict"))
-        for tag, key in (("bad", "bad"), ("warn", "warn"),
-                         ("ok", "ok"), ("dest", "dest")):
-            tree.tag_configure(tag, background=COLORS[key], foreground=COLORS["fg"])
-
+            tree.column(key, width=S(width), anchor=anchor, stretch=(key == "verdict"))
+        for tag in ("bad", "warn", "ok", "dest"):
+            tree.tag_configure(tag, background=COLORS[tag], foreground=COLORS["fg"])
         for r in cmp_.rows:
             side = r.now or r.base
             note = r.verdict
             if r.verdict == cmpmod.REROUTED and r.base and r.now:
                 note = f"rerouted  {r.base.address} → {r.now.address}"
             tree.insert("", "end", values=(
-                r.ttl,
-                r.address or "*",
+                r.ttl, r.address or "*",
                 "—" if side is None else f"{side.loss_pct:.0f}%",
                 "" if r.d_loss is None else f"{r.d_loss:+.0f}%",
                 "—" if side is None or side.avg is None else _ms(side.avg),
                 "" if r.d_avg is None else f"{r.d_avg:+.1f}",
                 note,
             ), tags=(self._verdict_tag(r.verdict),))
-
-        vsb = ttk.Scrollbar(win, orient="vertical", command=tree.yview)
+        vsb = ttk.Scrollbar(card, orient="vertical", command=tree.yview, style="Card.Vertical.TScrollbar")
         tree.configure(yscrollcommand=vsb.set)
-        footer = ttk.Frame(win, padding=(self.s(8), self.s(6)))
-        footer.pack(side="bottom", fill="x")
-        ttk.Button(footer, text="Copy",
-                   command=lambda: self._clip("\n".join(
-                       cmpmod.format_comparison(cmp_, baseline_label)))).pack(side="left")
-        ttk.Button(footer, text="Close", command=win.destroy).pack(side="right")
         vsb.pack(side="right", fill="y")
         tree.pack(side="left", fill="both", expand=True)
 
@@ -1094,168 +935,192 @@ class App:
             return "dest"
         return "ok"
 
-    # --- refresh loop ------------------------------------------------------
+    # --- refresh loop -------------------------------------------------------------
     def _refresh(self) -> None:
         # Re-arm first-and-always: an exception in one redraw is reported by
         # Tk and must not also end the timer, which froze every target's
         # display while the monitors carried on probing behind it.
         try:
+            tkthreads.drain()
             self._refresh_once()
         finally:
             self.root.after(REFRESH_MS, self._refresh)
 
     def _refresh_once(self) -> None:
         self._follow_system_theme()
-        self._update_summary()
-        views, status, _target_ip, _target_input = self.monitor.snapshot()
-        if self._active:
-            self.status_var.set(status)
-        else:
-            self.status_var.set("Idle — enter a target and press Add / Start.")
-        active = self._monitors.get(self._active) if self._active else None
-        self.stop_btn.config(state=("normal" if active and active.running else "disabled"))
+        self._update_header()
+        self._update_cards()
+        views, status, target_ip, _target_input = self.monitor.snapshot()
+        self._update_detail(views, status, target_ip)
         self._update_table(views)
         self._update_events()
-        self._update_banner()
-        self._update_mos(views)
-        # Redraw the active canvas only when its data actually changed since the
-        # last tick (probes arrive every `interval`, but we tick faster). Resize
-        # and tab-change redraw via their own bindings, so this can't blank them.
-        ver = draw_version(self._active, active, self._selected_ttl, self.theme,
-                           self.geo.count())
+        # Redraw the visible canvas only when its data changed since the last
+        # tick (probes arrive every `interval`, but we tick faster). Resize and
+        # view changes redraw through their own bindings.
+        ver = draw_version(self._active, self._active_monitor(), self._selected_ttl,
+                           self.theme, self.geo.count())
         if ver != self._draw_ver:
             self._draw_ver = ver
-            self._draw_active_tab()
+            self._draw_active_view()
 
-    def _update_summary(self) -> None:
-        for iid in self.summary_tree.get_children():
-            if iid not in self._monitors:
-                self.summary_tree.delete(iid)
-        for name, mon in self._monitors.items():
-            n_hops, d_loss, d_avg, d_jitter, reached = mon.summary()
-            mscore = mos(d_avg, d_jitter, d_loss) if (n_hops and reached) else None
-            label = name + ("  ⏸" if (mon.running and mon.paused) else ("  ▶" if mon.running else ""))
-            values = (
-                label,
-                n_hops,
-                f"{d_loss:.0f}%" if d_loss is not None else "—",
-                _ms(d_avg) if n_hops else "—",
-                f"{mscore:.1f}" if mscore is not None else "—",
-            )
-            tag = self._summary_tag(d_loss, d_avg, mon, name)
-            if self.summary_tree.exists(name):
-                self.summary_tree.item(name, values=values, tags=(tag,))
-            else:
-                self.summary_tree.insert("", "end", iid=name, values=values, tags=(tag,))
-
-    def _summary_tag(self, loss: Optional[float], avg: Optional[float], mon: Monitor, name: str) -> str:
-        if mon.active_alerts() or (loss is not None and loss > 25):
-            return "bad"
-        if loss is not None and (loss > 0 or (avg is not None and avg >= BAD_MS)):
+    def _state_of(self, name: str, mon: Monitor) -> str:
+        if name in self._loaded or not mon.running:
+            return "idle"
+        if mon.paused:
+            return "paused"
+        if mon.active_alerts():
+            return "alert"
+        n, loss, avg, _j, _reached = mon.summary()
+        if n and loss is not None and (loss > 0 or (avg is not None and avg >= BAD_MS)):
             return "warn"
-        return "dest" if name == self._active else "ok"
+        return "ok"
 
-    def _update_mos(self, views: List[HopView]) -> None:
-        if not views or not self.monitor.reached_target:
-            self.mos_var.set("")
-            return
-        dest = views[-1]
-        m = mos(dest.avg, dest.jitter, dest.loss_pct)
-        if m is None:
-            self.mos_var.set("")
-            return
-        self.mos_var.set(f"Dest MOS {m:.1f} · {mos_label(m)}")
-        self.mos_label_w.config(fg=(COLORS["mos_good"] if m >= 4.0 else COLORS["mos_mid"] if m >= 3.1 else COLORS["mos_bad"]))
-
-    def _draw_active_tab(self) -> None:
-        try:
-            current = self.notebook.index(self.notebook.select())
-        except tk.TclError:
-            return
-        if current == 0:
-            self._draw_graph()
-        elif current == 1:
-            self._draw_timeline()
-        elif current == 3:
-            self._draw_map()
-
-    def _draw_map(self) -> None:
-        if not self._geo_started:      # opt-in: only talk to ipwho.is once the
-            self.geo.start()           # Map tab is actually opened
-            self._geo_started = True
-        c = self.map_canvas
-        c.delete("all")
-        w, h = c.winfo_width(), c.winfo_height()
-        if w < 80 or h < 80:
-            return
-        p = COLORS
-
-        def proj(lon, lat):
-            return ((lon + 180.0) / 360.0 * w, (90.0 - lat) / 180.0 * h)
-
-        for poly in worldmap.COASTLINES:
-            pts = []
-            for lon, lat in poly:
-                x, y = proj(lon, lat)
-                pts.extend((x, y))
-            if len(pts) >= 4:
-                c.create_line(pts, fill=p["grid"], width=1)
-
-        views, _status, _ip, _in = self.monitor.snapshot()
-        public = 0
-        located = []
-        for v in views:
-            if v.address and geoip._is_public(v.address):
-                public += 1
-                self.geo.request(v.address)
-                g = self.geo.get(v.address)
-                if g:
-                    x, y = proj(g.lon, g.lat)
-                    located.append((v, g, x, y))
-
-        for i in range(1, len(located)):
-            c.create_line(located[i - 1][2], located[i - 1][3], located[i][2], located[i][3],
-                          fill=p["line"], width=max(1, self.s(2)))
-        last_ttl = views[-1].ttl if views else None
-        rad = max(2, self.s(4))
-        for v, g, x, y in located:
-            c.create_oval(x - rad, y - rad, x + rad, y + rad,
-                          fill=self._hop_fg(v, v.ttl == last_ttl), outline=p["graph_bg"])
-            label = f"{v.ttl}. {g.city or g.country}".strip()
-            c.create_text(x + rad + self.s(2), y, anchor="w", text=label,
-                          fill=p["title"], font=self.look.font(-2))
-
-        if not views:
-            self.map_header.config(text="No data yet — start a target to map its hops.")
+    def _update_header(self) -> None:
+        live = [(n, m) for n, m in self._monitors.items() if n not in self._loaded]
+        running = sum(1 for _n, m in live if m.running and not m.paused)
+        alerting = sum(1 for _n, m in live if m.running and m.active_alerts())
+        c = self.look.c
+        if alerting:
+            dot, text = c["red"], f"{alerting} alerting  ·  monitoring {running}"
+        elif running:
+            dot, text = c["green"], f"Monitoring {running} target{'s' if running != 1 else ''}"
+        elif live:
+            dot, text = c["text3"], "Stopped"
         else:
-            # The failure count only appears when the lookup service is actually
-            # misbehaving. Without it, a map that has quietly stopped resolving
-            # looks identical to one whose hops simply have no location.
-            note = f"  [{self.geo.failures} lookup error(s)]" if self.geo.failures else ""
-            self.map_header.config(
-                text=f"Geo-located {len(located)} of {public} public hops via ipwho.is  "
-                     f"(private/LAN hops have no location){note}")
+            dot, text = c["text3"], "Not monitoring"
+        self.status_dot.configure(foreground=dot)
+        self.status_text.configure(text=text)
+        title = "PingerPlot" + (f" · {alerting} alerting" if alerting else "")
+        if self.root.title() != title:
+            self.root.title(title)
+        if self._note_until and time.monotonic() > self._note_until:
+            self.note_label.configure(text="")
+            self._note_until = 0.0
+
+    def _update_cards(self) -> None:
+        for name in list(self._cards):
+            if name not in self._monitors:
+                self._cards.pop(name).destroy()
+        S = self.s
+        for name, mon in self._monitors.items():
+            card = self._cards.get(name)
+            if card is None:
+                card = TargetCard(self.cards_scroll.inner, self.look, name,
+                                  self._select_card, self._target_menu)
+                card.pack(side="top", fill="x", pady=(0, S(8)))
+                self._cards[name] = card
+            state = self._state_of(name, mon)
+            n, loss, avg, jitter, reached = mon.summary()
+            if name in self._loaded:
+                stats = "Saved session" + (f"  ·  {n} hops" if n else "")
+            elif not mon.running:
+                stats = "Stopped"
+            elif mon.paused:
+                stats = "Paused"
+            elif not n:
+                stats = "Tracing the route…"
+            else:
+                score = mos(avg, jitter, loss) if reached else None
+                parts = [f"{n} hop{'s' if n != 1 else ''}",
+                         f"{loss:.0f}% loss" if loss is not None else "",
+                         f"{fmt_ms(avg)} ms" if avg is not None else "no reply",
+                         f"MOS {score:.1f}" if score is not None else ""]
+                stats = "  ·  ".join(p for p in parts if p)
+            card.update_card(state, name, stats, selected=(name == self._active))
+        live = sum(1 for n in self._monitors if n not in self._loaded)
+        self.targets_caption.configure(text=f"TARGETS  ·  {live}" if live else "TARGETS")
+        if self._monitors:
+            self.cards_empty.pack_forget()
+        elif not self.cards_empty.winfo_ismapped():
+            self.cards_empty.pack(side="top", anchor="w")
+
+    def _update_detail(self, views: List[HopView], status: str, target_ip: Optional[str]) -> None:
+        mon = self._active_monitor()
+        name = self._active
+        loaded = name in self._loaded if name else False
+        if mon is None:
+            self.detail_title.configure(text="No target selected")
+            self.detail_status.configure(text="Add one on the left, or choose one from the list.")
+            for b in (self.pause_btn, self.stop_btn, self.edit_btn):
+                b.state(["disabled"])
+            self.mos_label_w.configure(text="")
+            self.detail_stats.configure(text="")
+            self._set_banner([])
+            return
+        shown = name if not target_ip or target_ip == name else f"{name}  ({target_ip})"
+        self.detail_title.configure(text=shown)
+        self.detail_status.configure(text=self._describe(mon, status))
+        self.pause_btn.configure(text="Resume" if mon.paused else "Pause")
+        self.pause_btn.state(["!disabled"] if (mon.running and not loaded) else ["disabled"])
+        self.stop_btn.configure(text="Stop" if mon.running else "Start")
+        self.stop_btn.state(["disabled"] if loaded else ["!disabled"])
+        self.edit_btn.state(["disabled"] if loaded else ["!disabled"])
+
+        c = self.look.c
+        dest = views[-1] if views else None
+        score = mos(dest.avg, dest.jitter, dest.loss_pct) if (dest and mon.reached_target) else None
+        if score is None:
+            self.mos_label_w.configure(text="")
+        else:
+            colour = c["green"] if score >= 4.0 else c["amber"] if score >= 3.1 else c["red"]
+            self.mos_label_w.configure(text=f"MOS {score:.1f} · {mos_label(score)}", foreground=colour)
+        if dest is not None:
+            jit = f"  ·  jitter {fmt_ms(dest.jitter)} ms" if dest.jitter is not None else ""
+            avg = f"{fmt_ms(dest.avg)} ms average" if dest.avg is not None else "no reply yet"
+            self.detail_stats.configure(
+                text=f"Destination: {dest.loss_pct:.0f}% loss  ·  {avg}{jit}  ·  {dest.sent} probes")
+        else:
+            self.detail_stats.configure(text="")
+        self._set_banner(mon.active_alerts())
+
+    @staticmethod
+    def _describe(mon: Monitor, status: str) -> str:
+        """How a monitoring target runs, in one line; the engine's own status
+        for everything else (resolving, tracing, paused, stopped and why).
+        The engine's monitoring line repeats the name and address the title
+        already shows, and the alert count the banner already shows."""
+        if not mon.running or mon.paused or not status.startswith("Monitoring"):
+            return status
+        proto = mon.packet_type.upper() + (f" port {mon.port}" if mon.packet_type != "icmp" else "")
+        parts = [proto, f"every {mon.interval:g} s",
+                 "destination only" if mon.final_hop_only
+                 else f"{mon.route_len} hop{'s' if mon.route_len != 1 else ''}"]
+        if mon.dscp:
+            parts.append(f"DSCP {mon.dscp}")
+        if mon.source_ip:
+            parts.append(f"from {mon.source_ip}")
+        if not mon.reached_target:
+            parts.append("the destination isn't answering")
+        return "  ·  ".join(parts)
+
+    def _set_banner(self, alerts: List[str]) -> None:
+        if alerts:
+            self.banner_label.configure(text="\n".join(alerts))
+            if not self._banner_shown:
+                self.banner.pack(side="top", fill="x", pady=(self.s(10), 0), before=self._banner_anchor)
+                self._banner_shown = True
+        elif self._banner_shown:
+            self.banner.pack_forget()
+            self._banner_shown = False
+
+    _row_tag = staticmethod(row_tag)
 
     def _update_table(self, views: List[HopView]) -> None:
         desired = {str(v.ttl) for v in views}
         for iid in self.tree.get_children():
             if iid not in desired:
                 self.tree.delete(iid)
-
         last_ttl = views[-1].ttl if views else None
         for v in views:
             iid = str(v.ttl)
             hostname = v.hostname if v.hostname else ("(resolving…)" if v.address and v.hostname is None else "")
-            values = (
-                v.ttl, v.address or "*", hostname, f"{v.loss_pct:.0f}%", v.sent,
-                _ms(v.current), _ms(v.avg), _ms(v.best), _ms(v.worst), _ms(v.jitter),
-            )
-            tag = self._row_tag(v, is_dest=(v.ttl == last_ttl))
+            values = (v.ttl, v.address or "*", hostname, f"{v.loss_pct:.0f}%", v.sent,
+                      _ms(v.current), _ms(v.avg), _ms(v.best), _ms(v.worst), _ms(v.jitter))
+            tag = row_tag(v, is_dest=(v.ttl == last_ttl))
             if self.tree.exists(iid):
                 self.tree.item(iid, values=values, tags=(tag,))
             else:
                 self.tree.insert("", "end", iid=iid, values=values, tags=(tag,))
-
         self._last_ttl = last_ttl
         if not self._pinned and last_ttl is not None:
             self._selected_ttl = last_ttl
@@ -1267,189 +1132,49 @@ class App:
         for e in new:
             ts = time.strftime("%H:%M:%S", time.localtime(e.t))
             tag = e.kind if e.kind in ("alert", "clear", "route", "warn") else "info"
-            self.events_tree.insert("", "end", values=(ts, e.kind.upper(), e.text), tags=(tag,))
+            self.events_tree.insert("", "end", values=(ts, e.kind.title(), e.text), tags=(tag,))
         if new:
             self.events_tree.yview_moveto(1.0)
         self._last_event_seq = last
 
-    def _update_banner(self) -> None:
-        alerts = []
-        for name, mon in self._monitors.items():
-            prefix = "" if len(self._monitors) == 1 else f"[{name}] "
-            alerts.extend(prefix + a for a in mon.active_alerts())
-        if alerts:
-            self.banner_label.config(text="⚠  " + "      ".join(alerts))
-            if not self._banner_shown:
-                self.banner.pack(side="top", fill="x", before=self.notebook)
-                self._banner_shown = True
-        elif self._banner_shown:
-            self.banner.pack_forget()
-            self._banner_shown = False
-
-    @staticmethod
-    def _row_tag(v: HopView, is_dest: bool) -> str:
-        """Row colour: red for a problem, amber for a warning.
-
-        BAD_MS used to be tested one branch too late — `avg >= BAD_MS` returned
-        "warn", and any average clearing 250 ms also clears WARN_MS's 120 ms and
-        would have hit the next branch for the same answer. The condition could
-        never change the outcome, so latency alone never turned a row red no
-        matter how bad it got, contradicting BAD_MS's own comment.
-        """
-        if v.loss_pct > 25 or (v.avg is not None and v.avg >= BAD_MS):
-            return "bad"
-        if v.loss_pct > 0 or (v.avg is not None and v.avg >= WARN_MS):
-            return "warn"
-        return "dest" if is_dest else "ok"
-
-    def _hop_fg(self, v: HopView, is_dest: bool) -> str:
-        return {
-            "bad": COLORS["fg_bad"], "warn": COLORS["fg_warn"],
-            "dest": COLORS["fg_dest"], "ok": COLORS["fg_ok"],
-        }[self._row_tag(v, is_dest)]
-
-    # --- plotting ----------------------------------------------------------
-    def _plot_series(self, c, samples, x0, x1, y_base, y_top, y_max, t_min, span, tick=8):
-        """Draw one latency series (filled line + red loss ticks) inside a rect.
-        ``y_base`` is the bottom (value 0), ``y_top`` the top (value y_max)."""
-        if not samples:
+    # --- drawing (see gui_charts) ------------------------------------------------
+    def _draw_active_view(self) -> None:
+        if not self.targets_page.winfo_ismapped() and self.settings_page is not None:
             return
-
-        def X(t):
-            return x0 + (x1 - x0) * ((t - t_min) / span) if span else (x0 + x1) / 2
-
-        def Y(v):
-            return y_base + (y_top - y_base) * (min(v, y_max) / y_max)
-
-        segment: List[float] = []
-        loss_x: List[float] = []
-        for s in samples:
-            if s.rtt is None:
-                loss_x.append(X(s.t))
-                self._flush_segment(c, segment, y_base)
-                segment = []
-            else:
-                segment.extend((X(s.t), Y(s.rtt)))
-        self._flush_segment(c, segment, y_base)
-
-        tick_h = min(tick, max(2, y_base - y_top))
-        for x in loss_x:
-            c.create_line(x, y_base, x, y_base - tick_h, fill=COLORS["loss"], width=1)
-
-    def _flush_segment(self, c, segment: List[float], baseline: float) -> None:
-        if len(segment) >= 4:  # at least two points
-            poly = [segment[0], baseline] + segment + [segment[-2], baseline]
-            c.create_polygon(poly, fill=COLORS["fill"], outline="")
-            c.create_line(segment, fill=COLORS["line"], width=max(1, self.s(2)), joinstyle="round")
-        elif len(segment) == 2:
-            r = max(1, self.s(2))
-            c.create_oval(segment[0] - r, segment[1] - r, segment[0] + r, segment[1] + r,
-                          fill=COLORS["line"], outline="")
+        view = self.detail_nav.current
+        if view == "hops":
+            self._draw_graph()
+        elif view == "timeline":
+            self._draw_timeline()
+        elif view == "map":
+            self._draw_map()
 
     def _draw_graph(self) -> None:
-        c = self.canvas
-        c.delete("all")
-        w, h = c.winfo_width(), c.winfo_height()
-        if w < 40 or h < 40:
-            return
-        pad_l, pad_r, pad_t, pad_b = self.s(52), self.s(14), self.s(26), self.s(26)
-        x0, x1 = pad_l, w - pad_r
-        y_base, y_top = h - pad_b, pad_t
-        c.create_rectangle(x0, y_top, x1, y_base, fill=COLORS["graph_bg"], outline=COLORS["graph_border"])
-
         ttl = self._selected_ttl
-        samples: List[Sample] = self.monitor.samples_for(ttl) if ttl is not None else []
-        rtts = [s.rtt for s in samples if s.rtt is not None]
-        y_max = max(10.0, (max(rtts) if rtts else 50.0) * 1.15)
-
-        for frac in (0.0, 0.25, 0.5, 0.75, 1.0):
-            y = y_base + (y_top - y_base) * frac
-            c.create_line(x0, y, x1, y, fill=COLORS["grid"])
-            c.create_text(x0 - self.s(6), y, text=f"{y_max * frac:.0f}", anchor="e",
-                          fill=COLORS["axis_text"], font=self.look.font(-2))
-
-        title = "Select a hop to graph" if ttl is None else f"Hop {ttl} — latency (ms)"
-        c.create_text(x0, y_top - self.s(13), text=title, anchor="w", fill=COLORS["title"], font=self.look.font(-1, "semibold"))
-        if not samples:
-            return
-
-        t0, t1 = samples[0].t, samples[-1].t
-        span = max(1e-6, t1 - t0)
-        self._plot_series(c, samples, x0, x1, y_base, y_top, y_max, t0, span, tick=self.s(10))
-
-        last = samples[-1]
-        if last.rtt is not None:
-            lx = x0 + (x1 - x0) * ((last.t - t0) / span)
-            ly = y_base + (y_top - y_base) * (min(last.rtt, y_max) / y_max)
-            r = self.s(3)
-            c.create_oval(lx - r, ly - r, lx + r, ly + r, fill=COLORS["line"], outline="")
-            c.create_text(lx - self.s(6), ly - self.s(8), text=_ms(last.rtt), anchor="se",
-                          fill=COLORS["line"], font=self.look.font(-2, "semibold"))
-        c.create_text(x1, y_base + self.s(13), text=f"← {span:.0f}s window  ·  now →",
-                      anchor="e", fill=COLORS["axis_text"], font=self.look.font(-2))
+        samples = self.monitor.samples_for(ttl) if ttl is not None else []
+        draw_graph(self.canvas, self._ink(), ttl, samples)
 
     def _draw_timeline(self) -> None:
-        c = self.timeline_canvas
-        c.delete("all")
-        w = c.winfo_width()
-        if w < 60:
+        views, _s, _ip, _in = self.monitor.snapshot()
+        caption = draw_timeline(self.timeline_canvas, self._ink(), views, self.monitor.all_samples())
+        if caption:
+            self.timeline_header.configure(text=caption)
+
+    def _draw_map(self) -> None:
+        if self.detail_nav.current != "map":
             return
-        data: Dict[int, List[Sample]] = self.monitor.all_samples()
-        views, _status, _ip, _in = self.monitor.snapshot()
-        if not views:
-            self.timeline_header.config(text="No data yet.")
-            c.configure(scrollregion=(0, 0, w, 1))
-            return
-
-        all_s = [s for lst in data.values() for s in lst]
-        rtts = [s.rtt for s in all_s if s.rtt is not None]
-        g_max = max(10.0, (max(rtts) if rtts else 50.0) * 1.1)
-        times = [s.t for s in all_s]
-        t_min = min(times) if times else 0.0
-        span = max(1e-6, (max(times) if times else 1.0) - t_min)
-
-        n = len(views)
-        strip_h, gutter, pad = self.s(44), self.s(184), self.s(6)
-        c.configure(scrollregion=(0, 0, w, n * strip_h))
-        last_ttl = views[-1].ttl
-
-        for i, v in enumerate(views):
-            y0 = i * strip_h
-            y_top, y_base = y0 + pad, y0 + strip_h - pad
-            gx0, gx1 = gutter, w - self.s(12)
-            c.create_line(0, y0, w, y0, fill=COLORS["strip_sep"])
-            c.create_rectangle(gx0, y_top, gx1, y_base, fill=COLORS["graph_bg"], outline=COLORS["strip_border"])
-
-            label = f"{v.ttl}.  {v.hostname or v.address or '*'}"
-            c.create_text(self.s(8), (y_top + y_base) / 2, anchor="w", text=label[:34],
-                          fill=self._hop_fg(v, v.ttl == last_ttl), font=self.look.font(-2))
-            c.create_text(gutter - self.s(8), (y_top + y_base) / 2, anchor="e",
-                          text=f"{v.loss_pct:.0f}% loss", fill=COLORS["axis_text"], font=self.look.font(-3))
-
-            self._plot_series(c, data.get(v.ttl, []), gx0, gx1, y_base, y_top, g_max, t_min, span, tick=self.s(6))
-            c.create_text(gx1 - self.s(2), y_top + self.s(1), anchor="ne", text=_ms(v.current),
-                          fill=COLORS["line"], font=self.look.font(-3, "semibold"))
-
-        self.timeline_header.config(
-            text=f"All hops, shared scale 0–{g_max:.0f} ms  ·  {span:.0f}s window  ·  {n} hops"
-        )
+        if not self._geo_started:      # opt-in: only talk to ipwho.is once the
+            self.geo.start()           # Map view is actually opened
+            self._geo_started = True
+        views, _s, _ip, _in = self.monitor.snapshot()
+        caption = draw_map(self.map_canvas, self._ink(), views, self.geo)
+        if caption:
+            self.map_header.configure(text=caption)
 
 
 def _enable_windows_dpi_awareness() -> None:
-    """Tell Windows we'll handle DPI ourselves, so it renders the window at
-    native resolution instead of bitmap-stretching a 96-dpi surface (the blur).
-    Must be called before the first Tk window is created."""
-    if sys.platform != "win32":
-        return
-    try:  # Windows 8.1+: PROCESS_SYSTEM_DPI_AWARE = 1 (crisp on the main monitor)
-        ctypes.windll.shcore.SetProcessDpiAwareness(1)
-        return
-    except (AttributeError, OSError):
-        pass
-    try:  # Vista/7/8 fallback
-        ctypes.windll.user32.SetProcessDPIAware()
-    except (AttributeError, OSError):
-        pass
+    """Kept for callers of the 1.3 name; see winplatform.enable_dpi_awareness."""
+    winplatform.enable_dpi_awareness()
 
 
 def main() -> None:
@@ -1462,7 +1187,8 @@ def main() -> None:
         # hypothetical: it is exactly how the first build of this was broken.
         print(f"PingerPlot {__version__}")
         return
-    _enable_windows_dpi_awareness()
+    winplatform.enable_dpi_awareness()
+    winplatform.set_app_id()
     root = tk.Tk()
     App(root)
     root.mainloop()

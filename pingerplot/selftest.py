@@ -11,7 +11,6 @@ import argparse
 import time
 
 from . import icmp
-from .model import HopView
 from .monitor import Monitor
 
 
@@ -22,7 +21,7 @@ def _ms(v):
 def _print_table(views):
     print(f"\n{'Hop':>3}  {'IP':<16} {'Loss':>5} {'Sent':>4} {'Cur':>6} {'Avg':>6} {'Min':>6} {'Max':>6}  Host")
     print("-" * 86)
-    for v in views:  # type: HopView
+    for v in views:
         print(
             f"{v.ttl:>3}  {(v.address or '*'):<16} {v.loss_pct:>4.0f}% {v.sent:>4} "
             f"{_ms(v.current)} {_ms(v.avg)} {_ms(v.best)} {_ms(v.worst)}  {v.hostname or ''}"

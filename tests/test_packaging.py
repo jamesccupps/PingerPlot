@@ -42,9 +42,9 @@ def test_version_flag_does_not_need_a_display():
     runner can use it to prove a frozen binary's import graph."""
     src = (REPO / "pingerplot" / "gui.py").read_text(encoding="utf-8")
     body = src[src.index("def main() -> None:"):]
-    version_branch = body[:body.index("_enable_windows_dpi_awareness()")]
-    assert "--version" in version_branch
-    assert "tk.Tk()" not in version_branch
+    before_tk = body[:body.index("tk.Tk()")]
+    assert "--version" in before_tk and "return" in before_tk, \
+        "--version must return before the first Tk window is created"
 
 
 def test_version_walks_the_import_graph_that_broke():
