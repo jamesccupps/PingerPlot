@@ -8,6 +8,11 @@
 ; in Settings > Apps. Settings live in %APPDATA%\PingerPlot and are never
 ; touched by installing, upgrading or uninstalling.
 ;
+; The in-app updater runs this silently with /relaunch=1: it waits for the
+; running copy to exit (the app's single-instance mutex) and then starts the
+; new one with --updated. The app tells an installed copy from a portable one
+; by the uninstaller beside it, unins000.exe.
+;
 ; Running PingerPlot is unelevated: ICMP and TCP to the destination need no
 ; administrator rights. Full TCP/UDP traceroute does; right-click the shortcut
 ; and choose Run as administrator for that.
@@ -81,10 +86,16 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#AppExe}"; Parameters: "--updated"; Flags: nowait; Check: WantsRelaunch
 
 [Code]
-{ A silent run (an update, a script) waits a little for a running copy to
-  quit. Run by hand while the app is open, Setup asks. }
+function WantsRelaunch: Boolean;
+begin
+  Result := ExpandConstant('{param:relaunch|0}') = '1';
+end;
+
+{ The in-app updater starts Setup and then quits, so a silent run waits a
+  little for it to go. Run by hand while the app is open, Setup asks. }
 function AppIsGone: Boolean;
 var
   i: Integer;

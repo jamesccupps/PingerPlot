@@ -156,17 +156,43 @@ def test_the_installer_is_per_user_and_waits_for_the_app():
         "uninstalling must remove the Start with Windows entry the app writes"
 
 
-def test_the_release_publishes_what_the_build_makes():
+def test_the_installer_restarts_the_app_after_an_update():
+    """updater.apply runs Setup with /relaunch=1 and quits; without this [Run]
+    entry an update would leave PingerPlot closed."""
+    iss = ISS.read_text(encoding="utf-8")
+    assert 'Parameters: "--updated"; Flags: nowait; Check: WantsRelaunch' in iss
+    assert "{param:relaunch|0}" in iss
+
+
+def _build_windows():
     sys.path.insert(0, str(REPO / "packaging"))
     try:
         import build_windows
     finally:
         sys.path.pop(0)
+    return build_windows
+
+
+def test_the_updater_asks_for_the_files_the_build_makes():
+    """Every installed copy reads these names from every later release: they
+    can never change, and the two lists can never drift apart."""
+    from pingerplot import updater
+    bw = _build_windows()
+    assert (updater.INSTALLER_NAME, updater.PORTABLE_NAME) == (bw.INSTALLER_NAME, bw.PORTABLE_NAME)
+    assert updater.GUI_EXE == bw.EXES[0]
+    assert updater.MANIFEST_NAME == "latest.json"
+
+
+def test_the_release_publishes_what_the_build_makes():
+    bw = _build_windows()
     wf = (REPO / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
-    attach = wf[wf.index("gh release upload"):]
-    for name in (build_windows.INSTALLER_NAME, build_windows.PORTABLE_NAME, "SHA256SUMS.txt"):
+    attach = wf[wf.index("- name: Attach to the release"):]
+    for name in (bw.INSTALLER_NAME, bw.PORTABLE_NAME, "SHA256SUMS.txt", "latest.json"):
         assert f"dist/{name}" in attach, f"the release doesn't attach {name}"
     assert "dist/PingerPlot.exe" not in attach, "1.3's bare executables are gone"
+    code = "\n".join(ln for ln in attach.splitlines() if not ln.strip().startswith("#"))
+    assert code.index("files+=(dist/latest.json)") > code.index("dist/SHA256SUMS.txt"), \
+        "latest.json must go up after the files it names"
 
 
 def test_ci_builds_and_tests_the_release_files_on_every_push():
@@ -388,9 +414,33 @@ def _jobs(text):
             for i, m in enumerate(heads)}
 
 
-def test_the_job_finder_finds_both_release_jobs():
+def test_the_job_finder_finds_the_release_jobs():
     jobs = _jobs((REPO / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8"))
-    assert set(jobs) == {"windows", "publish"}
+    assert set(jobs) == {"windows", "sign", "publish"}
+
+
+def test_only_the_sign_job_sees_the_signing_key():
+    """The key that every installed copy trusts is worth more than the write
+    token: it never shares a job with anything installed from PyPI."""
+    wf = (REPO / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    jobs = _jobs(wf)
+    for name, job in jobs.items():
+        if name != "sign":
+            assert "secrets." not in job, f"job {name!r} reads a secret"
+    sign = "\n".join(ln for ln in jobs["sign"].splitlines() if not ln.strip().startswith("#"))
+    assert "UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}" in sign
+    assert "contents: read" in sign and "contents: write" not in sign
+    for forbidden in ("pip ", "pytest", "PyInstaller", "setup-python", "build_windows"):
+        assert forbidden not in sign, f"the sign job runs {forbidden.strip()}"
+    assert "python3 -I packaging/signing.py sign" in sign
+    assert "trap 'rm -f \"$key\"' EXIT" in sign, "the key file must not outlive the step"
+    assert sign.index("signing.py sign") < sign.index("signing.py verify"), \
+        "the manifest must be verified against the app's key before it is published"
+
+
+def test_publishing_waits_for_the_signature():
+    jobs = _jobs((REPO / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8"))
+    assert "needs: [windows, sign]" in jobs["publish"]
 
 
 def test_only_a_job_that_runs_no_third_party_code_can_write():

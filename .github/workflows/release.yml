@@ -1,6 +1,7 @@
 name: Release binaries
 
-# Build the Windows executables and attach them to the release for a tag.
+# Build the Windows executables and attach them to the release for a tag,
+# with latest.json, the signed manifest the in-app updater reads.
 #
 # Runs on a tag push, and can be dispatched by hand against a tag that already
 # exists (which is how v1.3.0 got its binaries after the fact).
@@ -19,9 +20,11 @@ name: Release binaries
 #      through `env:` instead, where bash reads them as data.
 #   2. Actions are pinned by commit SHA, not by tag. Tags are mutable; a
 #      retagged or compromised action would otherwise run with that token.
-#   3. Third-party code never runs next to the write token. The build job --
-#      which installs PyInstaller and pytest and executes them -- is
-#      read-only; only the publish job, which runs nothing but gh, can write.
+#   3. Third-party code never runs next to the write token or the signing
+#      key. The build job -- which installs PyInstaller and pytest and
+#      executes them -- is read-only and has no secrets; the sign job, which
+#      installs nothing, holds the release-signing key; only the publish job,
+#      which runs nothing but gh, can write.
 #   4. Build tooling is pinned by version and hash (packaging/
 #      requirements-build.txt), not "whatever PyPI serves today".
 #   5. The checkout steps do not leave the job token in .git/config
@@ -192,12 +195,77 @@ jobs:
             dist/PingerPlot-win64.zip
             dist/SHA256SUMS.txt
 
+  sign:
+    # latest.json: the manifest installed copies update from, signed with the
+    # release key (the UPDATE_SIGNING_KEY secret). Its own job, for the same
+    # reason the publish job is one: the key never shares a job with pip,
+    # PyInstaller or the test suite. This job installs nothing; it runs the
+    # runner's own Python on the tag's packaging/signing.py, which is
+    # standard library only, and checks the result against the public key
+    # built into the app before anything is published.
+    name: Sign the update manifest
+    needs: windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ needs.windows.outputs.tag }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: pingerplot-windows-${{ needs.windows.outputs.tag }}
+          path: dist
+
+      - name: Sign latest.json
+        # A tag from before the updater (1.4.0) has no signing.py and nothing
+        # that would read a manifest, so it gets none. From 1.4.0 on, a
+        # missing secret fails the release: unsigned, it would never reach
+        # installed copies, and nobody would notice.
+        shell: bash
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+          TAG: ${{ needs.windows.outputs.tag }}
+        run: |
+          if [ ! -f packaging/signing.py ]; then
+            echo "$TAG predates the in-app updater; no latest.json."
+            exit 0
+          fi
+          if [ -z "$UPDATE_SIGNING_KEY" ]; then
+            echo "::error::The UPDATE_SIGNING_KEY secret isn't set (see packaging/signing.py)."
+            exit 1
+          fi
+          key="$RUNNER_TEMP/update-signing-key.pem"
+          trap 'rm -f "$key"' EXIT
+          (umask 077 && printf '%s\n' "$UPDATE_SIGNING_KEY" > "$key")
+          PINGERPLOT_SIGNING_KEY="$key" python3 -I packaging/signing.py sign dist "$TAG"
+
+      - name: Verify latest.json against the key built into the app
+        # A release signed with the wrong key would be refused by every
+        # installed copy; this is where that is caught instead.
+        shell: bash
+        env:
+          TAG: ${{ needs.windows.outputs.tag }}
+        run: |
+          if [ -f packaging/signing.py ]; then
+            python3 -I packaging/signing.py verify dist "$TAG"
+          fi
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: pingerplot-manifest-${{ needs.windows.outputs.tag }}
+          path: dist/latest.json
+          if-no-files-found: ignore
+
   publish:
     # Separate from the build so the token that can publish releases never
     # shares a job with pip, PyInstaller or the test suite. This job runs
     # only actions pinned by SHA and gh, which is preinstalled on the runner.
     name: Attach to the release
-    needs: windows
+    needs: [windows, sign]
     runs-on: ubuntu-latest
     permissions:
       contents: write   # creating a release and uploading its assets
@@ -213,6 +281,13 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           name: pingerplot-windows-${{ needs.windows.outputs.tag }}
+          path: dist
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        # Absent for a tag from before the updater; the upload below copes.
+        continue-on-error: true
+        with:
+          name: pingerplot-manifest-${{ needs.windows.outputs.tag }}
           path: dist
 
       - name: Attach to the release
@@ -240,10 +315,12 @@ jobs:
               gh release create "$TAG" --title "PingerPlot ${TAG#v}" --notes-from-tag --verify-tag
             fi
           fi
-          gh release upload "$TAG" \
-            dist/PingerPlot-Setup.exe \
-            dist/PingerPlot-win64.zip \
-            dist/SHA256SUMS.txt \
-            --clobber
+          files=(dist/PingerPlot-Setup.exe dist/PingerPlot-win64.zip dist/SHA256SUMS.txt)
+          # latest.json goes up last: installed copies read it the moment it
+          # appears, and the files it names must already be there.
+          if [ -f dist/latest.json ]; then files+=(dist/latest.json); fi
+          for f in "${files[@]}"; do
+            gh release upload "$TAG" "$f" --clobber
+          done
           echo "Attached to $TAG:"
           gh release view "$TAG" --json assets --jq '.assets[] | "  \(.name)  \(.size) bytes"'

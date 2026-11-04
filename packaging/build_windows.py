@@ -6,10 +6,14 @@
     dist/PingerPlot-win64.zip     that folder plus portable.txt
     dist/PingerPlot-Setup.exe     the installer (needs Inno Setup 6)
     dist/SHA256SUMS.txt           hashes of the two downloads
+    dist/latest.json              the signed update manifest, when the
+                                  release-signing key is on this PC
 
 Needs packaging/requirements-build.txt (PyInstaller). Without Inno Setup the
 installer is skipped and everything else is built, which is enough to test the
-program and the zip locally; CI builds and tests all of it.
+program and the zip locally; CI builds and tests all of it. Without the
+signing key (packaging/signing.py) latest.json is skipped: CI signs in a
+separate job that never runs the build tools.
 """
 from __future__ import annotations
 
@@ -125,6 +129,16 @@ def checksums() -> None:
     (DIST / "SHA256SUMS.txt").write_text("\n".join(lines) + "\n", encoding="ascii")
 
 
+def manifest():
+    sys.path.insert(0, str(ROOT / "packaging"))
+    import signing
+    key = signing.key_file()
+    if not key.is_file():
+        print(f"no signing key at {key}; latest.json not written")
+        return None
+    return signing.sign(DIST, __version__, signing.seed_from_pem(key.read_text(encoding="ascii")))
+
+
 def main() -> None:
     shutil.rmtree(DIST, ignore_errors=True)
     version_resource()
@@ -134,6 +148,7 @@ def main() -> None:
     if "--no-installer" not in sys.argv:
         print("installer:", installer())
     checksums()
+    print("manifest:", manifest())
     for p in sorted(DIST.iterdir()):
         if p.is_file():
             print(f"  {p.name:28} {p.stat().st_size:>12,} bytes")
