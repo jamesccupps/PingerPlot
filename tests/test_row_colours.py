@@ -102,8 +102,10 @@ def test_a_hop_with_no_latency_yet_is_not_flagged():
 # --- every tag the code can return must have a colour ----------------------
 
 def test_every_tag_is_configured_in_both_palettes():
-    from pingerplot.gui import DARK, LIGHT
+    from pingerplot import theme
+    light = theme.legacy_colours(theme.build_palette(False))
+    dark = theme.legacy_colours(theme.build_palette(True))
     produced = {tag(avg=1.0), tag(avg=WARN_MS), tag(avg=BAD_MS),
                 tag(loss=50.0), tag(avg=1.0, is_dest=True)}
     for name in produced:
-        assert name in LIGHT and name in DARK, f"{name} has no colour"
+        assert name in light and name in dark, f"{name} has no colour"

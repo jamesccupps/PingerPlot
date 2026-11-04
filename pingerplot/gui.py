@@ -15,10 +15,11 @@ import os
 import sys
 import time
 import tkinter as tk
-from tkinter import filedialog, font as tkfont, messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 from typing import Dict, List, Optional
 
 from . import __version__, appicon, compare as cmpmod, geoip, icmp, settings, tcpudp, worldmap
+from . import theme as themes, winplatform
 from .model import HopView, Sample, csv_safe, draw_version, mos, mos_label
 from . import monitor
 from .monitor import Monitor
@@ -28,41 +29,10 @@ REFRESH_MS = 700
 WARN_MS = 120.0   # row/label goes amber at/above this average latency
 BAD_MS = 250.0    # ...and at/above this it is treated as a problem
 
-# Two palettes with identical keys. COLORS is the *active* one (mutated in place
-# on theme switch so the draw code, which reads COLORS at call time, follows).
-LIGHT = {
-    "ok": "#ffffff", "warn": "#fff3cd", "bad": "#f8d7da", "dest": "#e7f1ff",
-    "graph_bg": "#ffffff", "graph_border": "#c9ced6", "grid": "#eef0f3",
-    "line": "#1f77b4", "fill": "#d6e6f4", "loss": "#d62728",
-    "axis_text": "#666666", "title": "#222222",
-    "strip_sep": "#e7e9ee", "strip_border": "#e3e6ea",
-    "banner_bg": "#c0392b", "banner_fg": "#ffffff",
-    "fg_bad": "#c0392b", "fg_warn": "#b9770e", "fg_dest": "#1f5fbf", "fg_ok": "#333333",
-    "ev_alert": "#fdecea", "ev_clear": "#eafaf1", "ev_route": "#eaf2fb",
-    "ev_warn": "#fef5e7",
-    "mos_good": "#2e7d32", "mos_mid": "#b9770e", "mos_bad": "#c0392b",
-    # ttk widget styling
-    "ttk_theme": "vista", "win_bg": "#f0f0f0", "panel": "#f0f0f0", "field": "#ffffff",
-    "fg": "#000000", "sel_bg": "#cce4ff", "sel_fg": "#000000", "active": "#e5f1fb",
-    "border": "#c9ced6", "hint": "#888888", "status_bg": "#f0f0f0",
-}
-DARK = {
-    "ok": "#1c1e22", "warn": "#4a3f1e", "bad": "#4a2329", "dest": "#21384f",
-    "graph_bg": "#1c1e22", "graph_border": "#3a3d44", "grid": "#33363c",
-    "line": "#4aa3df", "fill": "#163049", "loss": "#ff5a67",
-    "axis_text": "#9aa0a8", "title": "#e4e6eb",
-    "strip_sep": "#2a2d33", "strip_border": "#33363c",
-    "banner_bg": "#c0392b", "banner_fg": "#ffffff",
-    "fg_bad": "#ff6b6b", "fg_warn": "#e0a93b", "fg_dest": "#5aa9ff", "fg_ok": "#c8ccd2",
-    "ev_alert": "#3d2528", "ev_clear": "#233a2a", "ev_route": "#21344a",
-    "ev_warn": "#42381f",
-    "mos_good": "#5fd07a", "mos_mid": "#e0a93b", "mos_bad": "#ff6b6b",
-    "ttk_theme": "clam", "win_bg": "#23252a", "panel": "#2d3036", "field": "#1c1e22",
-    "fg": "#e4e6eb", "sel_bg": "#2f5d8a", "sel_fg": "#ffffff", "active": "#34373d",
-    "border": "#3a3d44", "hint": "#9aa0a8", "status_bg": "#23252a",
-}
-PALETTES = {"light": LIGHT, "dark": DARK}
-COLORS = dict(DARK)  # default to dark
+# The drawing code's colours, under the keys it has always read. They come
+# from the theme engine (theme.legacy_colours) and are replaced in place on
+# every theme change, so draw code that reads COLORS at call time follows.
+COLORS: Dict[str, str] = {}
 
 COLUMNS = [
     ("ttl", "Hop", 44, "center"),
@@ -117,17 +87,20 @@ class App:
         root.minsize(self.s(820), self.s(520))
         root.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        saved_theme = self._settings.get("theme", "dark")
-        if saved_theme not in PALETTES:
-            saved_theme = "dark"
-        self.theme = saved_theme
-        COLORS.clear()
-        COLORS.update(PALETTES[saved_theme])
-        self.theme_var = tk.StringVar(value=saved_theme)
+        # "system" (follow Windows), "dark" or "light". Before 1.4 the choice
+        # was dark or light and dark was saved by default, so existing users
+        # keep the look they had.
+        pref = self._settings.get("theme", "system")
+        if pref not in themes.THEMES:
+            pref = "system"
+        self.theme_var = tk.StringVar(value=pref)
         self.resume_var = tk.BooleanVar(value=True)   # resume last targets on launch
-        self.style = ttk.Style(root)
-        self._apply_ttk_style()          # theme ttk widgets before they are built
-        root.configure(bg=COLORS["win_bg"])
+        self._engine_win: Optional[tk.Toplevel] = None
+        self._theme_checked = time.monotonic()
+        # Before any widget is built: every ttk style comes from here.
+        self.look = themes.Theme(root, {"theme": pref})
+        self.style = self.look.style
+        self._sync_colours()
 
         self._init_engine_vars()
         self._build_menubar()
@@ -198,76 +171,36 @@ class App:
 
     # --- theming -----------------------------------------------------------
     def _apply_theme(self, name: str) -> None:
-        self.theme = name
-        COLORS.clear()
-        COLORS.update(PALETTES[name])
-        self._apply_ttk_style()
-        self._recolor_widgets()
+        """``name`` is the setting (system, dark or light): redraw every
+        element in the palette it resolves to, then the canvases."""
         self.theme_var.set(name)          # keep the View-menu radio in sync
+        self.look.apply({"theme": name})
+        self._sync_colours()
+        self._recolor_widgets()
         self._refresh_once()  # redraw canvases with the new palette
 
-    def _apply_ttk_style(self) -> None:
-        """Native (vista) for light; fully restyled 'clam' for dark, since the
-        Windows native themes ignore background colours."""
-        p = COLORS
-        try:
-            self.style.theme_use(p["ttk_theme"])
-        except tk.TclError:
-            self.style.theme_use("clam")
+    def _sync_colours(self) -> None:
+        """Point the drawing code's COLORS at the current palette, and give
+        every open window a title bar to match."""
+        COLORS.clear()
+        COLORS.update(themes.legacy_colours(self.look.c))
+        self.theme = "dark" if self.look.dark else "light"
+        for win in (self.root, self._engine_win):
+            if win is not None and win.winfo_exists():
+                self.look.style_window(win)
 
-        # DPI-scaled geometry ttk won't derive on its own — needed in BOTH themes.
-        # Tie the Treeview row height to the *actual* rendered font height so the
-        # rows never clip the text, at any display scaling.
-        line = tkfont.nametofont("TkDefaultFont").metrics("linespace")
-        self.style.configure("Treeview", rowheight=max(self.s(22), line + self.s(8)))
-        self.style.configure("Treeview.Heading", padding=(self.s(6), self.s(5)))
-
-        if self.style.theme_use() != "clam":
-            return  # native light theme: leave widget colours system-default
-        self.style.configure(".", background=p["win_bg"], foreground=p["fg"],
-                             fieldbackground=p["field"], bordercolor=p["border"],
-                             lightcolor=p["panel"], darkcolor=p["panel"], troughcolor=p["win_bg"])
-        self.style.configure("TFrame", background=p["win_bg"])
-        self.style.configure("TLabel", background=p["win_bg"], foreground=p["fg"])
-        self.style.configure("TLabelframe", background=p["win_bg"], foreground=p["fg"])
-        self.style.configure("TLabelframe.Label", background=p["win_bg"], foreground=p["fg"])
-        self.style.configure("TButton", background=p["panel"], foreground=p["fg"], bordercolor=p["border"])
-        self.style.map("TButton", background=[("active", p["active"]), ("disabled", p["win_bg"])],
-                       foreground=[("disabled", p["hint"])])
-        self.style.configure("TCheckbutton", background=p["win_bg"], foreground=p["fg"])
-        self.style.map("TCheckbutton", background=[("active", p["win_bg"])])
-        self.style.configure("TEntry", fieldbackground=p["field"], foreground=p["fg"],
-                             insertcolor=p["fg"], bordercolor=p["border"])
-        self.style.configure("TSpinbox", fieldbackground=p["field"], foreground=p["fg"],
-                             background=p["panel"], bordercolor=p["border"], arrowcolor=p["fg"])
-        self.style.configure("TCombobox", fieldbackground=p["field"], foreground=p["fg"],
-                             background=p["panel"], bordercolor=p["border"], arrowcolor=p["fg"])
-        self.style.map("TCombobox", fieldbackground=[("readonly", p["field"])],
-                       foreground=[("readonly", p["fg"])], selectbackground=[("readonly", p["field"])])
-        self.style.configure("Treeview", background=p["field"], foreground=p["fg"],
-                             fieldbackground=p["field"], bordercolor=p["border"])
-        self.style.map("Treeview", background=[("selected", p["sel_bg"])],
-                       foreground=[("selected", p["sel_fg"])])
-        self.style.configure("Treeview.Heading", background=p["panel"], foreground=p["fg"],
-                             bordercolor=p["border"])
-        self.style.map("Treeview.Heading", background=[("active", p["active"])])
-        self.style.configure("TNotebook", background=p["win_bg"], bordercolor=p["border"])
-        self.style.configure("TNotebook.Tab", background=p["panel"], foreground=p["fg"])
-        self.style.map("TNotebook.Tab", background=[("selected", p["field"])],
-                       foreground=[("selected", p["fg"])])
-        self.style.configure("TPanedwindow", background=p["win_bg"])
-        self.style.configure("TScrollbar", background=p["panel"], troughcolor=p["win_bg"],
-                             bordercolor=p["border"], arrowcolor=p["fg"])
-        self.style.map("TScrollbar", background=[("active", p["active"])])
-
-        # Comfortable, DPI-scaled padding (clam uses none by default, so widgets
-        # otherwise look cramped and uneven as the display scaling grows).
-        self.style.configure("TButton", padding=(self.s(11), self.s(5)))
-        self.style.configure("TEntry", padding=(self.s(3), self.s(3)))
-        self.style.configure("TSpinbox", padding=(self.s(2), self.s(3)))
-        self.style.configure("TCombobox", padding=(self.s(3), self.s(3)))
-        self.style.configure("TCheckbutton", padding=(self.s(2), self.s(3)))
-        self.style.configure("TNotebook.Tab", padding=(self.s(12), self.s(6)))
+    def _follow_system_theme(self) -> None:
+        """With "Match Windows", notice Windows switching light/dark. A
+        registry read every few seconds is cheaper than it sounds and needs
+        no hidden window to receive the broadcast."""
+        if self.theme_var.get() != "system":
+            return
+        now = time.monotonic()
+        if now - self._theme_checked < 3.0:
+            return
+        self._theme_checked = now
+        if themes.resolve_dark("system") != self.look.dark:
+            self._apply_theme("system")
 
     def _recolor_widgets(self) -> None:
         """Recolour the non-ttk (classic tk) widgets and Treeview row tags, which
@@ -308,7 +241,8 @@ class App:
 
         ttk.Button(bar, text="Engine…", command=self._open_engine_dialog).pack(side="left", padx=(0, group))
 
-        self.start_btn = ttk.Button(bar, text="Add / Start", command=self._start)
+        self.start_btn = ttk.Button(bar, text="Add / Start", command=self._start,
+                                    style="Accent.TButton")
         self.start_btn.pack(side="left", padx=(0, gap))
         self.stop_btn = ttk.Button(bar, text="Stop", command=self._stop, state="disabled")
         self.stop_btn.pack(side="left", padx=(0, gap))
@@ -331,9 +265,11 @@ class App:
         menubar.add_cascade(label="File", menu=file_menu)
 
         view_menu = tk.Menu(menubar, tearoff=0)
-        view_menu.add_radiobutton(label="Dark theme", variable=self.theme_var,
+        view_menu.add_radiobutton(label="Match Windows", variable=self.theme_var,
+                                  value="system", command=lambda: self._apply_theme("system"))
+        view_menu.add_radiobutton(label="Dark", variable=self.theme_var,
                                   value="dark", command=lambda: self._apply_theme("dark"))
-        view_menu.add_radiobutton(label="Light theme", variable=self.theme_var,
+        view_menu.add_radiobutton(label="Light", variable=self.theme_var,
                                   value="light", command=lambda: self._apply_theme("light"))
         view_menu.add_separator()
         view_menu.add_checkbutton(label="Resume targets on launch", variable=self.resume_var)
@@ -389,13 +325,13 @@ class App:
         ttk.Checkbutton(bar, text="Sound", variable=self.alert_sound_var).pack(side="left", padx=(0, group))
 
         ttk.Label(bar, text="(0 disables a threshold; alerts use the destination hop)",
-                  foreground="#8a9099").pack(side="left")
+                  style="Muted.TLabel").pack(side="left")
 
     def _build_banner(self) -> None:
         self.banner = tk.Frame(self.root, bg=COLORS["banner_bg"])
         self.banner_label = tk.Label(
             self.banner, bg=COLORS["banner_bg"], fg=COLORS["banner_fg"],
-            anchor="w", font=("Segoe UI", 9, "bold"), padx=self.s(10), pady=self.s(5),
+            anchor="w", font=self.look.font(0, "semibold"), padx=self.s(10), pady=self.s(5),
         )
         self.banner_label.pack(side="left", fill="x", expand=True)
 
@@ -405,7 +341,7 @@ class App:
         self.status_var = tk.StringVar(value="Idle — enter a target and press Start.")
         ttk.Label(bar, textvariable=self.status_var, anchor="w").pack(side="left", fill="x", expand=True)
         self.mos_var = tk.StringVar(value="")
-        self.mos_label_w = tk.Label(bar, textvariable=self.mos_var, font=("Segoe UI", 9, "bold"))
+        self.mos_label_w = tk.Label(bar, textvariable=self.mos_var, font=self.look.font(0, "semibold"))
         self.mos_label_w.pack(side="right")
 
     def _build_main(self) -> None:
@@ -420,7 +356,7 @@ class App:
 
     def _build_summary(self, parent: ttk.Frame) -> None:
         ttk.Label(parent, text="Targets", padding=(self.s(6), self.s(5)),
-                  font=("Segoe UI", 9, "bold")).pack(side="top", anchor="w")
+                  style="Strong.TLabel").pack(side="top", anchor="w")
         footer = ttk.Frame(parent)
         footer.pack(side="bottom", fill="x")
         ttk.Button(footer, text="Stop all", command=self._stop_all).pack(
@@ -541,7 +477,6 @@ class App:
         self.sourceip_var = tk.StringVar(value="")
         self.logpath_var = tk.StringVar(value="")
         self.webhook_var = tk.StringVar(value="")
-        self._engine_win: Optional[tk.Toplevel] = None
 
     def _open_engine_dialog(self) -> None:
         if self._engine_win is not None and self._engine_win.winfo_exists():
@@ -551,7 +486,7 @@ class App:
         win.title("Engine options")
         win.transient(self.root)
         win.resizable(False, False)
-        win.configure(bg=COLORS["win_bg"])
+        self.look.style_window(win)
         self._engine_win = win
         frm = ttk.Frame(win, padding=self.s(12))
         frm.pack(fill="both", expand=True)
@@ -607,7 +542,7 @@ class App:
                             f"to at least {monitor.TCP_REFUSAL_FLOOR_MS} ms, because Windows takes about that long to "
                             "report a closed port and a shorter wait cannot tell one from an unreachable host. "
                             "Changes apply on next Start.",
-                  foreground="#888", wraplength=self.s(380)).grid(
+                  style="Muted.TLabel", wraplength=self.s(380)).grid(
             row=base + 4, column=0, columnspan=2, sticky="w", pady=(8, 2))
         if not tcpudp.is_admin():
             ttk.Label(frm, text="⚠ Not running as Administrator — TCP/UDP will be refused.",
@@ -877,7 +812,7 @@ class App:
     def _save_settings(self) -> None:
         """Persist the current UI/engine/alert state and the target list."""
         settings.save({
-            "theme": self.theme,
+            "theme": self.theme_var.get(),
             "interval": self.interval_var.get(),
             "target": self.target_var.get(),
             "max_hops": self.maxhops_var.get(),
@@ -1101,10 +1036,10 @@ class App:
         win.title(f"Compare - now vs {baseline_label}")
         win.transient(self.root)
         win.geometry(f"{self.s(900)}x{self.s(460)}")
-        win.configure(bg=COLORS["win_bg"])
+        self.look.style_window(win)
 
         ttk.Label(win, text=cmp_.summary(), padding=(self.s(10), self.s(8)),
-                  font=("Segoe UI", 9, "bold")).pack(side="top", anchor="w")
+                  style="Strong.TLabel").pack(side="top", anchor="w")
 
         cols = ("ttl", "address", "loss", "d_loss", "avg", "d_avg", "verdict")
         tree = ttk.Treeview(win, columns=cols, show="headings", selectmode="browse")
@@ -1170,6 +1105,7 @@ class App:
             self.root.after(REFRESH_MS, self._refresh)
 
     def _refresh_once(self) -> None:
+        self._follow_system_theme()
         self._update_summary()
         views, status, _target_ip, _target_input = self.monitor.snapshot()
         if self._active:
@@ -1287,7 +1223,7 @@ class App:
                           fill=self._hop_fg(v, v.ttl == last_ttl), outline=p["graph_bg"])
             label = f"{v.ttl}. {g.city or g.country}".strip()
             c.create_text(x + rad + self.s(2), y, anchor="w", text=label,
-                          fill=p["title"], font=("Segoe UI", 8))
+                          fill=p["title"], font=self.look.font(-2))
 
         if not views:
             self.map_header.config(text="No data yet — start a target to map its hops.")
@@ -1430,10 +1366,10 @@ class App:
             y = y_base + (y_top - y_base) * frac
             c.create_line(x0, y, x1, y, fill=COLORS["grid"])
             c.create_text(x0 - self.s(6), y, text=f"{y_max * frac:.0f}", anchor="e",
-                          fill=COLORS["axis_text"], font=("Segoe UI", 8))
+                          fill=COLORS["axis_text"], font=self.look.font(-2))
 
         title = "Select a hop to graph" if ttl is None else f"Hop {ttl} — latency (ms)"
-        c.create_text(x0, y_top - self.s(13), text=title, anchor="w", fill=COLORS["title"], font=("Segoe UI", 9, "bold"))
+        c.create_text(x0, y_top - self.s(13), text=title, anchor="w", fill=COLORS["title"], font=self.look.font(-1, "semibold"))
         if not samples:
             return
 
@@ -1448,9 +1384,9 @@ class App:
             r = self.s(3)
             c.create_oval(lx - r, ly - r, lx + r, ly + r, fill=COLORS["line"], outline="")
             c.create_text(lx - self.s(6), ly - self.s(8), text=_ms(last.rtt), anchor="se",
-                          fill=COLORS["line"], font=("Segoe UI", 8, "bold"))
+                          fill=COLORS["line"], font=self.look.font(-2, "semibold"))
         c.create_text(x1, y_base + self.s(13), text=f"← {span:.0f}s window  ·  now →",
-                      anchor="e", fill=COLORS["axis_text"], font=("Segoe UI", 8))
+                      anchor="e", fill=COLORS["axis_text"], font=self.look.font(-2))
 
     def _draw_timeline(self) -> None:
         c = self.timeline_canvas
@@ -1486,13 +1422,13 @@ class App:
 
             label = f"{v.ttl}.  {v.hostname or v.address or '*'}"
             c.create_text(self.s(8), (y_top + y_base) / 2, anchor="w", text=label[:34],
-                          fill=self._hop_fg(v, v.ttl == last_ttl), font=("Segoe UI", 8))
+                          fill=self._hop_fg(v, v.ttl == last_ttl), font=self.look.font(-2))
             c.create_text(gutter - self.s(8), (y_top + y_base) / 2, anchor="e",
-                          text=f"{v.loss_pct:.0f}% loss", fill="#999", font=("Segoe UI", 7))
+                          text=f"{v.loss_pct:.0f}% loss", fill=COLORS["axis_text"], font=self.look.font(-3))
 
             self._plot_series(c, data.get(v.ttl, []), gx0, gx1, y_base, y_top, g_max, t_min, span, tick=self.s(6))
             c.create_text(gx1 - self.s(2), y_top + self.s(1), anchor="ne", text=_ms(v.current),
-                          fill=COLORS["line"], font=("Segoe UI", 7, "bold"))
+                          fill=COLORS["line"], font=self.look.font(-3, "semibold"))
 
         self.timeline_header.config(
             text=f"All hops, shared scale 0–{g_max:.0f} ms  ·  {span:.0f}s window  ·  {n} hops"

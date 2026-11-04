@@ -86,13 +86,16 @@ def test_a_chosen_accent_is_shaded_until_it_reads(dark):
 
 
 def test_the_palette_serves_every_colour_the_drawing_code_reads():
-    """Step one of the restyle keeps the graphs, rows and labels drawing from
-    gui.COLORS; every key they read must exist in the new palette."""
-    pytest.importorskip("tkinter", reason="gui.py imports tkinter at module level")
-    from pingerplot import gui
+    """The graphs, rows and labels draw from gui.COLORS, which is filled from
+    theme.legacy_colours: every key gui.py reads must exist there, or a
+    canvas raises KeyError the first time it draws."""
+    import re
+    from pathlib import Path
+    src = (Path(theme.__file__).with_name("gui.py")).read_text(encoding="utf-8")
+    used = set(re.findall(r'(?:COLORS|\bp)\["([a-z_]+)"\]', src))
+    assert used, "found no COLORS reads: the pattern is out of date"
     legacy = theme.legacy_colours(theme.build_palette(True))
-    missing = set(gui.DARK) - set(legacy) - {"ttk_theme"}
-    assert not missing, missing
+    assert not used - set(legacy), used - set(legacy)
 
 
 @pytest.mark.parametrize("setting,system,expected", [
