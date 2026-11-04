@@ -62,6 +62,11 @@ site-packages enabled; `py -3.12` matches the release build). Linux needs
   `--minimized`), `SingleInstance` (a named mutex; a second launch shows the first through the tray window).
   `tray.py`: the notification-area icon on its own thread (`Shell_NotifyIconW`). `tkthreads.py`: see below.
 - `pingerplot/updater.py` + `ed25519.py` + `update_key.py`: signed updates (below). `selfcheck.py`: `--self-test`.
+- `pingerplot/launch.py`: every way of starting the window (main.py, `-m pingerplot`, the `pingerplot` command)
+  goes through it, so a Python without Tk gets the distro package to install. `xdg.py`: Linux's stand-ins for the
+  tray and Run key: `notify-send` notifications, the applications-menu and autostart `.desktop` entries (Exec
+  quoted per the Desktop Entry spec; `launch_args()` is main.py in a checkout, `-m pingerplot` for pip/pipx).
+  `winplatform.system_prefers_dark()` reads the freedesktop settings portal through `gdbus` on Linux.
 - `pingerplot/headless.py`: config → `Target`s, `supervise()` (restart with back-off), `print_events()`,
   `print_status()`, `run_report()`/`format_report()`, `print_comparison()`, `shutdown_all()`.
 - `pingerplot/compare.py`: baseline diff (per TTL; a changed address is *rerouted*, never a latency delta).
@@ -161,6 +166,11 @@ site-packages enabled; `py -3.12` matches the release build). Linux needs
   credentials, the build lock hashed, the updater and the build agree on asset names.
 - GUI tests that need worker threads drain `app._ui_jobs` themselves (`tests/test_gui_updates.py`).
 - CI's `package` job builds the installer and zip on every push and runs the three PowerShell tests against them.
+  The `linux-app` job runs `main.py --self-test` under Xvfb, a headless probe, `pipx install .`,
+  `desktop-file-validate` on the entries, and uploads the demo's Linux pictures (an artifact: viewing it needs a
+  signed-in download, so ask first).
+- Install kinds: `source` (main.py beside the package), `pip`, `installed`, `portable`, `folder`. Only `source`
+  never checks for updates by itself.
 
 ## Releasing
 

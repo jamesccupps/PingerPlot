@@ -4,6 +4,40 @@ All notable changes to PingerPlot are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+Linux, properly: installed with one `pipx` command, and the parts of the
+window that only worked on Windows now have Linux equivalents. CI starts the
+app on Ubuntu on every push.
+
+### Added
+
+- **Linux install with pipx** (`pipx install git+https://github.com/jamesccupps/PingerPlot`),
+  and a README section for it. A pip or pipx copy checks for updates daily
+  and says to run `pipx reinstall pingerplot`; a git checkout is left alone.
+- **Linux: Show in the applications menu** and **Start when you sign in**
+  (Settings), as freedesktop `.desktop` entries with the app's icon. Signing in
+  opens it minimized, resuming your targets.
+- **Linux: alert notifications** through `notify-send`, and Tk's bell for an
+  alert on a target with sound on. (Windows notifies from the tray and beeps.)
+- **Linux: Match the system** follows the desktop's light or dark setting,
+  through the freedesktop settings portal (GNOME, KDE Plasma and others).
+- Without Tk, starting the window names the package to install for Debian,
+  Fedora, Arch and openSUSE, instead of a ModuleNotFoundError traceback.
+- CI's Linux job: `python main.py --self-test` under Xvfb, a headless probe of
+  loopback, the pipx install, `desktop-file-validate` on both entries, and the
+  demo's pictures.
+
+### Fixed
+
+- Two messages named 1.3 controls: a bad source address said "Fix it in Engine
+  options", and a refused TCP/UDP traceroute said "use TCP with 'Final hop
+  only'". They name the target's settings and Destination only. Off Windows the
+  refusal no longer says to re-run elevated: the capture it needs is
+  Windows-only at any privilege.
+- Turning alert notifications on no longer replays the alerts that happened
+  while they were off.
+
 ## [1.4.1] — 2026-11-04
 
 The Map, zoomed to the path. The first release the in-app updater delivers:

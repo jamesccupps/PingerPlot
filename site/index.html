@@ -108,7 +108,7 @@
         <a class="btn ghost" href="https://github.com/jamesccupps/PingerPlot/releases/latest/download/PingerPlot-win64.zip">Portable zip</a>
         <a class="btn ghost" href="https://github.com/jamesccupps/PingerPlot">Source on GitHub</a>
       </div>
-      <p class="sub"><span id="version">Free and open source (MIT).</span> Windows 10 and 11 (64-bit); Linux and macOS from source. <a href="https://github.com/jamesccupps/PingerPlot/releases">All releases</a></p>
+      <p class="sub"><span id="version">Free and open source (MIT).</span> Windows 10 and 11 (64-bit); <a href="https://github.com/jamesccupps/PingerPlot#linux">Linux</a> with pipx. <a href="https://github.com/jamesccupps/PingerPlot/releases">All releases</a></p>
     </div>
     <figure class="demo">
       <img src="images/hops-dark.png" width="1769" height="1184" alt="PingerPlot in the dark theme: four targets, the selected one alerting with a red banner, a hop table where trouble starts at hop 4, and the destination's latency graph">
@@ -161,7 +161,7 @@
       <div class="card" id="use">
         <h3>Then</h3>
         <p>Type a host name or address, your gateway or a server you care about, and press <strong>Add</strong>. Click a hop to graph it. Full TCP or UDP traceroute needs <strong>Run as administrator</strong>; ICMP never does.</p>
-        <p>Linux or macOS? It runs from source with Python 3.10 or newer: see the <a href="https://github.com/jamesccupps/PingerPlot#platform">README</a>.</p>
+        <p>Linux? One <code>pipx</code> command, with a menu entry and notifications: see <a href="https://github.com/jamesccupps/PingerPlot#linux">Linux</a> in the README. macOS runs from source.</p>
       </div>
     </div>
   </section>
@@ -188,13 +188,18 @@
   var phone = /Android|iPhone|iPad|iPod/i.test(ua) || (navigator.userAgentData && navigator.userAgentData.mobile) ||
     (/Mac/i.test(platform) && navigator.maxTouchPoints > 1);
   var windows = /Win/i.test(platform + " " + ua) && !phone;
+  var linux = /Linux/i.test(platform + " " + ua) && !phone;
   var primary = document.getElementById("primary"), note = document.getElementById("primary-note");
   if (phone) {
     primary.href = "https://github.com/jamesccupps/PingerPlot/releases/latest";
     primary.firstChild.nodeValue = "Get it for your PC ";
     note.textContent = "Windows 10 and 11";
+  } else if (linux) {
+    primary.href = "https://github.com/jamesccupps/PingerPlot#linux";
+    primary.firstChild.nodeValue = "Install on Linux ";
+    note.textContent = "one pipx command";
   } else if (!windows) {
-    note.textContent = "Windows 10 and 11; Linux and macOS from source";
+    note.textContent = "Windows 10 and 11; macOS from source";
   }
   // The latest version, from GitHub (the page works without it).
   try {

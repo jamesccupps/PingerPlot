@@ -14,6 +14,7 @@ when the destination degrades, and needs no administrator rights for ICMP.
 (`PingerPlot-Setup.exe`, Windows 10 or 11, 64-bit) ·
 [Portable zip](https://github.com/jamesccupps/PingerPlot/releases/latest/download/PingerPlot-win64.zip) ·
 [All releases](https://github.com/jamesccupps/PingerPlot/releases) ·
+[Linux](#linux) ·
 [Website](https://jamesccupps.github.io/PingerPlot/)
 
 ![PingerPlot in the dark theme: four targets on the left; the selected one is alerting, with its MOS, a red banner for loss and latency at the destination, a hop table where trouble starts at hop 4, and the destination's latency graph](site/images/hops-dark.png)
@@ -61,6 +62,8 @@ and unzip it somewhere of your own, e.g. a USB stick or `%LOCALAPPDATA%\Programs
 folder (that's what the `portable.txt` beside it does), and updates itself in place. Avoid `C:\Program Files`,
 which it can't write to.
 
+**Linux:** see [Linux](#linux) below: one `pipx` command.
+
 **From source** (Windows, Linux, macOS): Python 3.10 or newer, nothing to `pip install`.
 `git clone https://github.com/jamesccupps/PingerPlot`, then `python main.py`, or on Windows double-click
 `PingerPlot.vbs` (no console window). See [Running from source](#running-from-source) for shortcuts and an elevated
@@ -71,6 +74,49 @@ logon task.
 > network paths, which is a fair description of both a diagnostic tool and something you wouldn't want running
 > unasked. The files are built by CI from the tagged commit and tested before they're published. If you'd rather
 > not run an unsigned program at all, run it from source: it's the same program.
+
+### Linux
+
+PingerPlot runs on Linux from Python, with nothing to compile and no dependencies beyond Tk. It needs Python 3.10
+or newer and Tk, which most distributions package separately:
+
+| Distribution | Tk |
+|---|---|
+| Debian, Ubuntu, Mint | `sudo apt install python3-tk` |
+| Fedora, RHEL | `sudo dnf install python3-tkinter` |
+| Arch, Manjaro | `sudo pacman -S tk` |
+| openSUSE | `sudo zypper install python3-tk` |
+
+Then, with [pipx](https://pipx.pypa.io/) (`sudo apt install pipx` on Debian and Ubuntu, `sudo dnf install pipx` on
+Fedora, `sudo pacman -S python-pipx` on Arch), install it for your user and start it:
+
+```bash
+pipx install git+https://github.com/jamesccupps/PingerPlot
+pingerplot
+```
+
+In **Settings**, turn on **Show in the applications menu** to add it, with its icon, to your desktop's menu and
+search, and **Start when you sign in** if you want it monitoring from sign-in. To update: `pipx reinstall
+pingerplot` (the app checks once a day and says when there's a new version). To remove it: turn both off, then
+`pipx uninstall pingerplot`. Or skip pipx: `git clone` and `python3 main.py` works the same.
+
+ICMP needs no root: it uses the kernel's unprivileged ICMP sockets, which most systemd-based distributions allow
+by default. If PingerPlot says the ICMP backend is unavailable, it names the one `sysctl` to run.
+
+What's different from Windows:
+
+- There's no notification-area icon (Tk has no way to make one without extra packages), so closing the window
+  quits. *Start when you sign in* opens it minimized instead.
+- Alerts notify through `notify-send` (libnotify, on nearly every desktop) and ring Tk's bell (the desktop's
+  alert sound, where it has one). Clicking a notification doesn't open the target.
+- *Match the system* follows the desktop's light or dark setting (GNOME, KDE Plasma and others, through the
+  freedesktop settings portal).
+- Full TCP and UDP traceroute is Windows-only for now: it relies on a Windows raw-capture feature. ICMP, and TCP to
+  the destination (*Destination only*), work everywhere.
+- The headless runner is `pingerplot-headless`.
+
+CI starts the app on Ubuntu on every push: the window's self-test, a probe of loopback, the pipx install, and
+`desktop-file-validate` on its menu and autostart entries.
 
 ## Use
 
@@ -189,8 +235,9 @@ replies. It talks to three other places:
 - Your DNS server, for each hop's hostname (**Settings → Look up hostnames**).
 - [ipwho.is](https://ipwho.is), only when you open the **Map** view: the public hops' addresses, to place them on
   the map. Private and LAN addresses are never sent. Rate-limited and cached. Don't open Map if you'd rather not.
-- GitHub, once a day, for this project's `latest.json` (installed and portable copies; turn it off in **Settings →
-  Updates**). Nothing is downloaded until you click **Install**. An installed copy then runs the new installer
+- GitHub, once a day, for this project's `latest.json` (installed, portable and pipx copies, never a git
+  checkout; turn it off in **Settings → Updates**). Nothing is downloaded until you click **Install**; a pipx copy
+  is only told to run `pipx reinstall pingerplot`. An installed copy then runs the new installer
   silently and restarts; a portable copy swaps its program files in place and restarts, and puts everything back
   if that fails. Your targets resume either way.
 
@@ -202,6 +249,8 @@ problem…** opens a GitHub issue form with the version filled in, which you edi
 - `%APPDATA%\PingerPlot\` holds `settings.json` (your targets, each with its settings, and the app's options) and
   `update.log`. On Linux and macOS it's `$XDG_CONFIG_HOME/PingerPlot`, usually `~/.config/PingerPlot`.
 - A portable copy keeps them beside `PingerPlot.exe` instead. Delete `portable.txt` to make it use `%APPDATA%`.
+- On Linux, the menu and sign-in entries are `~/.local/share/applications/pingerplot.desktop` and
+  `~/.config/autostart/pingerplot.desktop`, and the icon they use is in `~/.cache/PingerPlot`.
 - Probe logs and saved sessions go wherever you put them.
 
 ## Headless runner
@@ -274,7 +323,8 @@ example.net: now vs last-week
 **Windows 10 and 11: tested**, and the only platform with a download. The ICMP backend (`icmp.py`) uses the Win32
 IP Helper API, so it needs no admin rights and no capture driver.
 
-**Linux: live-tested in CI. macOS: implemented, untested on a Mac.** Both run from source. `icmp_posix.py` uses
+**Linux: tested in CI** (see [Linux](#linux) for installing it). **macOS: implemented, untested on a Mac.** Both run
+from source. `icmp_posix.py` uses
 unprivileged `SOCK_DGRAM`/`IPPROTO_ICMP` sockets, the same technique `mtr` uses, and `icmp.ping()` dispatches to it,
 so the engine, window and headless runner don't know which backend answered.
 
@@ -351,6 +401,8 @@ command removes it.
 |---|---|
 | Loss at a hop in the middle | Usually normal: that router rate-limits the replies it generates. Only loss that reaches the destination row is a problem. |
 | "Full TCP/UDP traceroute needs Administrator" | Right-click the shortcut → **Run as administrator**, or use ICMP, or TCP with **Destination only**. |
+| "Full TCP/UDP traceroute is Windows-only for now" (Linux, macOS) | Use ICMP, or TCP with **Destination only**. |
+| "PingerPlot's window needs Tk" (Linux) | Install the package it names for your distribution (see [Linux](#linux)). |
 | A target shows "Cannot resolve" | DNS for that name failed. The window doesn't retry by itself: **⋯ → Start** on its card once the network is up. (The headless runner retries.) |
 | No notification for an alert | **Settings → Show a notification for alerts**, then Windows' *Settings → System → Notifications* for PingerPlot, and Do not disturb. |
 | The window is gone | It's in the notification area: click the tray icon. Starting PingerPlot again also brings it back. |
