@@ -4,6 +4,90 @@ All notable changes to PingerPlot are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [1.4.0] — 2026-11-04
+
+PingerPlot as a proper Windows app, to the standard of its sibling projects
+(UniFi Stock Watcher, Slate): an installer and a portable zip, signed in-app
+updates, a notification-area icon, and a new window. The engine, the numbers it
+reports and the headless runner are unchanged; settings and saved sessions from
+1.3 load as they are.
+
+### Added
+
+- **An installer and a portable zip** instead of two bare executables.
+  `PingerPlot-Setup.exe` installs for your Windows user with no admin prompt into
+  `%LOCALAPPDATA%\Programs\PingerPlot`, adds a Start menu shortcut, upgrades in
+  place and uninstalls from Settings → Apps. `PingerPlot-win64.zip` is the same
+  program with `portable.txt`, so it keeps its settings beside the exe. Both hold
+  `PingerPlot.exe` and `pingerplot-headless.exe` over one shared folder, which also
+  means no unpacking to `%TEMP%` on every start, the thing antivirus engines
+  dislike most about single-file builds. The exes carry a version resource.
+- **Signed in-app updates.** Installed and portable copies check GitHub once a
+  day (Settings → Updates, or ⋯ → Check for updates) and install a new version
+  with one click. Each release carries `latest.json`, an Ed25519-signed list of
+  the downloads' sizes and SHA-256s; the app installs a download only if the
+  signature verifies against the key built into it and the file matches. An
+  installed copy runs the new installer silently and restarts; a portable copy
+  swaps its program files in place, puts everything back if that fails, and
+  restarts. Your targets resume afterwards either way.
+- **Runs in the background.** A notification-area icon, grey when nothing is
+  monitored and badged red while a target alerts. Closing the window keeps every
+  target monitored (Settings can turn that off); Quit is in the icon's menu and
+  the ⋯ menu. A notification when an alert starts or ends opens that target.
+- **Start with Windows** (Settings or the tray menu): unelevated, straight to the
+  notification area, resuming your targets. The entry follows the program if it
+  moves, and uninstalling removes it.
+- **One copy at a time.** Starting PingerPlot again shows the running window.
+- **Match Windows**: the light or dark theme follows Windows while the app runs.
+  It's the default for a new install; 1.3 users keep the dark theme they had.
+- `PingerPlot.exe --self-test`: builds the window, round-trips the settings file,
+  probes loopback and makes the tray icons, writing `self-test.txt`. What CI runs
+  against the installed and portable copies. `PINGERPLOT_DATA_DIR` points the
+  settings folder anywhere.
+- `pingerplot-headless --version`.
+- A project page, <https://jamesccupps.github.io/PingerPlot/>, with pictures from
+  `scripts/demo.py`, which runs the real app against simulated paths
+  (documentation addresses only).
+
+### Changed
+
+- **The window**, rebuilt in the sibling apps' design. A header shows the state at
+  a glance ("1 alerting · monitoring 4"; the title bar says it too) and a ⋯ menu
+  replaces the menu bar (export, sessions, comparison, updates, Report a
+  problem). Targets and Settings pages: each target is a card (state, hops, loss,
+  latency, MOS; ⋯ or right-click for Edit settings, Pause, Stop, Remove), and the
+  selected one shows its MOS, the destination's numbers, the alert banner, and
+  Hops (was Overview), Timeline, Map and Events.
+- **Settings is a page**, with every option described, instead of the toolbar,
+  the alert row and the Engine dialog. It holds the defaults for new targets; a
+  running target's own settings open in the same form (Edit settings) and apply by
+  restarting it.
+- Windows 11-style controls and fonts throughout, a dark title bar in the dark
+  theme, sharp at any display scale.
+- The Map gives hops at one place a single label ("5–6. Denver"), and moves or
+  leaves off a label that would cover another label or a hop's dot. One label
+  per hop piled up into a smear whenever a path stayed in one region.
+
+### Fixed
+
+- A tkinter variable or image garbage-collected on a worker thread called into
+  Tcl from that thread, which waits for the main loop: a closed dialog's fields
+  could stall a probe round for seconds (68 s per window in the test suite).
+  They're now finalised on the main thread.
+
+### Security
+
+- Updates are verified before anything runs: the manifest's Ed25519 signature
+  (RFC 8032, checked against the RFC's vectors and the `cryptography` package),
+  then each file's size and SHA-256. The manifest names bare files, which are
+  fetched from the version's own release tag, and never an older version.
+- The release workflow signs in a job of its own that installs nothing and is
+  the only one to see the signing key; the build job, which runs PyInstaller and
+  pytest from PyPI, has no secrets; only a job that runs nothing but `gh` can
+  publish. Before a release is published, CI updates the previous release (or,
+  until there is one, the build itself) to it, portable and installed. Tests
+  enforce all of it.
+
 ## [1.3.3] — 2026-10-07
 
 A second audit pass, combining an external review (which built a Linux
@@ -384,6 +468,8 @@ have relied on — see **Changed** before comparing old exports with new ones.
 
 - Initial public release.
 
+[1.4.0]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.4.0
+[1.3.3]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.3.3
 [1.3.2]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.3.2
 [1.3.1]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.3.1
 [1.3.0]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.3.0
