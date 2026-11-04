@@ -186,9 +186,13 @@ def test_the_menu_only_posts_work_to_tk(bg):
 # --- Start with Windows -------------------------------------------------------------------
 
 def test_turning_on_start_with_windows_also_resumes_targets(app, monkeypatch):
+    # Whichever the window uses: the Run key (Windows) or an XDG autostart
+    # entry (Linux, tests/test_linux_desktop.py).
     calls = []
-    monkeypatch.setattr(winplatform, "set_autostart", lambda on: calls.append(on) or True)
-    monkeypatch.setattr(winplatform, "autostart_enabled", lambda: bool(calls and calls[-1]))
+    fake = type("Autostart", (), {})()
+    fake.set_autostart = lambda on: calls.append(on) or True
+    fake.autostart_enabled = lambda: bool(calls and calls[-1])
+    monkeypatch.setattr(app, "_autostart", fake)
     app.resume_var.set(False)
     app.autostart_var.set(True)
     app._toggle_autostart()

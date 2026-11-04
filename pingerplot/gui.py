@@ -105,7 +105,12 @@ class App:
         self.resume_var = tk.BooleanVar(value=True)   # resume last targets on launch
         self.keep_tray_var = tk.BooleanVar(value=True)  # closing hides to the tray
         self.notify_var = tk.BooleanVar(value=True)     # a notification per alert
-        self.autostart_var = tk.BooleanVar(value=winplatform.autostart_enabled())
+        # Start at sign-in: the Run key on Windows, an XDG autostart entry on
+        # Linux (same set_autostart/autostart_enabled names in both modules).
+        self._autostart = winplatform if winplatform.IS_WINDOWS else (xdg if xdg.IS_LINUX else None)
+        self.autostart_var = tk.BooleanVar(
+            value=self._autostart.autostart_enabled() if self._autostart else False)
+        self.menu_entry_var = tk.BooleanVar(value=xdg.menu_entry_enabled())
         self.target_var = tk.StringVar(value="")
         self._theme_checked = time.monotonic()
         # Before any widget is built: every ttk style comes from here.
@@ -140,8 +145,11 @@ class App:
             if self.tray is None:
                 self._desktop_notifier = xdg.notifier()
             winplatform.refresh_autostart()     # the folder moved: point the Run key here
+            xdg.refresh_entries()               # likewise Linux's menu and autostart entries
         if start_minimized and self.tray is not None:
             self.root.withdraw()                # Start with Windows: straight to the tray
+        elif start_minimized:
+            self.root.iconify()                 # Linux sign-in: no tray to hide in
         # The last session's targets: when the setting says so, and always
         # after an update, which shouldn't stop anything being monitored.
         self._restore_targets(force=resume)
@@ -495,6 +503,15 @@ class App:
                         "work but full TCP/UDP traceroute doesn't (launch.ps1 -InstallAutostart "
                         "starts it elevated instead).",
                         switch(self.autostart_var, self._toggle_autostart))
+        elif xdg.IS_LINUX:
+            setting_row(card, self.look, "Start when you sign in",
+                        "Opens PingerPlot minimized when you sign in to your desktop, and resumes "
+                        "your targets (an entry in ~/.config/autostart).",
+                        switch(self.autostart_var, self._toggle_autostart))
+            setting_row(card, self.look, "Show in the applications menu",
+                        "Adds PingerPlot, with its icon, to your desktop's applications menu and "
+                        "search (an entry in ~/.local/share/applications).",
+                        switch(self.menu_entry_var, self._toggle_menu_entry))
         setting_row(card, self.look, "Keep running in the notification area when closed",
                     "Closing the window keeps every target monitored. Quit from the tray icon's "
                     "menu or the ⋯ menu." if has_tray else
@@ -512,10 +529,17 @@ class App:
                     switch(self.notify_var, enabled=notifier is not None))
 
     def _toggle_autostart(self) -> None:
+        if self._autostart is None:
+            self.autostart_var.set(False)
+            return
         on = bool(self.autostart_var.get())
-        if winplatform.set_autostart(on) and on:
+        if self._autostart.set_autostart(on) and on:
             self.resume_var.set(True)       # starting with nothing to resume is pointless
-        self.autostart_var.set(winplatform.autostart_enabled())
+        self.autostart_var.set(self._autostart.autostart_enabled())
+
+    def _toggle_menu_entry(self) -> None:
+        xdg.set_menu_entry(bool(self.menu_entry_var.get()))
+        self.menu_entry_var.set(xdg.menu_entry_enabled())
 
     # --- the notification area ---------------------------------------------------
     def _start_tray(self) -> None:
@@ -1405,7 +1429,9 @@ def main() -> None:
     if updated or failed:
         updater.cleanup_after_update()
         updater.ulog(f"update: {__version__} started" + (" after a failed update" if failed else ""))
-    root = tk.Tk()
+    # The X11 window class, so a Linux desktop matches the window to its
+    # menu entry (StartupWMClass) and its icon in the dock.
+    root = tk.Tk(className=xdg.WM_CLASS)
     app = App(root, use_tray=True, start_minimized="--minimized" in argv, resume=updated or failed)
     if updated:
         app._note(f"Updated to {__version__}", seconds=30)

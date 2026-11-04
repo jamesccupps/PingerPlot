@@ -106,8 +106,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install Tk, a display and a screenshot tool
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq python3-tk xvfb imagemagick
+      - name: Install Tk, a display, a screenshot tool and the desktop-entry validator
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq python3-tk xvfb imagemagick desktop-file-utils
 
       - name: Allow unprivileged ICMP sockets
         # What systemd-based distros set by default; GitHub's runners don't.
@@ -125,6 +125,17 @@ jobs:
           cfg="$RUNNER_TEMP/smoke.json"
           printf '%s' '{"status_interval": 0, "defaults": {"interval": 0.5, "timeout_ms": 1000}, "targets": [{"target": "127.0.0.1", "final_hop_only": true}]}' > "$cfg"
           python -m pingerplot.headless "$cfg" --report 2
+
+      - name: Validate the applications-menu and autostart entries
+        # Written by the app's own code into a scratch XDG folder, then checked
+        # by freedesktop's reference validator.
+        run: |
+          export XDG_DATA_HOME="$RUNNER_TEMP/xdg/data" XDG_CONFIG_HOME="$RUNNER_TEMP/xdg/config" XDG_CACHE_HOME="$RUNNER_TEMP/xdg/cache"
+          python -c "from pingerplot import xdg; assert xdg.set_menu_entry(True) and xdg.set_autostart(True)"
+          for f in "$XDG_DATA_HOME/applications/pingerplot.desktop" "$XDG_CONFIG_HOME/autostart/pingerplot.desktop"; do
+            cat "$f"
+            desktop-file-validate "$f"
+          done
 
       - name: Take the demo's pictures
         run: xvfb-run -a -s "-screen 0 1920x1200x24" python scripts/demo.py --shots linux-pictures
