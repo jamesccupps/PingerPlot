@@ -59,16 +59,37 @@ foreach ($f in 'PingerPlot-Setup.exe', 'PingerPlot-win64.zip') {
 $key = "$(& $Python $helper sign $release $offered)".Trim()
 if ($LASTEXITCODE -ne 0 -or -not $key) { throw "couldn't sign the test release" }
 
+# GitHub answers a download with a 5xx now and then: a 504 Gateway Time-out on
+# the old release's zip failed a build on 2026-11-05, for nothing PingerPlot
+# did. No answer, a 5xx or a 429 is tried again, further apart each time; any
+# other status (a 404: the file isn't there) fails at once. The message goes
+# to the host, not the output: Get-Old returns its path through the output.
+function Save-Url([string]$url, [string]$out, [int]$tries = 4) {
+    for ($try = 1; ; $try++) {
+        try {
+            Invoke-WebRequest -UseBasicParsing $url -OutFile $out
+            return
+        } catch {
+            $code = 0
+            if ($_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode }
+            $transient = $code -eq 0 -or $code -ge 500 -or $code -eq 429
+            if (-not $transient -or $try -ge $tries) { throw }
+            Write-Host "  $url failed ($($_.Exception.Message)); trying again in $(10 * $try) s"
+            Start-Sleep -Seconds (10 * $try)
+        }
+    }
+}
+
 function Get-Old([string]$name) {
     if ($self) { return (Join-Path $dist $name) }
     $out = Join-Path $work "v$From-$name"
-    Invoke-WebRequest -UseBasicParsing "https://github.com/$repo/releases/download/v$From/$name" -OutFile $out
+    Save-Url "https://github.com/$repo/releases/download/v$From/$name" $out
     $out
 }
 if ($self) {
     $oldSource = $root
 } else {
-    Invoke-WebRequest -UseBasicParsing "https://github.com/$repo/archive/refs/tags/v$From.zip" -OutFile "$work\source.zip"
+    Save-Url "https://github.com/$repo/archive/refs/tags/v$From.zip" "$work\source.zip"
     Expand-Archive "$work\source.zip" "$work\source"
     $oldSource = (Get-ChildItem "$work\source" -Directory | Select-Object -First 1).FullName
 }
