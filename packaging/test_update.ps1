@@ -36,7 +36,12 @@ function Write-Result([string]$level, [string]$message) {
 }
 
 $version = (& $Python -c "import sys; sys.path.insert(0, r'$root'); import pingerplot; print(pingerplot.__version__)").Trim()
-if (-not $From) { $From = "$(& $Python $helper previous)".Trim() }
+if (-not $From) {
+    $From = "$(& $Python $helper previous)".Trim()
+    # Nothing printed means no older release has an updater: the build tests
+    # updating itself. A failure must not look like that.
+    if ($LASTEXITCODE -ne 0) { throw "couldn't ask GitHub which release came before $version" }
+}
 if (-not $From) { $From = 'self' }
 $self = $From -eq 'self'
 if ($self) {

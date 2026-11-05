@@ -32,6 +32,8 @@ import re
 import shutil
 import sys
 import tempfile
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -43,7 +45,29 @@ def _version(text):
     return tuple(int(x) for x in m.groups()) if m else None
 
 
+def _get_json(req, tries=4, wait=10):
+    """GitHub's answer as JSON, tried again (further apart each time) on no
+    answer, a 5xx or a 429; anything else, or the last try, raises."""
+    for attempt in range(1, tries + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as e:      # before URLError, its base class
+            if (e.code < 500 and e.code != 429) or attempt == tries:
+                raise
+            why = f"HTTP {e.code}"
+        except urllib.error.URLError as e:
+            if attempt == tries:
+                raise
+            why = str(e.reason)
+        print(f"GitHub's API failed ({why}); trying again in {wait * attempt} s", file=sys.stderr)
+        time.sleep(wait * attempt)
+
+
 def previous():
+    """Prints the version, or nothing when there's no older release with an
+    updater. Fails (non-zero) if GitHub can't be asked: printing nothing then
+    would quietly turn the cross-version test into the build updating itself."""
     sys.path.insert(0, str(ROOT))
     from pingerplot import __version__
     from pingerplot.updater import REPO
@@ -52,8 +76,7 @@ def previous():
                                           "User-Agent": "PingerPlot-update-test"})
     if os.environ.get("GITHUB_TOKEN"):
         req.add_header("Authorization", f"Bearer {os.environ['GITHUB_TOKEN']}")
-    with urllib.request.urlopen(req, timeout=30) as r:
-        releases = json.load(r)
+    releases = _get_json(req)
     current = _version(__version__)
     older = [(_version(r["tag_name"]), r["tag_name"][1:]) for r in releases
              if not r.get("draft") and not r.get("prerelease")
