@@ -39,18 +39,16 @@ then goes stale. Step 3 brings in the releases only, and keeps them coming.
 Continuous traceroute: per-hop loss, latency, jitter and MOS over time
 ```
 
-**Full Description:**
+**Full Description** (1,000 characters, SourceForge's limit; this is 962):
 
 ```
-PingerPlot shows you where along a network path a connection goes wrong. Like mtr or WinMTR, it finds every router between you and a target and then keeps probing all of them, so loss, latency, jitter and a voice-quality score (MOS) build up per hop over minutes or days. A problem that starts at your gateway, your ISP's first hop, a peering point or the destination shows up at that hop and every hop after it.
+PingerPlot shows where along a network path a connection goes wrong. Like mtr or WinMTR, it finds every router between you and a target and keeps probing all of them, so loss, latency, jitter and a voice-quality score (MOS) build up per hop over minutes or days. A problem shows up at the hop where it starts and every hop after it.
 
-It alerts you when the destination degrades: sustained loss, latency or a poor MOS over a window you choose, judged on the destination only, so a router in the middle that deprioritises ICMP never false-alarms. Alerts show as a banner, a Windows notification, a sound and an optional webhook (Slack, Teams, ntfy, Home Assistant). Route changes are caught within a round. The Timeline draws every hop on one time axis; the Map places the public hops.
+Alerts judge the destination only, so a router that deprioritises ICMP never false-alarms: a banner, a desktop notification, a sound and an optional webhook (Slack, Teams, ntfy, Home Assistant). Route changes are caught within a round, and a map places the public hops.
 
-ICMP needs no administrator rights. TCP to a port answers "is this service up, and how fast?", and full TCP or UDP traceroute works as administrator. DSCP marking measures the path as voice or video traffic sees it; a fixed source address picks the interface. Every probe can go to a size-capped CSV per target, and sessions can be saved, reopened and compared with a later run.
+ICMP needs no admin rights; TCP, UDP and DSCP marking are there too. Sessions save, reopen and compare, and a headless runner monitors from a server. Windows: installer or portable zip with signed updates. Linux: pipx.
 
-It runs in the notification area, can start with Windows, and updates itself with signed releases. Light and dark themes follow Windows. A headless runner does the same monitoring for a server or Task Scheduler, with one-shot reports for tickets. Installer (no admin prompt) or portable zip.
-
-A read-only diagnostic: it sends probes and reads replies, and never changes anything on the network. Pure Python standard library. Free and open source (MIT). Source, issues and documentation: https://github.com/jamesccupps/PingerPlot
+Read-only: it never changes anything on the network. Pure Python, no dependencies, MIT. Source: https://github.com/jamesccupps/PingerPlot
 ```
 
 **Features** (Admin → Features, if the project shows that page; one per line):
