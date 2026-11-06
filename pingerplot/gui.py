@@ -35,6 +35,7 @@ from .monitor import Monitor
 __all__ = ["App", "main", "BAD_MS", "WARN_MS", "COLORS"]
 
 REFRESH_MS = 700
+MAX_EVENT_ROWS = 1000      # the Events view keeps what the monitor keeps
 
 # The drawing code's colours, under the keys it has always read. They come
 # from the theme engine (theme.legacy_colours) and are replaced in place on
@@ -727,10 +728,8 @@ class App:
         self._pinned = False
         self._last_event_seq = -1
         self._draw_ver = None
-        for iid in self.tree.get_children():
-            self.tree.delete(iid)
-        for iid in self.events_tree.get_children():
-            self.events_tree.delete(iid)
+        self.tree.delete(*self.tree.get_children())
+        self.events_tree.delete(*self.events_tree.get_children())
         self._refresh_once()
 
     def _active_monitor(self) -> Optional[Monitor]:
@@ -1388,6 +1387,12 @@ class App:
             tag = e.kind if e.kind in ("alert", "clear", "route", "warn") else "info"
             self.events_tree.insert("", "end", values=(ts, e.kind.title(), e.text), tags=(tag,))
         if new:
+            # As many rows as the monitor keeps events. Unbounded, an ECMP hop
+            # whose responder alternates each round added a route event per
+            # round: about 35,000 rows a day, for a Treeview to carry.
+            rows = self.events_tree.get_children()
+            if len(rows) > MAX_EVENT_ROWS:
+                self.events_tree.delete(*rows[:len(rows) - MAX_EVENT_ROWS])
             self.events_tree.yview_moveto(1.0)
         self._last_event_seq = last
 
