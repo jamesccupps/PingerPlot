@@ -78,9 +78,14 @@ def save(data: dict) -> bool:
     tmp = None
     try:
         d = config_dir()
-        d.mkdir(parents=True, exist_ok=True)
+        # Yours alone on Linux and macOS (Windows ignores these modes; the
+        # profile folder is already private): a webhook URL in here can be a
+        # Slack, Teams or ntfy secret, and the default mode let every local
+        # user read it.
+        d.mkdir(mode=0o700, parents=True, exist_ok=True)
         tmp = d / (FILE_NAME + ".tmp")
-        with open(tmp, "w", encoding="utf-8") as fh:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(data, fh, indent=2)
         os.replace(tmp, d / FILE_NAME)
         return True
