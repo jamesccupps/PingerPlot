@@ -174,7 +174,11 @@ def autostart_command() -> str:
     pyw = Path(sys.executable).with_name("pythonw.exe")
     interp = pyw if pyw.exists() else Path(sys.executable)
     script = Path(__file__).resolve().parent.parent / "main.py"
-    return f'"{interp}" "{script}" --minimized'
+    if script.is_file():                # a checkout
+        return f'"{interp}" "{script}" --minimized'
+    # A pip install has no main.py beside the package (that was
+    # site-packages\main.py, a command that did nothing at every sign-in).
+    return f'"{interp}" -m pingerplot --minimized'
 
 
 def autostart_value() -> Optional[str]:
