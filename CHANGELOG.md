@@ -4,6 +4,66 @@ All notable changes to PingerPlot are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+Fixes from an external review (2026-11-05), each checked against the code
+first, and the elevated logon task retired.
+
+### Security
+
+- **The elevated logon task is retired.** `launch.ps1 -InstallAutostart`
+  started PingerPlot as administrator at every sign-in with no UAC prompt, and
+  a program running unelevated as you could steer it: register a Python under
+  HKCU for the `py` launcher to pick (it ran elevated while the task was set
+  up), or edit `settings.json` so the elevated app wrote and renamed files
+  where it chose. It now only explains that it's retired; `-UninstallAutostart`
+  removes an old task. The "(Admin)" shortcuts are gone, and `-Elevated` and the
+  shortcuts run the real Python, found unelevated, so the UAC prompt names it.
+- An elevated copy (administrator, or root on Linux and macOS) takes no log
+  path from `settings.json`.
+- **Map lookups send only globally routable addresses.** Carrier-grade NAT
+  (100.64.0.0/10, also Tailscale's range) is neither private nor global and went
+  to ipwho.is, against the README's promise; so did IPv6 site-local, mapped,
+  6to4, Teredo and scoped addresses.
+- The CSV export header can't carry a formula: a loaded session's target with
+  a newline and `=WEBSERVICE(...)` in it used to.
+- A webhook URL with a space or control character no longer puts its path (the
+  secret, for Slack, Teams and ntfy) into the error shown in Events.
+- On Linux and macOS, `settings.json` (which can hold a webhook secret) is
+  readable by its owner only.
+
+### Fixed
+
+- **The headless runner under `pythonw.exe`**, the README's Task Scheduler line,
+  stopped at its first status line or event (there is no stdout there to
+  flush). A redirected console also stopped it on a character it couldn't
+  encode.
+- **Targets and settings are saved a second after a change**, and when Windows
+  ends the session, not only on hiding or quitting: a Windows Update restart or a
+  crash lost every target added or edited with the window open.
+- **A portable update that fails part way rolls back fully**, or says it
+  couldn't. A half-copied `_internal` used to stay, and the cleanup then deleted
+  the good `_internal.old` (and any `.old` file of yours in the folder). The
+  update also checks for free space first.
+- The mouse wheel scrolls on Linux (Tk sends Button-4/5 there), and a precision
+  touchpad scrolls on Windows (its small deltas rounded to no movement).
+- A reply timeout over 10 s, and an alert window longer than the 600 samples a
+  hop keeps (which silently turned every alert off), are capped.
+- Start with Windows for a pip install ran a `main.py` that doesn't exist.
+- The Events view keeps 1,000 rows, as the monitor does: an ECMP hop added one
+  per round, forever.
+- `Infinity` or `1e999` in `settings.json` stopped the app opening; typed into
+  Settings, the button did nothing.
+- The CSV export header now records DSCP and the source address, as the README
+  said it did.
+- Linux menu and autostart entries escape `$`, `"` and backslashes the way the
+  Desktop Entry spec reads them.
+- SECURITY.md and THIRD-PARTY-NOTICES pointed at a menu and a README section that
+  no longer exist.
+- CI's update test retries a download GitHub answers with a 5xx, and fails
+  (instead of quietly testing a self-update) when it can't ask GitHub which
+  release came before.
+
 ## [1.4.2] — 2026-11-04
 
 Linux, properly: installed with one `pipx` command, and the parts of the
