@@ -97,8 +97,8 @@ pingerplot
 
 In **Settings**, turn on **Show in the applications menu** to add it, with its icon, to your desktop's menu and
 search, and **Start when you sign in** if you want it monitoring from sign-in. To update: `pipx reinstall
-pingerplot` (the app checks once a day and says when there's a new version). To remove it: turn both off, then
-`pipx uninstall pingerplot`. Or skip pipx: `git clone` and `python3 main.py` works the same.
+pingerplot` (the app checks once a day and says when there's a new version). To remove it, see
+[Uninstalling](#uninstalling). Or skip pipx: `git clone` and `python3 main.py` works the same.
 
 ICMP needs no root: it uses the kernel's unprivileged ICMP sockets, which most systemd-based distributions allow
 by default. If PingerPlot says the ICMP backend is unavailable, it names the one `sysctl` to run.
@@ -407,9 +407,22 @@ session if you want the probes logged.
 
 ## Uninstalling
 
-**Settings → Apps → Installed apps → PingerPlot → Uninstall** removes the program, its shortcuts and its Start with
-Windows entry. Your settings stay in `%APPDATA%\PingerPlot`; delete that folder too if you don't need them. A
-portable copy: delete its folder.
+- **Installed:** quit PingerPlot (right-click its icon in the notification area → **Quit**), then **Settings → Apps →
+  Installed apps → PingerPlot → Uninstall**. That removes the program, its shortcuts and its Start with Windows
+  entry. Your settings stay in `%APPDATA%\PingerPlot`, so a reinstall picks up your targets; delete that folder if
+  you don't need them.
+- **Portable:** turn off **Start with Windows** in Settings *first*, then quit and delete the folder. The folder holds
+  the settings too. Start with Windows is a registry entry, not a file in the folder, so deleting the folder first
+  leaves Windows trying to start a missing program at every sign-in. If that happened, delete the `PingerPlot` value
+  under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
+- **From source:** turn off Start with Windows, then delete the clone and `%APPDATA%\PingerPlot`. If an older copy set
+  up the elevated logon task, `.\launch.ps1 -UninstallAutostart` removes it.
+- **Linux:** turn off **Show in the applications menu** and **Start when you sign in** in Settings (that removes both
+  `.desktop` files), then `pipx uninstall pingerplot`. Delete `~/.config/PingerPlot` (settings) and
+  `~/.cache/PingerPlot` (the icon) if you don't need them.
+
+A download that was interrupted can leave a `PingerPlot-update-<version>` folder in `%TEMP%`. The next update removes
+it, or delete it yourself.
 
 ## How it works
 
