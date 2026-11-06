@@ -77,6 +77,10 @@ def app(tk_root, isolated_settings, monkeypatch):
     from pingerplot import gui
 
     monkeypatch.setattr(gui.icmp, "is_available", lambda: True)
+    # Not elevated, whatever the runner is: GitHub's Windows runners run as
+    # administrator, where the window rightly ignores saved log paths
+    # (tests/test_elevated_log_paths.py tests that on purpose).
+    monkeypatch.setattr(gui.winplatform, "is_elevated", lambda: False)
     a = gui.App(tk_root)
     for after_id in tk_root.tk.call("after", "info"):
         tk_root.after_cancel(after_id)
