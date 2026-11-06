@@ -43,7 +43,8 @@ except ImportError:  # pragma: no cover - non-Windows
     winsound = None  # type: ignore[assignment]
 
 from . import __version__, icmp, tcpudp
-from .model import Event, Hop, HopView, Sample, hop_from_session, mos, mos_label, opt_str
+from .model import (DEFAULT_HISTORY, Event, Hop, HopView, Sample, hop_from_session, mos,
+                    mos_label, opt_str)
 
 GROW_PROBE_SPAN = 8       # extra TTLs to probe when looking for a longer route
 UNREACHED_BEFORE_GROW = 3  # consecutive dest-miss rounds before probing deeper
@@ -56,6 +57,7 @@ FINAL_HOP_TTL = 255        # TTL used to ping the destination directly
 # case ("the service is down but the box is fine"). Shortening the window with
 # TCP_MAXRT does not help: it replaces WSAECONNREFUSED with WSAETIMEDOUT and
 # destroys the very distinction the probe exists to draw. So we wait it out.
+MAX_TIMEOUT_MS = 10_000      # the Settings field's own ceiling
 TCP_REFUSAL_FLOOR_MS = 3000
 MAX_LOAD_HISTORY = 50_000  # cap a loaded session's per-hop ring buffer (DoS guard)
 MAX_LOG_BYTES = 25 * 1024 * 1024  # roll the probe CSV past ~25 MB (one backup kept)
@@ -263,7 +265,11 @@ class Monitor:
         self.stop()
         self.target_input = target.strip()
         self.interval = max(0.25, float(interval))
-        self.timeout_ms = max(100, int(timeout_ms))
+        # Ceilings as well as floors. A timeout of 100 s made every round, and
+        # closing the window, take that long; an alert window longer than the
+        # samples a hop keeps (DEFAULT_HISTORY) could never fill, so it
+        # silently turned every alert off.
+        self.timeout_ms = max(100, min(int(timeout_ms), MAX_TIMEOUT_MS))
         self.max_hops = max(1, min(int(max_hops), MAX_HOPS_CEILING))
         self.resolve_names = bool(resolve_names)
         self.packet_size = max(0, min(int(packet_size), 1472))
@@ -290,7 +296,7 @@ class Monitor:
         self.alert_enabled = bool(alert_enabled)
         self.alert_loss_pct = max(0.0, float(alert_loss_pct))
         self.alert_latency_ms = max(0.0, float(alert_latency_ms))
-        self.alert_window = max(1, int(alert_window))
+        self.alert_window = max(1, min(int(alert_window), DEFAULT_HISTORY))
         self.alert_sound = bool(alert_sound)
         # MOS runs 1.0-5.0; anything above 5 would alert permanently.
         self.alert_mos = max(0.0, min(float(alert_mos), 5.0))
