@@ -999,14 +999,24 @@ class App:
             with open(path, "w", newline="", encoding="utf-8") as fh:
                 # Self-documenting header: records exactly how this run was made,
                 # so two exports can actually be compared after the fact.
-                fh.write(f"# PingerPlot {info['version']} export - {_iso(time.time())}\n")
-                fh.write(f"# target={info['target_input']} [{info['target_ip']}]  mode={mode}\n")
-                fh.write(f"# interval={info['interval']}s  timeout={info['timeout_ms']}ms  "
-                         f"packet_size={info['packet_size']}B  send_delay={info['send_delay_ms']}ms  "
-                         f"max_hops={info['max_hops']}  "
-                         f"final_hop_only={'yes' if info['final_hop_only'] else 'no'}\n")
-                fh.write(f"# samples={info['samples']}  window={window}\n")
+                # Through csv.writer, each line one cell, with the strings a
+                # loaded session supplies (untrusted) stripped of line breaks
+                # and defanged: a target with a newline and "=WEBSERVICE(...)"
+                # in it was a live formula when the export opened in Excel.
+                def clean(v) -> str:
+                    return csv_safe("".join(" " if c in "\r\n\t\x0b\x0c" else c for c in str(v)))
                 w = csv.writer(fh)
+                for line in (
+                        f"# PingerPlot {info['version']} export - {_iso(time.time())}",
+                        f"# target={clean(info['target_input'])} [{clean(info['target_ip'])}]  "
+                        f"mode={mode}",
+                        f"# interval={info['interval']}s  timeout={info['timeout_ms']}ms  "
+                        f"packet_size={info['packet_size']}B  send_delay={info['send_delay_ms']}ms  "
+                        f"max_hops={info['max_hops']}  "
+                        f"final_hop_only={'yes' if info['final_hop_only'] else 'no'}  "
+                        f"dscp={info['dscp']}  source={clean(info['source_ip']) or 'auto'}",
+                        f"# samples={info['samples']}  window={window}"):
+                    w.writerow([line])
                 w.writerow(["hop", "ip", "hostname", "sent", "received", "loss_pct",
                             "current_ms", "avg_ms", "min_ms", "max_ms", "jitter_ms", "status", "mos"])
                 last_ttl = views[-1].ttl
