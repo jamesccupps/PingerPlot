@@ -130,6 +130,10 @@ def _send_webhook(url: str, payload: dict) -> Optional[str]:
     of only beeping."""
     if not url.lower().startswith(("http://", "https://")):
         return "not an http(s) URL"
+    if any(c.isspace() or ord(c) < 0x20 or c == "" for c in url):
+        # http.client would refuse it with an InvalidURL that quotes the
+        # path, and for Slack, Teams and ntfy the path is the secret.
+        return "the URL contains a space or a control character"
     try:
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
@@ -140,7 +144,18 @@ def _send_webhook(url: str, payload: dict) -> Optional[str]:
             status = getattr(resp, "status", 200)
             return None if 200 <= status < 400 else f"HTTP {status}"
     except Exception as exc:   # any failure is reported, never raised
-        return str(exc) or type(exc).__name__
+        return _scrub_url(str(exc) or type(exc).__name__, url)
+
+
+def _scrub_url(text: str, url: str) -> str:
+    """``text`` without the parts of ``url`` past the host: an error message
+    that quotes the URL goes into events, the console and saved sessions."""
+    parts = urllib.parse.urlsplit(url)
+    secrets = [url, parts.path + ("?" + parts.query if parts.query else ""),
+               parts.path, parts.query]
+    for secret in sorted({s for s in secrets if len(s) > 1}, key=len, reverse=True):
+        text = text.replace(secret, "/...")
+    return text
 
 
 def _webhook_host(url: str) -> str:
