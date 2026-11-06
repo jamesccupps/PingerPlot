@@ -79,6 +79,19 @@ class UpdateError(Exception):
     """Anything that stops an update: a bad signature, a short download..."""
 
 
+class RollbackIncomplete(UpdateError):
+    """A swap failed and some of the old program couldn't be put back."""
+
+
+# What a release puts beside the exe (the zip's top level, packaging/
+# build_windows.py): the only names a swap renames to <name>.old, and so the
+# only .old names cleanup may remove. A portable folder also holds the
+# user's own files.
+PROGRAM_FILES = (GUI_EXE, "pingerplot-headless.exe", "_internal", "portable.txt",
+                 "LICENSE", "THIRD-PARTY-NOTICES.md")
+SPARE_BYTES = 50 * 1024 * 1024
+
+
 def parse_version(v):
     m = _VERSION_RE.match(v) if isinstance(v, str) else None
     return tuple(int(x) for x in m.groups()) if m else None
@@ -391,6 +404,16 @@ def swap_in(app_dir: Path, staged: Path) -> None:
     names = [e.name for e in staged.iterdir()
              if not (e.name == settings.PORTABLE_MARKER
                      and not (app_dir / settings.PORTABLE_MARKER).exists())]
+    # The old files stay beside the new ones until the new version has
+    # started, so the new copy needs room of its own: a nearly full USB
+    # stick is refused before anything is touched.
+    need = sum(f.stat().st_size for n in names for f in
+               ([staged / n] if (staged / n).is_file() else (staged / n).rglob("*"))
+               if f.is_file())
+    free = shutil.disk_usage(app_dir).free
+    if free < need + SPARE_BYTES:
+        raise UpdateError(f"not enough free space in {app_dir}: the update needs "
+                          f"{(need + SPARE_BYTES) // 2**20} MB, there are {free // 2**20} MB")
     renamed, placed = [], []
     try:
         for n in names:
@@ -401,22 +424,28 @@ def swap_in(app_dir: Path, staged: Path) -> None:
                 _retry(lambda: target.rename(old))
                 renamed.append(n)
             src = staged / n
+            # Recorded before the copy: a copy that fails half way leaves a
+            # half-new folder, which the rollback has to remove too.
+            placed.append(n)
             if src.is_dir():
                 shutil.copytree(src, target)
             else:
                 shutil.copy2(src, target)
-            placed.append(n)
-    except BaseException:
+    except BaseException as exc:
+        stuck = []
         for n in placed:
             try:
-                _retry(lambda: _remove(app_dir / n), tries=10)
+                if (app_dir / n).exists():
+                    _retry(lambda: _remove(app_dir / n), tries=10)
             except OSError:
-                pass
+                stuck.append(n)
         for n in renamed:
             try:
                 _retry(lambda: (app_dir / (n + ".old")).rename(app_dir / n), tries=10)
             except OSError:
-                pass
+                stuck.append(n + ".old")
+        if stuck and isinstance(exc, Exception):
+            raise RollbackIncomplete(f"{exc!r}; couldn't put back: {', '.join(stuck)}") from exc
         raise
 
 
@@ -434,6 +463,11 @@ def finish_update(app_dir, pid) -> int:
         return 1
     try:
         swap_in(app_dir, staged)
+    except RollbackIncomplete as e:
+        ulog(f"update: FAILED, and the old version couldn't be fully put back: {e}. "
+             f"Download the release again from {RELEASES_URL}", logfile)
+        _spawn([app_dir / GUI_EXE, "--update-failed"], cwd=app_dir)
+        return 1
     except Exception as e:      # whatever went wrong, the old copy comes back
         ulog(f"update: failed, old version restored: {e!r}", logfile)
         _spawn([app_dir / GUI_EXE, "--update-failed"], cwd=app_dir)
@@ -443,14 +477,18 @@ def finish_update(app_dir, pid) -> int:
     return 0
 
 
-def cleanup_after_update() -> None:
-    """Remove what a swap leaves behind (*.old beside the program, staging
-    folders in %TEMP%). Run by the updated app; anything still locked is left
-    for next time."""
-    if getattr(sys, "frozen", False):
-        for p in program_dir().glob("*.old"):
+def cleanup_after_update(remove_old: bool = True) -> None:
+    """Remove what a swap leaves behind: the program's own <name>.old beside
+    it (only those: a portable folder holds the user's files too, and only
+    after a successful update, when the .old items are the version being
+    replaced, never a rollback's leftovers) and the staging folders in %TEMP%.
+    Anything still locked is left for next time."""
+    if remove_old and getattr(sys, "frozen", False):
+        for name in PROGRAM_FILES:
+            p = program_dir() / (name + ".old")
             try:
-                _remove(p)
+                if p.exists():
+                    _remove(p)
             except OSError:
                 pass
     # Exactly the folders download() makes. Not glob("PingerPlot-update-*"):

@@ -492,3 +492,91 @@ def test_the_payload_hashes_the_files(release):
     data = (release / updater.INSTALLER_NAME).read_bytes()
     assert payload["installer"]["sha256"] == hashlib.sha256(data).hexdigest()
     assert payload["app"] == "pingerplot" and payload["published"].endswith("+00:00")
+
+
+# --- the swap's failure paths (the 2026-11-05 review, M4) ---------------------------
+
+def test_a_copy_that_fails_half_way_is_rolled_back(tmp_path, monkeypatch):
+    """copytree of _internal dies part way (a full USB stick): the half-new
+    folder used to stay, so _internal.old couldn't be renamed back."""
+    app, staged = _app_folder(tmp_path)
+    real = updater.shutil.copytree
+
+    def half_then_fail(src, dst, *a, **k):
+        Path(dst).mkdir()
+        (Path(dst) / "partial.dll").write_bytes(b"half")
+        raise OSError("disk full")
+    monkeypatch.setattr(updater.shutil, "copytree", half_then_fail)
+    monkeypatch.setattr(updater, "_retry", lambda fn, tries=40, delay=0.25: fn())
+    with pytest.raises(OSError):
+        updater.swap_in(app, staged)
+    assert (app / "_internal" / "lib.dll").read_bytes() == b"old lib"
+    assert not (app / "_internal" / "partial.dll").exists()
+    assert (app / updater.GUI_EXE).read_bytes() == b"old exe"
+    assert not list(app.glob("*.old"))
+    del real
+
+
+def test_a_rollback_that_cant_finish_says_so(tmp_path, monkeypatch):
+    app, staged = _app_folder(tmp_path)
+    monkeypatch.setattr(updater, "_retry", lambda fn, tries=40, delay=0.25: fn())
+
+    def half_then_fail(src, dst, *a, **k):
+        Path(dst).mkdir()
+        raise OSError("disk full")
+    monkeypatch.setattr(updater.shutil, "copytree", half_then_fail)
+    real_remove = updater._remove
+    monkeypatch.setattr(updater, "_remove",
+                        lambda p: (_ for _ in ()).throw(OSError("locked")) if Path(p).name == "_internal"
+                        else real_remove(p))
+    with pytest.raises(updater.RollbackIncomplete, match="couldn't put back"):
+        updater.swap_in(app, staged)
+
+
+def test_finish_update_logs_an_incomplete_rollback_loudly(tmp_path, monkeypatch):
+    app, staged = _app_folder(tmp_path)
+    monkeypatch.setattr(updater, "program_dir", lambda: staged)
+    monkeypatch.setattr(updater, "_wait_for_exit", lambda pid, timeout=60: True)
+    monkeypatch.setattr(updater, "_spawn", lambda args, cwd: None)
+    monkeypatch.setattr(updater, "swap_in",
+                        lambda a, s: (_ for _ in ()).throw(updater.RollbackIncomplete("x; couldn't put back: _internal")))
+    assert updater.finish_update(str(app), "1") == 1
+    log = (app / "update.log").read_text(encoding="utf-8")
+    assert "FAILED" in log and "couldn't be fully put back" in log and "old version restored" not in log
+
+
+def test_not_enough_space_is_refused_before_anything_moves(tmp_path, monkeypatch):
+    app, staged = _app_folder(tmp_path)
+    monkeypatch.setattr(updater.shutil, "disk_usage",
+                        lambda p: type("U", (), {"free": 10 * 2**20})())
+    with pytest.raises(updater.UpdateError, match="not enough free space"):
+        updater.swap_in(app, staged)
+    assert (app / updater.GUI_EXE).read_bytes() == b"old exe" and not list(app.glob("*.old"))
+
+
+def test_cleanup_removes_only_the_programs_old_files(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(tmp_path / updater.GUI_EXE))
+    monkeypatch.setattr(updater.tempfile, "gettempdir", lambda: str(tmp_path / "temp"))
+    (tmp_path / "temp").mkdir()
+    (tmp_path / "_internal.old").mkdir()
+    (tmp_path / "notes.old").write_text("yours")
+    updater.cleanup_after_update(remove_old=False)
+    assert (tmp_path / "_internal.old").exists(), "a failed update's leftovers are kept"
+    updater.cleanup_after_update()
+    assert not (tmp_path / "_internal.old").exists() and (tmp_path / "notes.old").exists()
+
+
+def test_program_files_is_what_the_zip_puts_beside_the_exe():
+    sys.path.insert(0, str(REPO / "packaging"))
+    try:
+        import build_windows
+    finally:
+        sys.path.pop(0)
+    assert set(updater.PROGRAM_FILES) == {*build_windows.EXES, "_internal", "portable.txt",
+                                          "LICENSE", "THIRD-PARTY-NOTICES.md"}
+
+
+def test_a_failed_update_keeps_the_old_files():
+    src = (REPO / "pingerplot" / "gui.py").read_text(encoding="utf-8")
+    assert "updater.cleanup_after_update(remove_old=updated)" in src

@@ -1452,7 +1452,7 @@ def main() -> None:
         return
     updated, failed = "--updated" in argv, "--update-failed" in argv
     if updated or failed:
-        updater.cleanup_after_update()
+        updater.cleanup_after_update(remove_old=updated)
         updater.ulog(f"update: {__version__} started" + (" after a failed update" if failed else ""))
     # The X11 window class, so a Linux desktop matches the window to its
     # menu entry (StartupWMClass) and its icon in the dock.
