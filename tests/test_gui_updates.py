@@ -81,12 +81,14 @@ def test_one_automatic_check_is_pending_however_often_the_switch_flips(app, monk
     for on in (False, True, False, True, True):
         app.updates.auto_var.set(on)
         app.updates._auto_changed()
-    pending = [a for a in app.root.tk.call("after", "info")]
+    # The settings save the switch schedules (gui.App._save_soon) aside.
+    pending = [a for a in app.root.tk.call("after", "info") if a != app._save_job]
     assert app.updates._next in pending
     assert len(pending) == 1
     app.updates.auto_var.set(False)
     app.updates._auto_changed()
-    assert app.updates._next is None and not app.root.tk.call("after", "info")
+    assert app.updates._next is None
+    assert [a for a in app.root.tk.call("after", "info") if a != app._save_job] == []
 
 
 def test_a_check_that_finds_a_version(found):

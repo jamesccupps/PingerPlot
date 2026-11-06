@@ -129,6 +129,15 @@ class App:
         self._build_pages()
         self._recolor_widgets()
         self._apply_saved_settings()     # restore last defaults and app options
+        # Saved a second after any change, not only on hide or quit: a Windows
+        # Update restart overnight, or a crash, lost every target added or
+        # edited since. And when Windows ends the session (Tk's
+        # WM_SAVE_YOURSELF), straight away.
+        self._save_job = None
+        for var in [*self.defaults.vars.values(), self.theme_var, self.resume_var,
+                    self.keep_tray_var, self.notify_var, self.updates.auto_var]:
+            var.trace_add("write", lambda *_a: self._save_soon())
+        root.protocol("WM_SAVE_YOURSELF", self._save_settings)
 
         if not icmp.is_available():
             # Say what to do about it. On Linux this is one sysctl away, and
@@ -660,7 +669,19 @@ class App:
         self.add_entry.focus_set()
         self.add_entry.select_range(0, "end")
 
+    def _save_soon(self) -> None:
+        """Save once, a second from now, however many changes come together
+        (typing a number in Settings writes its variable on every key)."""
+        if self._save_job is not None:
+            self.root.after_cancel(self._save_job)
+        self._save_job = self.root.after(1000, self._save_now)
+
+    def _save_now(self) -> None:
+        self._save_job = None
+        self._save_settings()
+
     def _start(self, target: Optional[str] = None, options: Optional[dict] = None) -> None:
+        self._save_soon()
         """Start (or restart) ``target`` -- the Add box by default.
 
         Without ``options``: a target already in the list that's running is
@@ -758,6 +779,7 @@ class App:
         self._remove_named(self._active)
 
     def _remove_named(self, name: Optional[str]) -> None:
+        self._save_soon()
         if not name or name not in self._monitors:
             return
         self._monitors.pop(name).shutdown()
@@ -879,6 +901,9 @@ class App:
         self._quit()
 
     def _quit(self) -> None:
+        if self._save_job is not None:
+            self.root.after_cancel(self._save_job)
+            self._save_job = None
         self._save_settings()
         if self.tray is not None:
             self.tray.stop()
