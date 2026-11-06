@@ -1,20 +1,18 @@
-r"""The auto-start task must run what it checked, isolated from per-user state.
+r"""launch.ps1: what it runs elevated is what it checked, and the elevated
+logon task is retired.
 
-launch.ps1 -InstallAutostart registers a logon task that runs the app
-ELEVATED with no UAC prompt, and warns unless what it launches lives under an
-admin-only path. Two holes made the "no warning" case still a UAC bypass:
+-InstallAutostart used to register a task that ran the app ELEVATED at every
+sign-in with no UAC prompt. The 2026-11-05 review showed a program running
+unelevated as you could steer it: register a Python under HKCU for the py
+launcher to pick (the setup's elevated pass asked the launcher, so that
+Python ran elevated there and then), or edit settings.json so the elevated app
+wrote and renamed files where it chose. It now only explains that it's
+retired; -UninstallAutostart removes an old task.
 
-* It preferred pyw.exe, which lives in C:\Windows and so passed the check --
-  but the py launcher picks the interpreter at run time from HKCU\Software\
-  Python, %LOCALAPPDATA%\py.ini and PY_PYTHON, all writable without elevation.
-* Even a Program Files interpreter, run elevated as you, executes .pth files
-  from your user site-packages (%APPDATA%\Python\PythonXY\site-packages) and
-  honours a per-user PYTHONPATH. On the machine this was found on, user site
-  was enabled and already populated.
-
-The task now registers the interpreter the launcher resolves to, checks that
-interpreter and its stdlib, and runs with -E -s. (-I would also drop the
-script's folder from sys.path, breaking `import pingerplot`.)
+The one-off elevated launch and the shortcuts resolve the real interpreter
+unelevated and run it with -E -s, so a per-user PYTHONPATH and user
+site-packages .pth files (both writable unelevated) don't run elevated. (-I
+would also drop the script's folder from sys.path, breaking `import pingerplot`.)
 """
 import subprocess
 import sys
@@ -26,20 +24,32 @@ REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "launch.ps1"
 
 
-def test_install_autostart_uses_the_resolved_isolated_interpreter():
-    src = SCRIPT.read_text(encoding="utf-8")
-    body = src[src.index("function Install-Autostart"):src.index("function Uninstall-Autostart")]
-    assert "Resolve-RealPython" in body, "the task would register the py launcher"
-    assert "-Isolated" in body, "the elevated task would load user site-packages"
-    assert "$py.Prefix" in body, "the stdlib location is not checked"
+def _src():
+    return SCRIPT.read_text(encoding="utf-8")
 
 
-def test_the_elevated_launch_paths_are_isolated_too():
-    src = SCRIPT.read_text(encoding="utf-8")
+def test_the_elevated_logon_task_is_retired():
+    src = _src()
+    assert "Register-ScheduledTask" not in src and "-RunLevel Highest" not in src
+    assert "elseif ($InstallAutostart)   { Show-AutostartRetired }" in src
+    assert "Unregister-ScheduledTask" in src, "an old task must still be removable"
+    setup = (REPO / "Setup.cmd").read_text(encoding="utf-8")
+    assert "-InstallAutostart" not in setup and "-UninstallAutostart" in setup
+
+
+def test_the_elevated_launch_resolves_the_interpreter_unelevated():
+    src = _src()
     start_app = src[src.index("function Start-App"):src.index("function New-Lnk")]
-    assert "-Verb RunAs" in start_app and "-Isolated" in start_app
-    shortcuts = src[src.index("function New-AppShortcuts"):src.index("function Install-Autostart")]
-    assert "$adminArgLine" in shortcuts.split("(Admin).lnk")[1].splitlines()[0]
+    elevated = start_app[start_app.index("if ($AsAdmin"):]
+    assert "Resolve-RealPython" in elevated and "-Isolated" in elevated
+    assert elevated.index("Resolve-RealPython") < elevated.index("-Verb RunAs")
+
+
+def test_shortcuts_point_at_the_real_interpreter_and_there_is_no_admin_one():
+    src = _src()
+    shortcuts = src[src.index("function New-AppShortcuts"):src.index("function Show-AutostartRetired")]
+    assert "Resolve-RealPython" in shortcuts and "-Isolated" in shortcuts
+    assert "(Admin).lnk" not in shortcuts and "$true" not in shortcuts
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="PowerShell launcher")

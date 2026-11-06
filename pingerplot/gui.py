@@ -130,6 +130,13 @@ class App:
         self._build_pages()
         self._recolor_widgets()
         self._apply_saved_settings()     # restore last defaults and app options
+        # Elevated, a log path is only one you choose in this session. The
+        # settings file is writable by anything running as you unelevated, and
+        # a path in it made the elevated app create, append to and (at 25 MB)
+        # rename a file wherever that program chose (the 2026-11-05 review, M1).
+        self._elevated = winplatform.is_elevated()
+        if self._elevated:
+            self.defaults["log_path"].set("")
         # Saved a second after any change, not only on hide or quit: a Windows
         # Update restart overnight, or a crash, lost every target added or
         # edited since. And when Windows ends the session (Tk's
@@ -510,8 +517,8 @@ class App:
             setting_row(card, self.look, "Start with Windows",
                         "Starts in the notification area when you sign in, and resumes your targets. "
                         "It runs without administrator rights, so ICMP and TCP to the destination "
-                        "work but full TCP/UDP traceroute doesn't (launch.ps1 -InstallAutostart "
-                        "starts it elevated instead).",
+                        "work but full TCP/UDP traceroute doesn't: for that, run PingerPlot as "
+                        "administrator when you need it.",
                         switch(self.autostart_var, self._toggle_autostart))
         elif xdg.IS_LINUX:
             setting_row(card, self.look, "Start when you sign in",
@@ -960,7 +967,8 @@ class App:
                 continue
             opts = saved.get(name)
             if isinstance(opts, dict):
-                opts = {k: v for k, v in opts.items() if k in monitor.START_OPTION_KEYS}
+                opts = {k: v for k, v in opts.items() if k in monitor.START_OPTION_KEYS
+                        and not (self._elevated and k == "log_path")}
             else:
                 opts = None              # 1.3.x settings: names only
             try:

@@ -166,6 +166,17 @@ def set_menu_theme(dark: bool) -> None:
 
 # --- Start with Windows ------------------------------------------------------
 
+def is_elevated() -> bool:
+    """Running as administrator (Windows) or as root (Linux, macOS)."""
+    if IS_WINDOWS:
+        try:
+            return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        except (AttributeError, OSError):
+            return False
+    geteuid = getattr(__import__("os"), "geteuid", None)
+    return bool(geteuid) and geteuid() == 0
+
+
 def autostart_command() -> str:
     """What the Run key should hold to start this copy at sign-in: in the
     notification area, resuming the last session's targets."""
@@ -196,8 +207,8 @@ def set_autostart(enabled: bool) -> bool:
     to change: Defender flags programs that keep rewriting Run keys.
 
     This starts the app as you, not elevated, so TCP/UDP traceroute (which
-    needs Administrator) isn't available to targets it resumes; launch.ps1's
-    -InstallAutostart is the elevated alternative."""
+    needs Administrator) isn't available to targets it resumes. (The elevated
+    logon task launch.ps1 used to offer is retired.)"""
     if not IS_WINDOWS:
         return False
     current = autostart_value()

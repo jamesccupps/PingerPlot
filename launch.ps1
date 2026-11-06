@@ -4,16 +4,16 @@
     PingerPlot launcher / installer for Windows.
 
 .DESCRIPTION
-    Launches the app with no console window, can self-elevate for full TCP/UDP
-    traceroute, create Desktop/Start-menu shortcuts, and install a logon
-    auto-start task that runs the app elevated with no UAC prompt.
+    Launches the app with no console window, can elevate it (with a UAC
+    prompt) for full TCP/UDP traceroute, and creates Desktop and Start menu
+    shortcuts. The elevated logon task -InstallAutostart used to register is
+    retired; -UninstallAutostart removes one an older copy set up.
 
 .EXAMPLE
     .\launch.ps1                    # launch now (no console window)
     .\launch.ps1 -Elevated          # launch elevated (UAC) so TCP/UDP works
-    .\launch.ps1 -CreateShortcuts   # Desktop + Start-menu shortcuts (normal + Admin)
-    .\launch.ps1 -InstallAutostart  # auto-start elevated at logon (no UAC nag)
-    .\launch.ps1 -UninstallAutostart
+    .\launch.ps1 -CreateShortcuts   # Desktop + Start menu shortcuts
+    .\launch.ps1 -UninstallAutostart  # remove the retired elevated logon task
     .\launch.ps1 -Status
 #>
 [CmdletBinding()]
@@ -143,8 +143,13 @@ function Start-App {
     $py = Find-PythonW
     $argLine = Get-ArgLine $py
     if ($AsAdmin -and -not (Test-Admin)) {
-        $argLine = Get-ArgLine $py -Isolated
-        return (Start-Process -FilePath $py.Exe -ArgumentList $argLine -Verb RunAs -PassThru)
+        # Which Python the py launcher runs is decided by per-user state that
+        # anything running as you can change. Ask it now, unelevated, and
+        # elevate that exact pythonw.exe, isolated: the UAC prompt then names
+        # what really runs, never the signed launcher.
+        $real = Resolve-RealPython $py
+        return (Start-Process -FilePath $real.Exe -ArgumentList (Get-ArgLine $real -Isolated) `
+                    -Verb RunAs -WorkingDirectory $Root -PassThru)
     }
     return (Start-Process -FilePath $py.Exe -ArgumentList $argLine -WorkingDirectory $Root -PassThru)
 }
@@ -168,59 +173,45 @@ function New-Lnk {
 }
 
 function New-AppShortcuts {
-    $py = Find-PythonW
-    $argLine = Get-ArgLine $py
-    $adminArgLine = Get-ArgLine $py -Isolated
+    # The resolved pythonw.exe, isolated, never pyw.exe: right-clicking a
+    # shortcut and choosing Run as administrator elevates its target, and the
+    # py launcher would pick the interpreter from per-user state. (There is
+    # no "(Admin)" shortcut any more; launch.ps1 -Elevated does that job.)
+    $py = Resolve-RealPython (Find-PythonW)
+    $argLine = Get-ArgLine $py -Isolated
     $desktop  = [Environment]::GetFolderPath('Desktop')
     $programs = Join-Path ([Environment]::GetFolderPath('Programs')) $AppName
     if (-not (Test-Path $programs)) { [void](New-Item -ItemType Directory -Path $programs -Force) }
     $made = @()
     foreach ($dir in @($desktop, $programs)) {
-        $made += New-Lnk (Join-Path $dir "$AppName.lnk")         $py.Exe $argLine $Root $false
-        $made += New-Lnk (Join-Path $dir "$AppName (Admin).lnk") $py.Exe $adminArgLine $Root $true
+        $made += New-Lnk (Join-Path $dir "$AppName.lnk") $py.Exe $argLine $Root $false
     }
-    Show-Info ("Shortcuts created (the (Admin) one self-elevates for TCP/UDP):`r`n`r`n" + ($made -join "`r`n"))
+    Show-Info ("Shortcuts created. They point at the Python installed now: after upgrading Python, run this again.`r`n`r`n" + ($made -join "`r`n"))
 }
 
-function Install-Autostart {
-    if (-not (Test-Admin)) {
-        Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList @(
-            '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"{0}"' -f $ScriptPath), '-InstallAutostart')
-        return
+function Show-AutostartRetired {
+    # Retired in 1.4.3. The task ran PingerPlot elevated at every sign-in with
+    # no UAC prompt, and a program running unelevated as you could steer it:
+    # register a Python under HKCU for the py launcher to pick (run elevated
+    # while the task was being set up), or edit settings.json so the elevated
+    # app wrote and renamed files where it chose (the 2026-11-05 review, M1
+    # and M2). Start with Windows, in the app, starts it unelevated; run it as
+    # administrator when full TCP/UDP traceroute is needed.
+    $lines = @(
+        "The elevated auto-start task has been retired.",
+        "",
+        "It started $AppName as administrator at every sign-in with no prompt, and",
+        "other programs running as you could change what it did.",
+        "",
+        "Instead: turn on Start with Windows in $AppName's Settings (it starts",
+        "unelevated, which ICMP and TCP to the destination need), and launch it",
+        "elevated (launch.ps1 -Elevated) when you need full TCP/UDP traceroute."
+    )
+    if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
+        $lines += @("", "A task from an older copy is still registered: remove it with",
+                    "    launch.ps1 -UninstallAutostart")
     }
-    # The resolved interpreter, not the py launcher, and isolated from
-    # per-user Python state: this task runs elevated with no UAC prompt.
-    $py = Resolve-RealPython (Find-PythonW)
-    $user = "$env:USERDOMAIN\$env:USERNAME"
-    $action    = New-ScheduledTaskAction -Execute $py.Exe -Argument (Get-ArgLine $py -Isolated) -WorkingDirectory $Root
-    $trigger   = New-ScheduledTaskTrigger -AtLogOn -User $user
-    $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Highest
-    $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)
-    [void](Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force)
-    if ((Test-AdminOnlyPath $Root) -and (Test-AdminOnlyPath $py.Exe) -and (Test-AdminOnlyPath $py.Prefix)) {
-        Show-Info "Auto-start enabled. $AppName will launch elevated at logon with no UAC prompt.`r`n`r`nRemove it any time with:  launch.ps1 -UninstallAutostart"
-    } else {
-        # Warn-but-allow: the task is registered, but it auto-elevates code from
-        # a folder a non-elevated process could tamper with — call that out.
-        Show-Warn (@(
-            "Auto-start enabled - but a security note:",
-            "",
-            "This task runs $AppName ELEVATED at every logon with no UAC prompt. It launches:",
-            "    $($py.Exe)",
-            "    $MainPy",
-            "with the Python standard library from:",
-            "    $($py.Prefix)",
-            "",
-            "At least one of these sits in a folder a standard (non-elevated) user can modify. Anything",
-            "running as you, without elevation, could replace that code and have it run as",
-            "Administrator at your next logon.",
-            "",
-            "For best security, install $AppName under an admin-only path such as",
-            "    $env:ProgramFiles\$AppName",
-            "and re-run -InstallAutostart from there. Remove auto-start any time with:",
-            "    launch.ps1 -UninstallAutostart"
-        ) -join "`r`n")
-    }
+    Show-Info ($lines -join "`r`n") "$AppName auto-start"
 }
 
 function Uninstall-Autostart {
@@ -240,12 +231,12 @@ function Uninstall-Autostart {
 function Show-Status {
     try { $py = (Find-PythonW).Exe } catch { $py = '(not found)' }
     $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-    if ($task) { $taskState = 'installed' } else { $taskState = 'not installed' }
+    if ($task) { $taskState = 'installed (retired: remove it with -UninstallAutostart)' } else { $taskState = 'none' }
     $lines = @(
         "Folder:            $Root",
         "Python (windowed): $py",
         "Elevated session:  $(Test-Admin)",
-        "Auto-start task:   $taskState"
+        "Elevated logon task: $taskState"
     )
     Show-Info ($lines -join "`r`n") "$AppName status"
 }
@@ -255,7 +246,7 @@ if ($MyInvocation.InvocationName -ne '.') {
     try {
         if ($Status)             { Show-Status }
         elseif ($CreateShortcuts){ New-AppShortcuts }
-        elseif ($InstallAutostart)   { Install-Autostart }
+        elseif ($InstallAutostart)   { Show-AutostartRetired }
         elseif ($UninstallAutostart) { Uninstall-Autostart }
         else                     { [void](Start-App -AsAdmin:$Elevated) }
     } catch {

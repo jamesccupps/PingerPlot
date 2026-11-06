@@ -365,33 +365,27 @@ Bug reports from a real Linux or macOS box are very welcome.
 | | |
 |---|---|
 | `PingerPlot.vbs` | Double-click launch, no console window. |
-| `Setup.cmd` | A menu: launch, launch elevated, make shortcuts, turn the elevated logon task on or off, status. |
+| `Setup.cmd` | A menu: launch, launch elevated, make shortcuts, remove the old elevated logon task, status. |
 | `python main.py` | From a terminal, which stays open to show errors. |
 
 ```powershell
-.\launch.ps1 -CreateShortcuts    # Desktop and Start menu icons (normal, and an "(Admin)" one)
-.\launch.ps1 -InstallAutostart   # start at sign-in, elevated, with no UAC prompt
-.\launch.ps1 -UninstallAutostart # undo it
+.\launch.ps1 -CreateShortcuts    # Desktop and Start menu shortcuts
+.\launch.ps1 -Elevated           # start it as administrator (UAC asks), for full TCP/UDP traceroute
+.\launch.ps1 -UninstallAutostart # remove the elevated logon task an older copy set up
 .\launch.ps1 -Status
 ```
 
-The app's own **Start with Windows** starts it unelevated, which is all ICMP and TCP-to-the-destination need.
-`-InstallAutostart` instead registers a **Task Scheduler** logon task with *Run with highest privileges*, so a
-source copy starts already elevated (full TCP/UDP traceroute works) without a UAC prompt. It's opt-in, and one
-command removes it.
+The app's own **Start with Windows** starts it unelevated at sign-in, which is all ICMP and TCP to the destination
+need. For full TCP/UDP traceroute, start it elevated when you need it: `-Elevated`, or right-click a shortcut and
+choose **Run as administrator**. Both run the Python the `py` launcher resolves to now, found unelevated, with `-E -s`
+(so a per-user `PYTHONPATH` and user site-packages don't run elevated), and the UAC prompt names that Python. An
+elevated copy takes no log path from `settings.json`, which any program running as you can edit; set one in that
+session if you want the probes logged.
 
-> **Security note: where you install matters.** That task launches PingerPlot **elevated with no prompt**, so only
-> turn it on from a folder standard users can't modify, e.g. `C:\Program Files\PingerPlot`. If the program folder
-> *or* your Python install sits somewhere you can write without elevation (your Downloads, your home folder, most
-> data drives), any unelevated process running as you could replace that code and have it run as Administrator at
-> your next sign-in. `-InstallAutostart` checks for this and warns you, but doesn't stop you.
->
-> What it checks is what runs. The task registers the actual interpreter the `py` launcher resolves to (not the
-> launcher, whose choice comes from per-user registry keys and `py.ini` that anything running as you can change),
-> and checks that interpreter, its standard library and the program folder. Every elevated launch runs Python with
-> `-E -s`, so a per-user `PYTHONPATH` and the `.pth` files in your user site-packages are ignored. One residual: the
-> elevated app still reads its settings, including the probe-log path, from `%APPDATA%\PingerPlot\settings.json`,
-> which you can write without elevation. If you don't need persistence, prefer the one-off **(Admin)** shortcut.
+> **The elevated logon task (`-InstallAutostart`) is retired** as of 1.4.3. It started PingerPlot as administrator at
+> every sign-in with no prompt, and a program running unelevated as you could steer it: register a Python under
+> HKCU for the `py` launcher to pick, or edit `settings.json` so the elevated app wrote files where it chose. If an
+> older copy set one up, `.\launch.ps1 -UninstallAutostart` (or Setup.cmd option 4) removes it.
 
 `pip install .` also registers `pingerplot` and `pingerplot-headless` commands.
 

@@ -127,10 +127,11 @@ site-packages enabled; `py -3.12` matches the release build). Linux needs
   location" is cached.
 - **Headless prints events** (`print_events`, through an encoder that can't raise on a cp437 console). A target that
   stops (DNS down at boot) is restarted with back-off from 30 s to 5 min; the event cursor resets with it.
-- **launch.ps1 -InstallAutostart** registers the interpreter the py launcher resolves to (never the launcher, whose
-  choice is per-user state), checks it, its stdlib and the app folder for admin-only paths, and every elevated path
-  runs Python with `-E -s` (not `-I`: that drops the script's folder from `sys.path`). Known residual: the elevated
-  app reads the user-writable `settings.json`.
+- **Elevation.** The elevated logon task (`launch.ps1 -InstallAutostart`) is retired (1.4.3): an unelevated program
+  could steer it through HKCU's py-launcher state or settings.json (the 2026-11-05 review, M1/M2). `-Elevated` and the
+  shortcuts resolve the real interpreter unelevated and run it with `-E -s` (not `-I`: that drops the script's folder
+  from `sys.path`). An elevated window (`winplatform.is_elevated()`, root on POSIX too) takes no `log_path` from
+  settings.json. Open: an elevated and an unelevated copy can still run side by side (mutex error 5, UIPI; M3).
 
 - **Tk objects die on the main thread.** A `tk.Variable` or `PhotoImage` garbage-collected on a worker thread calls
   into Tcl from there, which waits for the main loop (68 s per App in the suite). `tkthreads.install()` (first thing
