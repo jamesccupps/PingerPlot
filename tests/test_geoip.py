@@ -162,3 +162,36 @@ def test_an_unexpected_exception_is_counted_not_fatal(monkeypatch):
         assert r.cache["8.8.8.8"] is None
     finally:
         r.stop()
+
+
+def test_addresses_that_arent_global_stay_home():
+    """The 2026-11-05 review: carrier-grade NAT (also Tailscale's range) is
+    neither private nor global and used to go to ipwho.is; IPv6 site-local
+    even counts as global to ipaddress; mapped, 6to4, Teredo and scoped
+    addresses carry another address inside."""
+    for ip in ("100.64.0.1", "100.127.255.254",            # CGNAT / Tailscale
+               "198.18.0.1", "192.0.2.1",                   # benchmarking, TEST-NET
+               "fec0::1",                                   # site-local
+               "::ffff:100.64.0.1", "::ffff:8.8.8.8",       # IPv4-mapped
+               "2002:c000:0204::1", "2001:0::1",            # 6to4, Teredo
+               "fe80::1%eth0", "2606:4700::1111%x"):        # scoped
+        assert geoip._is_public(ip) is False, ip
+    assert geoip._is_public("2606:4700::1111") is True
+
+
+def test_the_url_carries_the_canonical_address(monkeypatch):
+    seen = []
+
+    class Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self, n=-1):
+            return b'{"success": false}'
+    monkeypatch.setattr(geoip.urllib.request, "urlopen",
+                        lambda req, timeout=None: seen.append(req.full_url) or Resp())
+    geoip.GeoResolver()._lookup("2606:4700:0000::1111")
+    assert seen[0].startswith("https://ipwho.is/2606:4700::1111?")

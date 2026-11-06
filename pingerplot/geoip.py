@@ -13,6 +13,7 @@ import json
 import queue
 import threading
 import time
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 
@@ -39,12 +40,23 @@ class GeoInfo:
 
 
 def _is_public(ip: str) -> bool:
+    """Only globally routable unicast addresses go to ipwho.is.
+
+    Excluding what is_private covers wasn't enough: carrier-grade NAT
+    (100.64.0.0/10, which is also Tailscale's range) is neither private nor
+    global, so a Starlink or mobile-carrier gateway or a tailnet peer went
+    out. IPv6 site-local (fec0::/10) even counts as global to ipaddress, and
+    an IPv4-mapped, 6to4, Teredo or zone-scoped address carries another
+    address inside it."""
     try:
         addr = ipaddress.ip_address(ip)
     except ValueError:
         return False
-    return not (addr.is_private or addr.is_loopback or addr.is_link_local
-                or addr.is_multicast or addr.is_reserved or addr.is_unspecified)
+    if addr.version == 6 and (addr.scope_id or addr.is_site_local or addr.ipv4_mapped
+                              or addr.sixtofour or addr.teredo):
+        return False
+    return addr.is_global and not (addr.is_multicast or addr.is_reserved or addr.is_loopback
+                                   or addr.is_link_local or addr.is_unspecified)
 
 
 class GeoResolver:
@@ -133,7 +145,10 @@ class GeoResolver:
 
     def _lookup(self, ip: str) -> GeoInfo | None:
         try:
-            req = urllib.request.Request(_URL.format(ip=ip),
+            # The canonical form ipaddress gives, never the string as it
+            # came in: a loaded session's address could carry "/" or "%".
+            req = urllib.request.Request(_URL.format(ip=urllib.parse.quote(
+                                             str(ipaddress.ip_address(ip)), safe=":")),
                                          headers={"User-Agent": "PingerPlot"})
             with urllib.request.urlopen(req, timeout=6) as resp:
                 # Capped: this is one small JSON object from a third party, not

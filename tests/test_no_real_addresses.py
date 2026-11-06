@@ -64,7 +64,9 @@ def _is_allowed(text: str) -> bool:
         return True          # not actually an address (a version, a timestamp)
     if any(addr in net for net in DOC_NETS):
         return True
-    return (addr.is_private or addr.is_loopback or addr.is_link_local
+    # not is_global too: carrier-grade NAT (100.64.0.0/10) is neither private
+    # nor routable, and names nobody's network.
+    return (not addr.is_global or addr.is_private or addr.is_loopback or addr.is_link_local
             or addr.is_multicast or addr.is_reserved or addr.is_unspecified)
 
 
