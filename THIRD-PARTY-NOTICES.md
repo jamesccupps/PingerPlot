@@ -15,8 +15,8 @@ source uses your own installation of them. The app's own code is under the MIT l
 The world map's coastlines are [Natural Earth](https://www.naturalearthdata.com/) 1:110m data, simplified and kept in
 `pingerplot/worldmap.py`. Natural Earth is in the public domain.
 
-The Map tab looks up public hop addresses with [ipwho.is](https://ipwho.is/), a free web service: nothing of it is
-bundled, and nothing is sent until you open that tab (see the README's *Map view & privacy*).
+The Map view looks up public hop addresses with [ipwho.is](https://ipwho.is/), a free web service: nothing of it is
+bundled, and nothing is sent until you open that view (see the README's *Updates and privacy*).
 
 Building the executables uses [PyInstaller](https://pyinstaller.org/) and its hooks, and the tests use
 [pytest](https://pytest.org/), at the versions pinned in `packaging/requirements-build.txt`; neither is part of the

@@ -11,8 +11,8 @@ Security tab). Only the maintainer sees it. Please include:
 
 - what's affected, and what someone could do with it;
 - how to make it happen (a session file, a headless config, or a capture of the reply that shows it helps);
-- the version (**Help → About**, or the first line the headless runner prints) and which copy: the Windows
-  executables, or from source on Windows, Linux or macOS.
+- the version (**Settings → About** in the window, or `pingerplot-headless --version`) and which copy: the
+  installer, the portable zip, pipx on Linux, or from source on Windows, Linux or macOS.
 
 Once it's fixed, the release notes say what was fixed (and who found it, if you'd like that).
 
