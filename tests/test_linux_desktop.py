@@ -26,9 +26,10 @@ def _keys(path):
 @pytest.mark.parametrize("arg,quoted", [
     ("/usr/bin/python3", "/usr/bin/python3"),
     ("/home/j/My Apps/main.py", '"/home/j/My Apps/main.py"'),
-    ('a"b', '"a\\"b"'),
+    ('a"b', '"a\\\\"b"'),             # file text: "a\\"b"
     ("50%", "50%%"),
-    ("$HOME", '"\\$HOME"'),
+    ("$HOME", '"\\\\$HOME"'),          # file text: "\\$HOME"
+    ("C:\\x", '"C:\\\\\\\\x"'),         # a literal backslash is four
     ("--minimized", "--minimized"),
 ])
 def test_exec_quoting(arg, quoted):
@@ -95,3 +96,22 @@ def test_the_window_toggles_the_menu_entry(app, home):
     app.menu_entry_var.set(False)
     app._toggle_menu_entry()
     assert not xdg.menu_entry_enabled()
+
+
+@pytest.mark.parametrize("arg", ["/home/j/My Apps/main.py", '/opt/a"b/main.py', "/srv/$HOME/x",
+                                 "/srv/back\\slash/x", "/srv/tick`x/y"])
+def test_exec_quoting_reads_back_as_the_spec_says(arg):
+    """Unescape the way a desktop does (Desktop Entry spec: string level,
+    then quoting) and get the argument back."""
+    field = xdg._exec_quote(arg)
+    string_level = field.replace("\\\\", "\x00").replace("\x00", "\\")
+    assert string_level.startswith('"') and string_level.endswith('"')
+    inner, out, i = string_level[1:-1], "", 0
+    while i < len(inner):
+        if inner[i] == "\\" and i + 1 < len(inner) and inner[i + 1] in '"`$\\':
+            out += inner[i + 1]
+            i += 2
+        else:
+            out += inner[i]
+            i += 1
+    assert out == arg

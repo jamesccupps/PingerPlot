@@ -109,11 +109,20 @@ def launch_args() -> list:
 def _exec_quote(arg: str) -> str:
     """One argument of a desktop entry's Exec key (Desktop Entry spec,
     "The Exec key"): quoted when it has to be, with the characters that are
-    special inside quotes escaped, and % doubled."""
+    special inside quotes escaped, and % doubled.
+
+    Two levels: the value is first unescaped as a string (two backslashes
+    make one), then as quoting (a backslash before a double quote, backtick,
+    dollar sign or backslash). So the quoting's backslashes are doubled once
+    more: a literal $ inside quotes is two backslashes and the $ in the file,
+    a literal backslash four. Writing only the quoting level left one
+    backslash before the $, which a reader takes as an unknown string
+    escape."""
     arg = arg.replace("%", "%%")
     if arg and not any(c in arg for c in ' \t\n"\'\\><~|&;$*?#()`'):
         return arg
-    return '"' + "".join("\\" + c if c in '"`$\\' else c for c in arg) + '"'
+    quoted = '"' + "".join("\\" + c if c in '"`$\\' else c for c in arg) + '"'
+    return quoted.replace("\\", "\\\\")
 
 
 def exec_line(extra=()) -> str:
