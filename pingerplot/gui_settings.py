@@ -4,6 +4,7 @@ options) and a target's Edit dialog. One form definition serves both, so a
 setting can't exist in one and be missing from the other."""
 from __future__ import annotations
 
+import math
 import tkinter as tk
 import webbrowser
 from tkinter import filedialog, messagebox, ttk
@@ -69,7 +70,10 @@ class OptionVars:
             if key in NUMBERS:
                 conv, label = NUMBERS[key]
                 try:
-                    v = conv(float(str(v).strip())) if conv is int else conv(str(v).strip())
+                    f = float(str(v).strip())
+                    if not math.isfinite(f):        # "inf", "1e999", "nan"
+                        raise ValueError
+                    v = conv(f)
                 except ValueError:
                     raise ValueError(f"{label} must be a number (it says {v!r}).") from None
             elif key == "packet_type":

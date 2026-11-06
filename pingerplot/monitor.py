@@ -25,6 +25,7 @@ Threading model:
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import socket
@@ -278,6 +279,13 @@ class Monitor:
         webhook_url: str = "",
     ) -> None:
         self.stop()
+        # Every numeric option, before any is used: int(inf) raises
+        # OverflowError, which nothing expects, and an infinite interval or
+        # threshold would quietly do nothing. A settings file can hold
+        # Infinity or 1e999 (json writes and reads both).
+        for name, value in list(locals().items()):
+            if isinstance(value, float) and not math.isfinite(value):
+                raise ValueError(f"{name} must be a finite number, not {value}")
         self.target_input = target.strip()
         self.interval = max(0.25, float(interval))
         # Ceilings as well as floors. A timeout of 100 s made every round, and

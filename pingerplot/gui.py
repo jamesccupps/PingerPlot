@@ -965,7 +965,7 @@ class App:
                 opts = None              # 1.3.x settings: names only
             try:
                 self._start(name, opts)
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, OverflowError):
                 # A hand-edited or corrupt entry. This runs inside __init__, so
                 # raising would stop the app opening at all; the defaults are
                 # the 1.3.x behaviour.
