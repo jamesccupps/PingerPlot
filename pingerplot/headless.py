@@ -247,7 +247,27 @@ def print_status(targets: List[Target], log: Callable[[str], None] = print) -> N
             tail = f"  (restarted {t.restarts}x)" if t.restarts else ""
         log(f"    {t.name:<24} hops={n_hops:<3} loss={loss_s:<5} "
             f"avg={avg_s:<8} MOS={mos_s}{tail}")
-    sys.stdout.flush()
+    _flush()
+
+
+def _flush() -> None:
+    """Under pythonw.exe (the README's Task Scheduler line) there is no
+    stdout at all: sys.stdout is None, and flushing it raised AttributeError
+    out of the run loop at the first status line or event."""
+    if sys.stdout is not None:
+        sys.stdout.flush()
+
+
+def _tolerant_streams() -> None:
+    """Redirected to a file, stdout is cp1252 in strict mode: a hostname,
+    target or status it can't encode would raise out of print_status,
+    supervise or a report. Replace the character instead."""
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(errors="backslashreplace")
+            except (ValueError, OSError):
+                pass
 
 
 def _console(line: str) -> None:
@@ -274,7 +294,7 @@ def print_events(targets: List[Target], log: Optional[Callable[[str], None]] = N
             out(f"[{ts}] {t.name}: {e.kind.upper():<5} {e.text}")
             printed = True
     if printed:
-        sys.stdout.flush()
+        _flush()
 
 
 def shutdown_all(targets: List[Target]) -> None:
@@ -496,6 +516,7 @@ def _install_signal_handlers() -> None:
 
 
 def main(argv=None) -> int:
+    _tolerant_streams()
     ap = argparse.ArgumentParser(
         prog="pingerplot.headless",
         description="Run PingerPlot monitors from a config file, no GUI.")
