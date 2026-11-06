@@ -8,6 +8,48 @@ from tkinter import ttk
 from typing import Callable, Dict, Optional, Sequence, Tuple
 
 
+class WheelScroll:
+    """Wheel events as whole scroll units, ``scroll(n)``, on every platform.
+
+    Windows sends <MouseWheel> in multiples of 120 for a mouse but small
+    deltas (30, say) for a precision touchpad, and int(-30 / 120) is 0: the
+    touchpad never scrolled. The deltas now add up until they make a step.
+    Tk 8.6 on X11 sends no <MouseWheel> at all, only Button-4 and Button-5,
+    so on Linux the wheel did nothing. macOS sends small deltas, one per
+    unit."""
+
+    EVENTS = ("<MouseWheel>", "<Button-4>", "<Button-5>")
+
+    def __init__(self, scroll) -> None:
+        self._scroll, self._acc = scroll, 0.0
+
+    def wheel(self, e) -> None:
+        self._acc += -e.delta if sys.platform == "darwin" else -e.delta / 120
+        steps = int(self._acc)
+        if steps:
+            self._acc -= steps
+            self._scroll(steps)
+
+    def up(self, _e=None) -> None:
+        self._scroll(-1)
+
+    def down(self, _e=None) -> None:
+        self._scroll(1)
+
+    def bind(self, widget) -> None:
+        for ev, fn in zip(self.EVENTS, (self.wheel, self.up, self.down)):
+            widget.bind(ev, fn)
+
+    def bind_all(self, widget) -> None:
+        for ev, fn in zip(self.EVENTS, (self.wheel, self.up, self.down)):
+            widget.bind_all(ev, fn)
+
+    @classmethod
+    def unbind_all(cls, widget) -> None:
+        for ev in cls.EVENTS:
+            widget.unbind_all(ev)
+
+
 class ScrollFrame(ttk.Frame):
     """A vertically scrolling frame. Put children in ``.inner``.
 
@@ -28,8 +70,9 @@ class ScrollFrame(ttk.Frame):
         self.vsb.pack(side="right", fill="y")
         self.inner.bind("<Configure>", self._on_inner)
         self.canvas.bind("<Configure>", self._on_canvas)
-        self.bind("<Enter>", lambda _e: self.bind_all("<MouseWheel>", self._on_wheel))
-        self.bind("<Leave>", lambda _e: self.unbind_all("<MouseWheel>"))
+        self.wheel = WheelScroll(self._scroll)
+        self.bind("<Enter>", lambda _e: self.wheel.bind_all(self))
+        self.bind("<Leave>", lambda _e: WheelScroll.unbind_all(self))
 
     def _on_inner(self, _e=None) -> None:
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
@@ -37,10 +80,9 @@ class ScrollFrame(ttk.Frame):
     def _on_canvas(self, e) -> None:
         self.canvas.itemconfigure(self._win, width=e.width)
 
-    def _on_wheel(self, e) -> None:
+    def _scroll(self, units: int) -> None:
         if self.inner.winfo_reqheight() > self.canvas.winfo_height():
-            step = -int(e.delta / 120) if sys.platform == "win32" else -int(e.delta)
-            self.canvas.yview_scroll(step, "units")
+            self.canvas.yview_scroll(units, "units")
 
     def recolor(self) -> None:
         self.canvas.configure(bg=self.look.c["bg"])

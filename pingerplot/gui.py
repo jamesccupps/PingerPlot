@@ -27,7 +27,7 @@ from . import theme as themes, tkthreads, tray as traymod, updater, winplatform,
 from .gui_charts import BAD_MS, WARN_MS, Ink, draw_graph, draw_map, draw_timeline, fmt_ms, row_tag
 from .gui_settings import REPO_URL, EditTargetDialog, OptionVars, SettingsPage
 from .gui_updates import Updates
-from .gui_widgets import Nav, ScrollFrame, TargetCard
+from .gui_widgets import Nav, ScrollFrame, TargetCard, WheelScroll
 from .model import HopView, csv_safe, draw_version, mos, mos_label
 from . import monitor
 from .monitor import Monitor
@@ -447,8 +447,8 @@ class App:
         tl_vsb.pack(side="right", fill="y")
         self.timeline_canvas.pack(side="left", fill="both", expand=True)
         self.timeline_canvas.bind("<Configure>", lambda _e: self._draw_timeline())
-        self.timeline_canvas.bind(
-            "<MouseWheel>", lambda e: self.timeline_canvas.yview_scroll(int(-e.delta / 120), "units"))
+        self._timeline_wheel = WheelScroll(lambda n: self.timeline_canvas.yview_scroll(n, "units"))
+        self._timeline_wheel.bind(self.timeline_canvas)
         return view
 
     def _build_map_view(self, host) -> ttk.Frame:
