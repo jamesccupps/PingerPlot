@@ -1,15 +1,18 @@
 # Install PingerPlot-Setup.exe silently for this user, check what it installed,
 # run the installed app's self-test against a scratch data folder, uninstall,
 # and check the uninstall. CI runs it; on a PC of your own it REPLACES an
-# installed copy of PingerPlot.
+# installed copy of PingerPlot. With -Publisher (the release), Setup.exe and
+# every exe it installs, the uninstaller too, must be signed by that publisher.
 #
-#   pwsh packaging/test_installer.ps1 -Setup dist\PingerPlot-Setup.exe -Version 1.4.0
+#   pwsh packaging/test_installer.ps1 -Setup dist\PingerPlot-Setup.exe -Version 1.4.0 [-Publisher 'CN=..., O=...']
 param(
     [Parameter(Mandatory)][string]$Setup,
-    [Parameter(Mandatory)][string]$Version
+    [Parameter(Mandatory)][string]$Version,
+    [string]$Publisher = ''
 )
 $ErrorActionPreference = 'Stop'
 
+if ($Publisher) { & (Join-Path $PSScriptRoot 'check_signatures.ps1') -Publisher $Publisher -Path $Setup }
 $dir = Join-Path $env:LOCALAPPDATA 'Programs\PingerPlot'
 $log = Join-Path ([IO.Path]::GetTempPath()) "pingerplot-setup-$PID.log"
 $p = Start-Process $Setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=`"$log`"" -Wait -PassThru
@@ -19,6 +22,10 @@ foreach ($f in 'PingerPlot.exe', 'pingerplot-headless.exe', 'unins000.exe', 'LIC
     if (-not (Test-Path (Join-Path $dir $f))) { throw "nothing installed at $dir\$f" }
 }
 if (Test-Path (Join-Path $dir 'portable.txt')) { throw "the installed copy has portable.txt: it would keep settings in Program files" }
+if ($Publisher) {
+    & (Join-Path $PSScriptRoot 'check_signatures.ps1') -Publisher $Publisher `
+        -Path @(Get-ChildItem $dir -Filter *.exe | ForEach-Object FullName)
+}
 
 $entry = Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' |
     ForEach-Object { Get-ItemProperty $_.PSPath } | Where-Object { $_.DisplayName -eq 'PingerPlot' }

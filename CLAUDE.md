@@ -24,6 +24,7 @@ python -m pingerplot.selftest 8.8.8.8  # a quick trace in the console
 python scripts/demo.py                 # the real app against a pretend network; --shots DIR takes the pictures
 python -m pip install --require-hashes --only-binary=:all: -r packaging/requirements-build.txt
 python packaging/build_windows.py      # dist\: PingerPlot\ (both exes), the zip, Setup.exe (Inno Setup 6), latest.json
+                                       #   --program / --package [--sign]: the release's two halves (see Releasing)
 pwsh packaging/test_portable.ps1       # unzip, --self-test, a headless loopback probe
 pwsh packaging/test_update.ps1 -Kinds portable   # a copy updates itself to dist\ (installed: CI only, it replaces yours)
 ```
@@ -76,8 +77,10 @@ site-packages enabled; `py -3.12` matches the release build). Linux needs
 - `launch.ps1` (+ `Setup.cmd`, `PingerPlot.vbs`): launch, elevate, shortcuts, the elevated logon task.
 - `packaging/`: `pingerplot.spec` (onedir: `PingerPlot.exe` and `pingerplot-headless.exe` share `_internal`),
   `build_windows.py`, `PingerPlot.iss` (AppId `{64B8717F-...}` must never change), `signing.py` (the release key and
-  `latest.json`), `make_icon.py`, `headless_entry.py`, `requirements-build.txt` (hash-pinned), and the tests CI runs
-  on the built files: `test_portable.ps1`, `test_installer.ps1`, `test_update.ps1` (+ `update_test_helper.py`).
+  `latest.json`), `authenticode.ps1` (code-signs one file through Azure Artifact Signing), `check_signatures.ps1`,
+  `make_icon.py`, `headless_entry.py`, `requirements-build.txt` (hash-pinned), and the tests CI runs on the built
+  files: `test_portable.ps1`, `test_installer.ps1` (both take `-Publisher` to check signatures),
+  `test_update.ps1` (+ `update_test_helper.py`).
 - `scripts/demo.py`: the real engine and window against simulated paths (RFC 5737 addresses); the README and site
   pictures come from `--shots site/images`. `scripts/make_social_preview.py` (Pillow, dev only). `site/`: the
   GitHub Pages page (`.github/workflows/pages.yml`).
@@ -163,8 +166,10 @@ site-packages enabled; `py -3.12` matches the release build). Linux needs
 - Live probes go to loopback only, plus one TTL-1 probe that accepts any answer. `test_ci_coverage_gate.py` fails the
   CI Linux jobs if the live POSIX tests would skip, so a green run means they ran against a real kernel.
 - `test_packaging.py` enforces the workflow rules: no `${{ }}` inside `run:`, actions pinned by SHA with a version
-  comment, only the publish job can write, only the sign job reads a secret (and installs nothing), checkouts without
-  credentials, the build lock hashed, the updater and the build agree on asset names.
+  comment, only the publish job can write, only the sign job reads the release key (and installs nothing), only the
+  authenticode job can sign in to Azure (and runs nothing from PyPI, never the program), the downloads are tested
+  after they're signed, a `-signtest` tag publishes nothing, checkouts without credentials, the build lock hashed,
+  the updater and the build agree on asset names.
 - GUI tests that need worker threads drain `app._ui_jobs` themselves (`tests/test_gui_updates.py`).
 - CI's `package` job builds the installer and zip on every push and runs the three PowerShell tests against them.
   The `linux-app` job runs `main.py --self-test` under Xvfb, a headless probe, `pipx install .`,
@@ -180,12 +185,28 @@ site-packages enabled; `py -3.12` matches the release build). Linux needs
 2. `python -m pytest`, commit, push `main`, wait for CI (including the `package` job).
 3. `git tag -a vX.Y.Z -m "PingerPlot X.Y.Z"` and `git push origin vX.Y.Z`.
 
-`release.yml`: the read-only `windows` job checks the tag and the version, installs the hash-pinned build lock, runs
-the suite, builds (`build_windows.py`), smoke-tests the GUI (`--version`), runs `test_portable.ps1`,
-`test_installer.ps1` and `test_update.ps1`, and uploads Setup.exe, the zip and `SHA256SUMS.txt`. The `sign` job holds
-`UPDATE_SIGNING_KEY`, installs nothing, signs `latest.json` with the runner's `python3 -I` and verifies it against the
-app's public key. The `publish` job (the only one with `contents: write`, running only SHA-pinned actions and `gh`)
-creates the release from `release-notes/<tag>.md` and uploads the files, `latest.json` last.
+`release.yml`, five jobs:
+- `windows` (read-only, no secrets): checks the tag and the version, installs the hash-pinned build lock, runs the
+  suite, freezes the program folder (`build_windows.py --program`), smoke-tests the GUI (`--version`) and uploads the
+  folder.
+- `authenticode`: code-signs both exes as James Cupps through Azure Artifact Signing (Slate's account `SlateAccount`,
+  profile `Slate`; `packaging/authenticode.ps1`), then makes the zip and the installer around them
+  (`build_windows.py --package --sign`; Inno Setup's SignTool signs the uninstaller and Setup.exe). It runs in the
+  `release` environment (v* tags only) with `id-token: write`: `azure/login` trades GitHub's OIDC token for an Azure
+  sign-in, so nothing secret is stored; the `AZURE_CLIENT_ID`/`AZURE_TENANT_ID`/`AZURE_SUBSCRIPTION_ID` secrets name
+  the app registration ("Slate signing"), whose federated credential trusts
+  `repo:jamesccupps/PingerPlot:environment:release` (this repo sends the classic subject format; checked 2026-11-09).
+  Nothing from PyPI runs there and the program is never run. Four signatures a release.
+- `verify` (read-only): `test_portable.ps1`, `test_installer.ps1` (both with `-Publisher 'CN=James Cupps, O=James
+  Cupps'`: every exe, the installed uninstaller too, signed and timestamped) and `test_update.ps1`, on the signed files.
+- `sign`: holds `UPDATE_SIGNING_KEY`, installs nothing, signs `latest.json` with the runner's `python3 -I` and verifies
+  it against the app's public key.
+- `publish` (the only one with `contents: write`, running only SHA-pinned actions and `gh`): creates the release from
+  `release-notes/<tag>.md` and uploads the files, `latest.json` last.
+
+A tag `vX.Y.Z-signtest.N` (X.Y.Z = the version in the source) runs the first three and publishes nothing: for trying
+a signing change. Delete the tag afterwards (`git push origin :refs/tags/<tag>`). The signature check's results are
+annotations (`::notice title=Signature::`), readable without signing in through the check-runs API.
 Dependabot proposes newer action pins and lock entries monthly; check each lock hash against PyPI's published
 digests before taking it.
 

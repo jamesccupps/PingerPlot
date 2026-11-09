@@ -59,6 +59,13 @@ MinVersion=10.0
 ; The app's own wait below handles a running copy; the Restart Manager would
 ; only add a prompt.
 CloseApplications=no
+#ifdef Sign
+; build_windows.py --package --sign defines Sign and the authenticode sign
+; tool (packaging/authenticode.ps1): the uninstaller and Setup.exe are signed
+; as they are made. The program's exes were signed before this ran.
+SignTool=authenticode
+SignedUninstaller=yes
+#endif
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

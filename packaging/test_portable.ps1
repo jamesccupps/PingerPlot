@@ -2,8 +2,10 @@
 # (its settings stay beside it, never in %APPDATA%), run the app's self-test
 # there, and have the headless runner probe loopback.
 #
-#   pwsh packaging/test_portable.ps1 [-Zip dist\PingerPlot-win64.zip]
-param([string]$Zip = "dist\PingerPlot-win64.zip")
+# With -Publisher (the release), both exes must also be signed by that publisher.
+#
+#   pwsh packaging/test_portable.ps1 [-Zip dist\PingerPlot-win64.zip] [-Publisher 'CN=..., O=...']
+param([string]$Zip = "dist\PingerPlot-win64.zip", [string]$Publisher = '')
 $ErrorActionPreference = 'Stop'
 
 $root = Join-Path ([IO.Path]::GetTempPath()) "pingerplot-portable-$PID"
@@ -11,6 +13,10 @@ Expand-Archive $Zip -DestinationPath $root -Force
 $dir = Join-Path $root 'PingerPlot'
 foreach ($f in 'PingerPlot.exe', 'pingerplot-headless.exe', 'portable.txt', 'LICENSE', 'THIRD-PARTY-NOTICES.md') {
     if (-not (Test-Path (Join-Path $dir $f))) { throw "the zip has no PingerPlot\$f" }
+}
+if ($Publisher) {
+    & (Join-Path $PSScriptRoot 'check_signatures.ps1') -Publisher $Publisher `
+        -Path (Join-Path $dir 'PingerPlot.exe'), (Join-Path $dir 'pingerplot-headless.exe')
 }
 
 $out = & (Join-Path $dir 'pingerplot-headless.exe') --version | Out-String

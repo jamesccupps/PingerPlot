@@ -195,6 +195,90 @@ def test_the_release_publishes_what_the_build_makes():
         "latest.json must go up after the files it names"
 
 
+def _record_build(bw, monkeypatch, tmp_path):
+    """build_windows with every stage replaced by a note of its running."""
+    dist = tmp_path / "dist"
+    app = dist / "PingerPlot"
+    monkeypatch.setattr(bw, "DIST", dist)
+    monkeypatch.setattr(bw, "APP_DIR", app)
+    order = []
+
+    def freeze():
+        order.append("pyinstaller")
+        app.mkdir(parents=True)
+        for exe in bw.EXES:
+            (app / exe).write_bytes(b"MZ")
+
+    monkeypatch.setattr(bw, "version_resource", lambda: order.append("version"))
+    monkeypatch.setattr(bw, "icon", lambda: order.append("icon"))
+    monkeypatch.setattr(bw, "pyinstaller", freeze)
+    monkeypatch.setattr(bw, "authenticode", lambda p: order.append(("sign", p.name)))
+    monkeypatch.setattr(bw, "portable_zip", lambda: order.append("zip"))
+    monkeypatch.setattr(bw, "installer", lambda sign=False: order.append(("installer", sign)))
+    monkeypatch.setattr(bw, "checksums", lambda: order.append("sums"))
+    monkeypatch.setattr(bw, "manifest", lambda: order.append("manifest"))
+    return order, app
+
+
+def test_the_build_runs_whole_or_in_the_release_jobs_two_halves(tmp_path, monkeypatch):
+    bw = _build_windows()
+    order, app = _record_build(bw, monkeypatch, tmp_path)
+    bw.main([])
+    assert order == ["version", "icon", "pyinstaller", "zip", ("installer", False), "sums", "manifest"]
+
+    order.clear()
+    bw.main(["--program"])
+    assert order == ["version", "icon", "pyinstaller"]
+
+    order.clear()
+    stale = tmp_path / "dist" / bw.PORTABLE_NAME
+    stale.write_bytes(b"from an earlier run")
+    bw.main(["--package", "--sign"])
+    assert order == ["icon", ("sign", "PingerPlot.exe"), ("sign", "pingerplot-headless.exe"),
+                     "zip", ("installer", True), "sums", "manifest"], \
+        "the exes must be signed before the zip and the installer pack them"
+    assert not stale.exists(), "--package must not leave an earlier run's download"
+    assert all((app / exe).is_file() for exe in bw.EXES), "--package keeps the program folder"
+
+
+def test_the_build_refuses_what_it_cant_do_before_touching_anything(tmp_path, monkeypatch):
+    bw = _build_windows()
+    order, _app = _record_build(bw, monkeypatch, tmp_path)
+    for argv in (["--sign"], ["--program", "--sign"], ["--package", "--sign", "--no-installer"],
+                 ["--program", "--package"], ["--bogus"]):
+        with pytest.raises(SystemExit):
+            bw.main(argv)
+    with pytest.raises(SystemExit, match="needs the program folder"):
+        bw.main(["--package"])
+    assert order == [] and not (tmp_path / "dist").exists()
+
+
+def test_a_signed_installer_has_inno_setup_sign_the_uninstaller_and_setup(monkeypatch):
+    """Inno Setup makes the uninstaller while it compiles, so only its own
+    SignTool can sign it. The command reaches ISCC through its command line,
+    which doesn't undo the \\" Python would write for a literal quote: hence
+    Inno's $q."""
+    bw = _build_windows()
+    calls = []
+    monkeypatch.setattr(bw, "find_iscc", lambda: "ISCC.exe")
+    monkeypatch.setattr(bw.subprocess, "run", lambda args, **kw: calls.append(args))
+    bw.installer(sign=True)
+    tool = [a for a in calls[0] if a.startswith("/S")]
+    assert tool == [f"/Sauthenticode=pwsh -NoProfile -NonInteractive -File $q{bw.AUTHENTICODE}$q $f"]
+    assert "/DSign" in calls[0] and '"' not in tool[0]
+    iss = ISS.read_text(encoding="utf-8")
+    block = iss[iss.index("#ifdef Sign"):iss.index("#endif", iss.index("#ifdef Sign"))]
+    assert "SignTool=authenticode" in block and "SignedUninstaller=yes" in block
+
+    calls.clear()
+    bw.installer(sign=False)
+    assert not [a for a in calls[0] if a.startswith(("/S", "/DSign"))], "an unsigned build signs nothing"
+
+    monkeypatch.setattr(bw, "find_iscc", lambda: None)
+    with pytest.raises(SystemExit):
+        bw.installer(sign=True)
+
+
 def test_ci_builds_and_tests_the_release_files_on_every_push():
     ci = (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     job = ci[ci.index("\n  package:"):]
@@ -205,14 +289,24 @@ def test_ci_builds_and_tests_the_release_files_on_every_push():
 
 def test_the_release_workflow_verifies_before_it_uploads():
     """An unverified upload is how a broken binary reaches people; one the
-    previous version can't update to is how it stops reaching them."""
+    previous version can't update to is how it stops reaching them. The tests
+    run on the signed files, the ones that are published: signing rewrites
+    every exe, and Inno Setup runs again to sign the uninstaller."""
     wf = (REPO / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
-    smoke_gui = wf.index("Smoke-test the frozen GUI")
-    smoke_cli = wf.index("Smoke-test the frozen headless")
-    update = wf.index("./packaging/test_update.ps1")
-    upload = wf.index("Attach to the release")
-    assert smoke_gui < upload and smoke_cli < upload
-    assert update < wf.index("\n  sign:"), "the update test belongs to the build job"
+    jobs = _jobs(wf)
+    assert "Smoke-test the frozen GUI" in jobs["windows"]
+    verify = jobs["verify"]
+    assert "needs: [windows, authenticode]" in verify
+    assert "name: pingerplot-windows-${{ needs.windows.outputs.tag }}" in verify, \
+        "verify must test the signed downloads the publish job uploads"
+    for step in ("./packaging/test_portable.ps1 -Publisher $env:PUBLISHER",
+                 "./packaging/test_installer.ps1 -Setup dist\\PingerPlot-Setup.exe -Version $v"
+                 " -Publisher $env:PUBLISHER",
+                 "./packaging/test_update.ps1"):
+        assert step in verify, f"the verify job doesn't run {step}"
+    assert 'PUBLISHER: "CN=James Cupps, O=James Cupps"' in verify
+    assert "needs: [windows, verify]" in jobs["sign"], \
+        "the manifest must not be signed for files that failed their tests"
 
 
 def test_the_update_test_never_uses_the_release_key():
@@ -239,7 +333,8 @@ def test_the_workflow_checks_the_gui_exit_code_correctly():
 
 
 def test_the_workflow_publishes_checksums():
-    """The binaries are unsigned, so a hash is the only integrity story."""
+    """Something to compare a download with that doesn't depend on Windows'
+    view of the signature."""
     wf = (REPO / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
     assert "SHA256SUMS.txt" in wf
     assert "SHA256" in wf
@@ -414,6 +509,41 @@ def test_the_tag_guard_rejects_a_newline_as_well_as_a_bad_shape(tmp_path):
                 "v1.3.1 --clobber"):
         assert _run(bad).returncode != 0, f"accepted {bad!r}"
 
+    # A -signtest tag is marked as one, so nothing gets published; a release
+    # tag never is.
+    for tag, signtest in (("v1.4.3-signtest.1", "true"), ("v1.4.3", "false")):
+        sink.write_text("")
+        assert _run(tag).returncode == 0
+        assert sink.read_text().splitlines() == [f"name={tag}", f"signtest={signtest}"]
+
+
+def test_a_signtest_tag_is_built_signed_and_tested_but_never_published():
+    """A tag like v1.4.3-signtest.1 is for trying a change to signing: the
+    version check accepts the version in the source plus the suffix, and the
+    two jobs that would publish (the manifest and the release) don't run."""
+    bash = shutil.which("bash")
+    if not bash:
+        pytest.skip("no bash to run the extracted check")
+    wf = (REPO / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    jobs = _jobs(wf)
+    for name in ("sign", "publish"):
+        assert "if: needs.windows.outputs.signtest != 'true'" in jobs[name], name
+    import re
+    for name in ("windows", "authenticode", "verify"):
+        assert not re.search(r"^    if:", jobs[name], re.M), f"{name} must run for a signing test too"
+
+    step = wf[wf.index("- name: Check the tag matches the version"):wf.index("- name: Test the source")]
+    (_ln, body), = _run_blocks(step)
+    script = textwrap.dedent(body.partition("\n")[2])
+    line = 'v=$(python -c "from pingerplot import __version__; print(__version__)")'
+    assert line in script
+    script = script.replace(line, "v=1.4.3")      # pure bash from here, no Python needed
+    for tag, ok in (("v1.4.3", True), ("v1.4.3-signtest.1", True), ("v1.4.4", False),
+                    ("v1.4.4-signtest.1", False), ("v1.4.3-rc.1", False), ("v1.4.33", False)):
+        rc = subprocess.run([bash, "-c", script], env={**os.environ, "TAG": tag},
+                            capture_output=True, text=True, timeout=30).returncode
+        assert (rc == 0) == ok, f"{tag}: exit {rc}"
+
 
 # --- rules 3-5: no third-party code beside the write token ---------------------
 
@@ -428,17 +558,21 @@ def _jobs(text):
 
 def test_the_job_finder_finds_the_release_jobs():
     jobs = _jobs((REPO / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8"))
-    assert set(jobs) == {"windows", "sign", "publish"}
+    assert set(jobs) == {"windows", "authenticode", "verify", "sign", "publish"}
 
 
 def test_only_the_sign_job_sees_the_signing_key():
     """The key that every installed copy trusts is worth more than the write
-    token: it never shares a job with anything installed from PyPI."""
+    token: it never shares a job with anything installed from PyPI. The only
+    other secrets are the Azure IDs, in the authenticode job."""
+    import re
     wf = (REPO / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
     jobs = _jobs(wf)
+    allowed = {"sign": {"UPDATE_SIGNING_KEY"},
+               "authenticode": {"AZURE_CLIENT_ID", "AZURE_TENANT_ID", "AZURE_SUBSCRIPTION_ID"}}
     for name, job in jobs.items():
-        if name != "sign":
-            assert "secrets." not in job, f"job {name!r} reads a secret"
+        read = set(re.findall(r"secrets\.([A-Za-z0-9_]+)", job))
+        assert read <= allowed.get(name, set()), f"job {name!r} reads {sorted(read)}"
     sign = "\n".join(ln for ln in jobs["sign"].splitlines() if not ln.strip().startswith("#"))
     assert "UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}" in sign
     assert "contents: read" in sign and "contents: write" not in sign
@@ -452,7 +586,47 @@ def test_only_the_sign_job_sees_the_signing_key():
 
 def test_publishing_waits_for_the_signature():
     jobs = _jobs((REPO / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8"))
-    assert "needs: [windows, sign]" in jobs["publish"]
+    assert "needs: [windows, authenticode, verify, sign]" in jobs["publish"]
+
+
+def test_the_authenticode_job_runs_nothing_from_pypi_and_never_runs_the_program():
+    """It can sign anything as James Cupps, which is worth as much as the
+    release key: a compromised build dependency must never run beside it. So
+    it gets the program folder the build job froze, signs the two exes
+    without running them, and makes the zip and the installer with the
+    standard library and Inno Setup."""
+    wf = (REPO / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    jobs = _jobs(wf)
+    job = "\n".join(ln for ln in jobs["authenticode"].splitlines() if not ln.strip().startswith("#"))
+    assert "environment: release" in job
+    assert "id-token: write" in job and "contents: read" in job and "contents: write" not in job
+    assert "needs: windows" in job
+    for forbidden in ("pip ", "pytest", "PyInstaller", "requirements-build", "choco ",
+                      "test_portable", "test_installer", "test_update", "--self-test",
+                      "--version", "PingerPlot.exe"):
+        assert forbidden not in job, f"the authenticode job runs {forbidden.strip()}"
+    assert "uses: azure/login@" in job
+    assert "Install-Module -Name ArtifactSigning -RequiredVersion 0.1.8" in job
+    assert "python -I packaging/build_windows.py --package --sign" in job
+    assert "name: pingerplot-program-${{ needs.windows.outputs.tag }}" in job
+    assert job.index("build_windows.py --package --sign") < job.index("upload-artifact")
+    ps1 = (REPO / "packaging" / "authenticode.ps1").read_text(encoding="utf-8")
+    assert "Import-Module ArtifactSigning -RequiredVersion 0.1.8" in ps1, \
+        "the script and the workflow must agree on the module version"
+
+
+def test_only_the_authenticode_job_can_sign_in_to_azure():
+    """Azure trusts the release environment's OIDC token. No other job asks
+    for one or runs in that environment."""
+    jobs = _jobs((REPO / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8"))
+    for name, job in jobs.items():
+        if name != "authenticode":
+            assert "id-token" not in job and "environment:" not in job, name
+    for wf in WORKFLOWS:
+        if wf.name != "release.yml":
+            text = wf.read_text(encoding="utf-8")
+            assert "id-token: write" not in text or wf.name == "pages.yml", wf.name
+            assert "azure/login" not in text, wf.name
 
 
 def test_only_a_job_that_runs_no_third_party_code_can_write():

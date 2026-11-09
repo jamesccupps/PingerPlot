@@ -4,6 +4,17 @@ All notable changes to PingerPlot are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Security
+
+- **The Windows downloads are code-signed by James Cupps** (Azure Artifact
+  Signing, timestamped): `PingerPlot.exe` and `pingerplot-headless.exe` in both
+  downloads, the installer and the uninstaller. The release workflow signs in a
+  job of its own that runs nothing from PyPI and never runs the program, then
+  tests the signed files (every signature checked, the installed uninstaller's
+  too) before the update manifest is signed and anything is published.
+
 ## [1.4.3] — 2026-11-06
 
 Fixes from an external review (2026-11-05), each checked against the code

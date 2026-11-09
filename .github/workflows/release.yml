@@ -4,7 +4,14 @@ name: Release binaries
 # with latest.json, the signed manifest the in-app updater reads.
 #
 # Runs on a tag push, and can be dispatched by hand against a tag that already
-# exists (which is how v1.3.0 got its binaries after the fact).
+# exists (which is how v1.3.0 got its binaries after the fact). A dispatched
+# run can only sign when it runs from the tag ("Use workflow from"): the
+# release environment the authenticode job needs admits v* tags only.
+#
+# A tag ending in -signtest (e.g. v1.4.3-signtest.1, the version in the source
+# plus the suffix) runs the same build, signing and tests and publishes
+# nothing: for trying a change to signing without a release. Delete the tag
+# afterwards.
 #
 # The binaries are built here rather than on somebody's laptop so that what
 # people download is reproducible from a commit, and so the verification below
@@ -20,11 +27,13 @@ name: Release binaries
 #      through `env:` instead, where bash reads them as data.
 #   2. Actions are pinned by commit SHA, not by tag. Tags are mutable; a
 #      retagged or compromised action would otherwise run with that token.
-#   3. Third-party code never runs next to the write token or the signing
-#      key. The build job -- which installs PyInstaller and pytest and
-#      executes them -- is read-only and has no secrets; the sign job, which
-#      installs nothing, holds the release-signing key; only the publish job,
-#      which runs nothing but gh, can write.
+#   3. Third-party code never runs next to the write token or a signing
+#      identity. The build job -- which installs PyInstaller and pytest and
+#      executes them -- is read-only and has no secrets; the authenticode job,
+#      which can sign as James Cupps, runs nothing from PyPI and never runs
+#      the program; the sign job, which installs nothing, holds the
+#      release-signing key; only the publish job, which runs nothing but gh,
+#      can write.
 #   4. Build tooling is pinned by version and hash (packaging/
 #      requirements-build.txt), not "whatever PyPI serves today".
 #   5. The checkout steps do not leave the job token in .git/config
@@ -49,12 +58,13 @@ permissions:
 
 jobs:
   windows:
-    name: Windows executables
+    name: Freeze the program
     runs-on: windows-latest
     permissions:
       contents: read
     outputs:
       tag: ${{ steps.tag.outputs.name }}
+      signtest: ${{ steps.tag.outputs.signtest }}
 
     steps:
       - name: Work out which tag we are building
@@ -84,7 +94,12 @@ jobs:
             *) echo "::error::refusing to build '$TAG': expected a tag like v1.3.1"
                exit 1 ;;
           esac
+          case "$TAG" in
+            *-signtest*) signtest=true ;;
+            *) signtest=false ;;
+          esac
           echo "name=$TAG" >> "$GITHUB_OUTPUT"
+          echo "signtest=$signtest" >> "$GITHUB_OUTPUT"
 
       # Pinned by commit SHA, not tag: tags are mutable. Dependabot updates
       # these and the trailing comment says which version each SHA is.
@@ -127,29 +142,25 @@ jobs:
           TAG: ${{ steps.tag.outputs.name }}
         run: |
           v=$(python -c "from pingerplot import __version__; print(__version__)")
-          if [ "v$v" != "$TAG" ]; then
-            echo "::error::$TAG does not match pingerplot.__version__ ($v)"
-            exit 1
-          fi
+          case "$TAG" in
+            "v$v") ;;
+            "v$v-signtest"*)
+              echo "::notice::$TAG is a signing test of $v: built, signed and tested, never published" ;;
+            *)
+              echo "::error::$TAG does not match pingerplot.__version__ ($v)"
+              exit 1 ;;
+          esac
 
       - name: Test the source before freezing it
         # Freezing a broken tree just produces a broken binary more slowly.
         run: python -m pytest -q -rs
 
-      - name: Make sure Inno Setup is there
-        # The Windows runner image carries Inno Setup 6. If a new image ever
-        # drops it, install it rather than publish a release with no installer.
-        shell: pwsh
-        run: |
-          if (-not (Get-Command iscc -ErrorAction SilentlyContinue) -and -not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
-            choco install innosetup --no-progress -y
-          }
-
-      - name: Build the program folder, the portable zip and the installer
-        # build_windows.py draws the icon (from the same code as the in-app
-        # one), writes the version resource, runs PyInstaller, then makes the
-        # zip, Setup.exe and SHA256SUMS.txt.
-        run: python packaging/build_windows.py
+      - name: Freeze the program folder
+        # build_windows.py --program draws the icon (from the same code as the
+        # in-app one), writes the version resource and runs PyInstaller. The
+        # zip and the installer are made around the signed exes, in the
+        # authenticode job.
+        run: python packaging/build_windows.py --program
 
       - name: Smoke-test the frozen GUI binary
         # --version exits before Tk is created, so this runs without a display
@@ -167,19 +178,134 @@ jobs:
           if ($p.ExitCode -ne 0) { throw "frozen GUI exited $($p.ExitCode)" }
           Write-Host "GUI binary import graph OK"
 
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: pingerplot-program-${{ steps.tag.outputs.name }}
+          path: dist/PingerPlot
+          if-no-files-found: error
+
+  authenticode:
+    # PingerPlot.exe and pingerplot-headless.exe, the uninstaller and
+    # Setup.exe signed by James Cupps: Azure Artifact Signing, the account and
+    # certificate profile Slate and NoteForge sign with. Azure accepts GitHub's
+    # OIDC token for it only from this repository's "release" environment
+    # (subject repo:jamesccupps/PingerPlot:environment:release), and the
+    # environment only v* tags, so no password or key is stored anywhere; the
+    # AZURE_* secrets just say which app registration ("Slate signing").
+    #
+    # What runs here: GitHub's and Microsoft's actions (pinned), Microsoft's
+    # ArtifactSigning module (pinned version), Inno Setup from the runner image
+    # and this tag's packaging code, which is standard library. Nothing from
+    # PyPI, and the program is never run: it is signed as the windows job froze
+    # it, and the zip and the installer are made around it
+    # (build_windows.py --package --sign).
+    name: Sign the programs and make the downloads
+    needs: windows
+    runs-on: windows-latest
+    environment: release
+    permissions:
+      contents: read
+      id-token: write   # the OIDC token Azure signs in with
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ needs.windows.outputs.tag }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: pingerplot-program-${{ needs.windows.outputs.tag }}
+          path: dist/PingerPlot
+
+      - name: Inno Setup is on the runner
+        # The Windows runner image carries Inno Setup 6. Not installed here if
+        # it's gone (CI's package job does that): this job can sign.
+        shell: pwsh
+        run: |
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue) -and -not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            throw "Inno Setup 6 isn't on the runner image any more"
+          }
+
+      - name: Sign in to Azure (OIDC)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906  # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # The version packaging/authenticode.ps1 imports
+      - name: Install the ArtifactSigning module
+        shell: pwsh
+        run: Install-Module -Name ArtifactSigning -RequiredVersion 0.1.8 -Repository PSGallery -Scope CurrentUser -Force
+
+      - name: Sign the exes, then make the zip and the installer around them
+        # The exes are signed first, so the zip and Setup.exe carry signed
+        # copies; Inno Setup signs the uninstaller and Setup.exe as it makes
+        # them; the checksums (and later latest.json) are of the signed files.
+        run: python -I packaging/build_windows.py --package --sign
+
+      - name: Checksums
+        # Published alongside the downloads, so a reader can compare a file
+        # with the release's own list.
+        shell: pwsh
+        run: Get-Content dist\SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: pingerplot-windows-${{ needs.windows.outputs.tag }}
+          path: |
+            dist/PingerPlot-Setup.exe
+            dist/PingerPlot-win64.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+
+  verify:
+    # The downloads exactly as they'll be published: every exe in them signed
+    # by James Cupps and timestamped, and the signed programs still working.
+    name: Test the signed downloads
+    needs: [windows, authenticode]
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    env:
+      PUBLISHER: "CN=James Cupps, O=James Cupps"
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ needs.windows.outputs.tag }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: pingerplot-windows-${{ needs.windows.outputs.tag }}
+          path: dist
+
       - name: Smoke-test the frozen headless binary, from the portable zip
         # The zip as people will download it: unzipped to a scratch folder, its
-        # GUI's --self-test (builds the window, round-trips settings in its
-        # own folder, probes loopback, makes the tray icons) and a real ICMP
-        # probe of loopback through the frozen headless runner.
+        # exes' signatures, its GUI's --self-test (builds the window,
+        # round-trips settings in its own folder, probes loopback, makes the
+        # tray icons) and a real ICMP probe of loopback through the frozen
+        # headless runner.
         shell: pwsh
-        run: ./packaging/test_portable.ps1
+        run: ./packaging/test_portable.ps1 -Publisher $env:PUBLISHER
 
       - name: Install, self-test and uninstall the installer
+        # Setup.exe's signature and those of every exe it installs, the
+        # uninstaller too, before it runs them.
         shell: pwsh
-        env:
-          TAG: ${{ steps.tag.outputs.name }}
-        run: ./packaging/test_installer.ps1 -Setup dist\PingerPlot-Setup.exe -Version ($env:TAG.TrimStart('v'))
+        run: |
+          $v = python -c "from pingerplot import __version__; print(__version__)"
+          ./packaging/test_installer.ps1 -Setup dist\PingerPlot-Setup.exe -Version $v -Publisher $env:PUBLISHER
 
       - name: Update an older copy to these files
         # These exact files, signed for the test with a throwaway key (never
@@ -191,20 +317,6 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: ./packaging/test_update.ps1
 
-      - name: Checksums
-        # Published alongside the downloads: they are unsigned, so a SHA256 a
-        # reader can compare is the only integrity story on offer.
-        shell: pwsh
-        run: Get-Content dist\SHA256SUMS.txt
-
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
-        with:
-          name: pingerplot-windows-${{ steps.tag.outputs.name }}
-          path: |
-            dist/PingerPlot-Setup.exe
-            dist/PingerPlot-win64.zip
-            dist/SHA256SUMS.txt
-
   sign:
     # latest.json: the manifest installed copies update from, signed with the
     # release key (the UPDATE_SIGNING_KEY secret). Its own job, for the same
@@ -214,7 +326,8 @@ jobs:
     # standard library only, and checks the result against the public key
     # built into the app before anything is published.
     name: Sign the update manifest
-    needs: windows
+    needs: [windows, verify]
+    if: needs.windows.outputs.signtest != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -275,7 +388,8 @@ jobs:
     # shares a job with pip, PyInstaller or the test suite. This job runs
     # only actions pinned by SHA and gh, which is preinstalled on the runner.
     name: Attach to the release
-    needs: [windows, sign]
+    needs: [windows, authenticode, verify, sign]
+    if: needs.windows.outputs.signtest != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write   # creating a release and uploading its assets
