@@ -38,8 +38,9 @@ when the destination degrades, and needs no administrator rights for ICMP.
   with Windows* puts it there when you sign in.
 - **Keeps a record.** Every probe to a size-capped CSV per target, sessions you can save, reopen and compare with
   a later run, and a CSV export of the hop table.
-- **Signed updates.** It checks GitHub once a day and installs a new version with one click, only if the download
-  carries the release signature built into the app.
+- **Signed downloads and updates.** From 1.4.4 the installer and the programs are code-signed by James Cupps. It
+  checks GitHub once a day and installs a new version with one click, only if the download carries the release
+  signature built into the app.
 - **A headless runner** for a server or Task Scheduler, with a one-shot report mode for tickets.
 - **Looks at home on Windows 11**, light or dark, following Windows, sharp at any display scale. Pure Python
   standard library, no third-party dependencies.
@@ -53,8 +54,8 @@ and run it.
 - It installs for your Windows user only, with no admin prompt, into `%LOCALAPPDATA%\Programs\PingerPlot`.
 - It adds a Start menu shortcut (and a desktop one if you tick it) and appears in **Settings → Apps** for
   uninstalling.
-- The app isn't code-signed, so Windows may show *Windows protected your PC* the first time: click **More info**,
-  then **Run anyway**. Each release lists the SHA-256 of every file in `SHA256SUMS.txt`.
+- From 1.4.4 the installer and the app are code-signed by **James Cupps**. If SmartScreen still warns about a new
+  release, **More info** shows that publisher. Each release lists the SHA-256 of every file in `SHA256SUMS.txt`.
 
 **Portable:** download
 [`PingerPlot-win64.zip`](https://github.com/jamesccupps/PingerPlot/releases/latest/download/PingerPlot-win64.zip)
@@ -69,11 +70,11 @@ which it can't write to.
 `PingerPlot.vbs` (no console window). See [Running from source](#running-from-source) for shortcuts and an elevated
 logon task.
 
-> **About the unsigned download.** Some antivirus engines flag PyInstaller programs heuristically, and this one
-> is a worse-than-average case: it calls into `iphlpapi` through `ctypes`, can open raw capture sockets and maps
-> network paths, which is a fair description of both a diagnostic tool and something you wouldn't want running
-> unasked. The files are built by CI from the tagged commit and tested before they're published. If you'd rather
-> not run an unsigned program at all, run it from source: it's the same program.
+> **About antivirus warnings.** Some antivirus engines flag PyInstaller programs heuristically, and this one is a
+> worse-than-average case: it calls into `iphlpapi` through `ctypes`, can open raw capture sockets and maps network
+> paths, which is a fair description of both a diagnostic tool and something you wouldn't want running unasked. The
+> files are built by CI from the tagged commit, signed, and tested before they're published (releases up to 1.4.3
+> were unsigned). If you'd rather not run a downloaded program at all, run it from source: it's the same program.
 
 ### Linux
 
@@ -400,7 +401,7 @@ session if you want the probes logged.
 | A target shows "Cannot resolve" | DNS for that name failed. The window doesn't retry by itself: **⋯ → Start** on its card once the network is up. (The headless runner retries.) |
 | No notification for an alert | **Settings → Show a notification for alerts**, then Windows' *Settings → System → Notifications* for PingerPlot, and Do not disturb. |
 | The window is gone | It's in the notification area: click the tray icon. Starting PingerPlot again also brings it back. |
-| "Windows protected your PC" | **More info → Run anyway**. The app isn't code-signed. |
+| "Windows protected your PC" | **More info** should show the publisher, James Cupps (1.4.4 and later), then **Run anyway**. 1.4.3 and earlier weren't code-signed. |
 | "The probe log couldn't roll over" in Events | The CSV is open in another program, usually Excel. It keeps appending and tries again a minute later. |
 | The update didn't install | Details are in `update.log` in the settings folder. The previous version keeps running; the release page always has the full installer. |
 | "ICMP backend unavailable" on Linux | `sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"` (see [Platform](#platform)). |

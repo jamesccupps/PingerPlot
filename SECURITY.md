@@ -18,9 +18,10 @@ Once it's fixed, the release notes say what was fixed (and who found it, if you'
 
 ## What's covered
 
-- `PingerPlot.exe`, `pingerplot-headless.exe` and `SHA256SUMS.txt` from the
+- `PingerPlot-Setup.exe`, `PingerPlot-win64.zip` and `SHA256SUMS.txt` from the
   [releases](https://github.com/jamesccupps/PingerPlot/releases), built by this repository's GitHub Actions
-  workflow from the tagged commit, with build tools pinned by hash;
+  workflow from the tagged commit, with build tools pinned by hash. From 1.4.4 every exe in them is code-signed by
+  James Cupps (Azure Artifact Signing); a missing or wrong signature in a current release is in scope;
 - what the app does with data from outside it: ICMP, TCP and UDP replies (parsed from raw bytes), reverse-DNS names
   (shown, and written to CSV with formula injection defused), session files and headless configs (every field
   type-checked), geolocation replies from ipwho.is, and webhook addresses (never logged or shown in full);
