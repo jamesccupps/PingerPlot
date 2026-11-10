@@ -177,11 +177,35 @@ def is_elevated() -> bool:
     return bool(geteuid) and geteuid() == 0
 
 
+def _frozen_exe() -> Path:
+    """This copy's exe, by the path that outlives an update.
+
+    Scoop installs each version in apps\\pingerplot\\<version> and points a
+    ``current`` junction at the newest. resolve() follows the junction, so the
+    Run key used to name the version folder: after ``scoop update`` sign-in
+    started the old version, and after ``scoop cleanup`` nothing. So a
+    ``current`` link beside this copy's folder, leading to a sibling version
+    folder that holds the same exe, is the path to keep. Sibling, not only
+    this folder: the in-app updater writes the new version into the folder
+    it ran from, which Scoop has since moved ``current`` away from."""
+    exe = Path(sys.executable).resolve()
+    apps = exe.parent.parent
+    current = apps / "current"
+    try:
+        target = current.resolve()
+        # (apps is resolved, so current resolves elsewhere only if it's a link)
+        if target != current and target.parent == apps and (target / exe.name).is_file():
+            return current / exe.name
+    except OSError:
+        pass
+    return exe
+
+
 def autostart_command() -> str:
     """What the Run key should hold to start this copy at sign-in: in the
     notification area, resuming the last session's targets."""
     if getattr(sys, "frozen", False):
-        return f'"{Path(sys.executable).resolve()}" --minimized'
+        return f'"{_frozen_exe()}" --minimized'
     pyw = Path(sys.executable).with_name("pythonw.exe")
     interp = pyw if pyw.exists() else Path(sys.executable)
     script = Path(__file__).resolve().parent.parent / "main.py"

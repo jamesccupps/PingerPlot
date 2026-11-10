@@ -4,6 +4,16 @@ All notable changes to PingerPlot are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **Start with Windows on a Scoop install** named the version folder
+  (`apps\pingerplot\1.4.4`), not Scoop's `current` link: after `scoop update`
+  sign-in started the old version, and after `scoop cleanup` nothing. It now
+  names `current`, and a copy turned on in 1.4.4 moves to it the first time the
+  fixed version starts.
+
 ## [1.4.4] — 2026-11-09
 
 Signed downloads. No other changes from 1.4.3.
