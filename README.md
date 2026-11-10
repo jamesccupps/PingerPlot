@@ -63,6 +63,16 @@ and unzip it somewhere of your own, e.g. a USB stick or `%LOCALAPPDATA%\Programs
 folder (that's what the `portable.txt` beside it does), and updates itself in place. Avoid `C:\Program Files`,
 which it can't write to.
 
+**Install with Scoop:** if you use [Scoop](https://scoop.sh) (its site has the one-line install if you don't):
+
+```powershell
+scoop bucket add jamesccupps https://github.com/jamesccupps/scoop-bucket
+scoop install jamesccupps/pingerplot
+```
+
+It installs the portable zip with a Start menu shortcut, keeps its settings in `%APPDATA%\PingerPlot`, and puts
+`pingerplot-headless` on your PATH. `scoop update pingerplot` updates it.
+
 **Linux:** see [Linux](#linux) below: one `pipx` command.
 
 **From source** (Windows, Linux, macOS): Python 3.10 or newer, nothing to `pip install`.
@@ -416,6 +426,8 @@ session if you want the probes logged.
   the settings too. Start with Windows is a registry entry, not a file in the folder, so deleting the folder first
   leaves Windows trying to start a missing program at every sign-in. If that happened, delete the `PingerPlot` value
   under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
+- **Scoop:** turn off **Start with Windows** first, then `scoop uninstall pingerplot`. Your settings stay in
+  `%APPDATA%\PingerPlot`.
 - **From source:** turn off Start with Windows, then delete the clone and `%APPDATA%\PingerPlot`. If an older copy set
   up the elevated logon task, `.\launch.ps1 -UninstallAutostart` removes it.
 - **Linux:** turn off **Show in the applications menu** and **Start when you sign in** in Settings (that removes both

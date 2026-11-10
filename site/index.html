@@ -67,6 +67,13 @@
   .btn small { font-weight: 400; opacity: .75; font-size: 13px; }
   .sub { color: #b0d6c8; font-size: 14px; margin-top: 12px; }
   .sub a { color: #d9f0e6; }
+  .scoop { margin-top: 18px; }
+  .scoop p { color: #b0d6c8; font-size: 14px; margin: 0 0 6px; }
+  .scoop a { color: #d9f0e6; }
+  .scoop .cmds { padding: 10px 14px; border-radius: 8px; background: rgba(0,0,0,.3); border: 1px solid rgba(255,255,255,.14); }
+  /* One command a line; a long one wraps with a hanging indent, so the URL reads as part of it. */
+  .scoop code { display: block; background: none; color: #e5f3ec; padding: 0 0 0 2ch; text-indent: -2ch;
+                font: 13.5px/1.6 Consolas, "DejaVu Sans Mono", monospace; }
   .demo { margin: 0; }
   .demo img { width: 100%; height: auto; display: block; border-radius: 8px; box-shadow: 0 18px 50px rgba(0,0,0,.45); }
   .demo figcaption { color: #8caaa0; font-size: 13px; margin-top: 10px; }
@@ -107,6 +114,10 @@
         <a class="btn" id="primary" href="https://github.com/jamesccupps/PingerPlot/releases/latest/download/PingerPlot-Setup.exe">Download for Windows <small id="primary-note">PingerPlot-Setup.exe</small></a>
         <a class="btn ghost" href="https://github.com/jamesccupps/PingerPlot/releases/latest/download/PingerPlot-win64.zip">Portable zip</a>
         <a class="btn ghost" href="https://github.com/jamesccupps/PingerPlot">Source on GitHub</a>
+      </div>
+      <div class="scoop">
+        <p>Or with <a href="https://scoop.sh">Scoop</a>:</p>
+        <div class="cmds"><code>scoop bucket add jamesccupps https://github.com/jamesccupps/scoop-bucket</code><code>scoop install jamesccupps/pingerplot</code></div>
       </div>
       <p class="sub"><span id="version">Free and open source (MIT).</span> Windows 10 and 11 (64-bit); <a href="https://github.com/jamesccupps/PingerPlot#linux">Linux</a> with pipx. <a href="https://github.com/jamesccupps/PingerPlot/releases">All releases</a></p>
     </div>
