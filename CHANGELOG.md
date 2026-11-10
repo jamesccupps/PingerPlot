@@ -4,7 +4,16 @@ All notable changes to PingerPlot are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.4.5] — 2026-11-10
+
+PingerPlot is in a Scoop bucket, and Start with Windows works with it.
+
+### Added
+
+- **Install with Scoop**: `scoop bucket add jamesccupps
+  https://github.com/jamesccupps/scoop-bucket`, then `scoop install
+  jamesccupps/pingerplot` (in the README and on the website). The bucket
+  follows each release by itself.
 
 ### Fixed
 
@@ -607,6 +616,8 @@ have relied on — see **Changed** before comparing old exports with new ones.
 
 - Initial public release.
 
+[1.4.5]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.4.5
+[1.4.4]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.4.4
 [1.4.3]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.4.3
 [1.4.2]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.4.2
 [1.4.1]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.4.1
