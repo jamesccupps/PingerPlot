@@ -210,6 +210,23 @@ annotations (`::notice title=Signature::`), readable without signing in through 
 Dependabot proposes newer action pins and lock entries monthly; check each lock hash against PyPI's published
 digests before taking it.
 
+### Scoop and winget read the release files
+
+`bucket/pingerplot.json` in [jamesccupps/scoop-bucket](https://github.com/jamesccupps/scoop-bucket) updates itself
+from each GitHub release (checked every 4 hours), so a release needs no Scoop work as long as these hold:
+- Tag releases `vX.Y.Z` and publish them as the latest release, not a pre-release (`publish` does; a `-signtest` tag
+  publishes nothing).
+- Keep the release file names and the zip's layout unchanged. The bucket downloads `PingerPlot-win64.zip`, takes its
+  `PingerPlot\` folder, makes a shortcut to `PingerPlot\PingerPlot.exe`, shims `PingerPlot\pingerplot-headless.exe`
+  and deletes `portable.txt` (so a Scoop copy is install kind `folder`, with its settings in `%APPDATA%`).
+- Keep publishing `SHA256SUMS.txt` beside them: the bucket takes the zip's hash from it.
+- Sign files before publishing (`authenticode` runs before `verify` and `publish`). Never replace a file on a release
+  that's already out: Scoop and winget have recorded its hash. Fix a bad file with a new version. `publish` uploads
+  with `--clobber`, so never re-run the release workflow for a tag whose release is out: a rebuild carries new
+  signature timestamps, and so a new hash.
+- If a file name or the zip layout must change, update `bucket/pingerplot.json` in jamesccupps/scoop-bucket in the
+  same change.
+
 ## Working on this repo from Claude Code
 
 - The repository's description, topics, the Pages source (GitHub Actions) and the social preview
