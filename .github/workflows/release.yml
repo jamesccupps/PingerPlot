@@ -443,8 +443,35 @@ jobs:
           # latest.json goes up last: installed copies read it the moment it
           # appears, and the files it names must already be there.
           if [ -f dist/latest.json ]; then files+=(dist/latest.json); fi
+          # A file already on the release is never replaced: Scoop's bucket and
+          # winget recorded its hash, and copies may have downloaded it. The
+          # same bytes (this job re-run on the same build) are skipped; other
+          # bytes (a rebuild: new signature timestamps) stop the job before
+          # anything is uploaded. A bad file is fixed with a new version.
+          # (Into a variable first: under -e a failed lookup then stops the job,
+          # where a failed process substitution would read as "no files".)
+          assets=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" \
+                     --jq '.assets[] | [.name, (.digest // "")] | @tsv')
+          declare -A have=()
+          while IFS=$'\t' read -r name digest; do
+            if [ -n "$name" ]; then have[$name]=$digest; fi
+          done <<< "$assets"
+          todo=()
           for f in "${files[@]}"; do
-            gh release upload "$TAG" "$f" --clobber
+            name=$(basename "$f")
+            if [ -z "${have[$name]+set}" ]; then todo+=("$f"); continue; fi
+            want="sha256:$(sha256sum "$f" | cut -d' ' -f1)"
+            if [ "${have[$name]}" = "$want" ]; then
+              echo "$name is already on $TAG, the same file."
+            else
+              echo "::error title=Published file::$name is already on $TAG with other contents" \
+                   "(${have[$name]:-no digest}; this build: $want). Published files are never" \
+                   "replaced: fix it with a new version."
+              exit 1
+            fi
+          done
+          for f in "${todo[@]}"; do
+            gh release upload "$TAG" "$f"
           done
           echo "Attached to $TAG:"
           gh release view "$TAG" --json assets --jq '.assets[] | "  \(.name)  \(.size) bytes"'

@@ -13,6 +13,10 @@ All notable changes to PingerPlot are recorded here. The format follows
   sign-in started the old version, and after `scoop cleanup` nothing. It now
   names `current`, and a copy turned on in 1.4.4 moves to it the first time the
   fixed version starts.
+- The release job could replace files on a published release (it uploaded with
+  `--clobber`), and a rebuild's new signatures would then break the hash Scoop
+  and winget recorded. It now skips a file that's already there unchanged and
+  stops, uploading nothing, if one differs.
 
 ## [1.4.4] — 2026-11-09
 

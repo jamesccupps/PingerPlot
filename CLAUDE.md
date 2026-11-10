@@ -221,9 +221,10 @@ from each GitHub release (checked every 4 hours), so a release needs no Scoop wo
   and deletes `portable.txt` (so a Scoop copy is install kind `folder`, with its settings in `%APPDATA%`).
 - Keep publishing `SHA256SUMS.txt` beside them: the bucket takes the zip's hash from it.
 - Sign files before publishing (`authenticode` runs before `verify` and `publish`). Never replace a file on a release
-  that's already out: Scoop and winget have recorded its hash. Fix a bad file with a new version. `publish` uploads
-  with `--clobber`, so never re-run the release workflow for a tag whose release is out: a rebuild carries new
-  signature timestamps, and so a new hash.
+  that's already out: Scoop and winget have recorded its hash. Fix a bad file with a new version. `publish` enforces
+  it: a file already on the release with the same digest is skipped (re-running `publish` after a partial upload is
+  safe), one with a different digest stops the job before anything is uploaded. A rebuild of a published tag always
+  differs (new signature timestamps), so re-running the whole workflow for one fails there by design.
 - If a file name or the zip layout must change, update `bucket/pingerplot.json` in jamesccupps/scoop-bucket in the
   same change.
 

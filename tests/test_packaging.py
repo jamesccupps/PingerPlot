@@ -193,6 +193,113 @@ def test_the_release_publishes_what_the_build_makes():
     code = "\n".join(ln for ln in attach.splitlines() if not ln.strip().startswith("#"))
     assert code.index("files+=(dist/latest.json)") > code.index("dist/SHA256SUMS.txt"), \
         "latest.json must go up after the files it names"
+    assert "--clobber" not in code, "a published file must never be replaced"
+
+
+_FAKE_GH = """#!/bin/bash
+# Stands in for gh: the release exists, its files are in $GH_ASSETS (name TAB
+# digest per line, as the step's --jq prints them), uploads go to $GH_LOG.
+case "$1 $2" in
+  "release view") exit 0 ;;
+  "release upload") echo "$(basename "$4") ${*:5}" >> "$GH_LOG"; exit 0 ;;
+  "release create") echo "create" >> "$GH_LOG"; exit 0 ;;
+esac
+if [ "$1" = api ]; then
+  [ -n "$GH_API_FAILS" ] && exit 1
+  cat "$GH_ASSETS"; exit 0
+fi
+exit 2
+"""
+
+_DIST = {"PingerPlot-Setup.exe": b"setup", "PingerPlot-win64.zip": b"zip",
+         "SHA256SUMS.txt": b"sums", "latest.json": b"{}"}
+
+
+def _digest(data):
+    import hashlib
+    return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+@pytest.fixture
+def attach_step(tmp_path):
+    """The workflow's "Attach to the release" script, run as GitHub runs it
+    (bash -eo pipefail) against a fake gh, in a folder with dist/ built."""
+    bash = shutil.which("bash")
+    if not bash:
+        pytest.skip("no bash to run the extracted step")
+    wf = (REPO / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    step = wf[wf.index("- name: Attach to the release"):]
+    blocks = _run_blocks(step)
+    head, _nl, rest = blocks[0][1].partition("\n")
+    assert head.strip() == "|"
+    script = textwrap.dedent(rest)
+    assert "gh release upload" in script, "extracted the wrong thing"
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "gh").write_bytes(_FAKE_GH.encode())
+    (bin_dir / "gh").chmod(0o755)
+    work = tmp_path / "work"
+    (work / "dist").mkdir(parents=True)
+    for name, data in _DIST.items():
+        (work / "dist" / name).write_bytes(data)
+    assets, log = tmp_path / "assets.tsv", tmp_path / "gh.log"
+
+    def run(on_release, api_fails=False):
+        # Bytes: write_text would end lines with CRLF on Windows, and gh on the
+        # runner prints LF.
+        assets.write_bytes("".join(f"{n}\t{d}\n" for n, d in on_release.items()).encode())
+        log.write_text("")
+        env = {**os.environ, "TAG": "v9.9.9", "GITHUB_REPOSITORY": "owner/repo",
+               "GH_ASSETS": str(assets), "GH_LOG": str(log),
+               "PATH": str(bin_dir) + os.pathsep + os.environ.get("PATH", "")}
+        if api_fails:
+            env["GH_API_FAILS"] = "1"
+        p = subprocess.run([bash, "-eo", "pipefail", "-c", script], cwd=work, env=env,
+                           capture_output=True, text=True, timeout=60)
+        uploads = [ln.split()[0] for ln in log.read_text().splitlines() if ln != "create"]
+        return p, uploads, log.read_text()
+
+    return run
+
+
+def test_a_new_release_gets_every_file_manifest_last(attach_step):
+    p, uploads, log = attach_step({})
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert uploads == list(_DIST), "every file, latest.json last"
+    assert "--clobber" not in log
+
+
+def test_a_rerun_on_the_same_build_uploads_only_whats_missing(attach_step):
+    """Re-running publish after it failed part way: the files already up are
+    the same bytes, so they're left alone and the rest go up."""
+    done = {n: _digest(_DIST[n]) for n in ("PingerPlot-Setup.exe", "PingerPlot-win64.zip")}
+    p, uploads, _ = attach_step(done)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert uploads == ["SHA256SUMS.txt", "latest.json"]
+    p, uploads, _ = attach_step({n: _digest(d) for n, d in _DIST.items()})
+    assert p.returncode == 0 and uploads == []
+
+
+@pytest.mark.parametrize("old_digest", [_digest(b"an earlier build"), ""])
+def test_a_published_file_is_never_replaced(attach_step, old_digest):
+    """A rebuild of a published tag (new signature timestamps, so new bytes)
+    stops before uploading anything: Scoop and winget recorded the old hash.
+    A file with no digest on record can't be shown to match, so it stops too."""
+    on_release = {n: _digest(d) for n, d in _DIST.items()}
+    on_release["PingerPlot-win64.zip"] = old_digest
+    del on_release["latest.json"]
+    p, uploads, _ = attach_step(on_release)
+    assert p.returncode != 0
+    assert uploads == [], "nothing may go up once a published file differs"
+    assert "never replaced" in p.stdout
+
+
+def test_a_failed_lookup_stops_the_job(attach_step):
+    """If the release's files can't be listed, nothing is uploaded as if the
+    release were empty."""
+    p, uploads, _ = attach_step({}, api_fails=True)
+    assert p.returncode != 0 and uploads == []
 
 
 def _record_build(bw, monkeypatch, tmp_path):
