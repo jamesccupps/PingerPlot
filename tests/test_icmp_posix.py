@@ -178,7 +178,7 @@ def test_a_control_message_without_an_offender_still_decodes():
 def test_the_offender_address_is_read_from_the_right_offset():
     """sin_addr sits 4 bytes into the sockaddr_in, which starts 16 bytes into
     the control message. Off by four and every hop reports 0.0.0.0 or garbage."""
-    for ip in ("1.2.3.4", "255.254.253.252", "10.20.0.1"):
+    for ip in ("1.2.3.4", "255.254.253.252", "198.51.100.7"):
         assert icmp_posix.parse_errqueue(
             _sock_extended_err(ICMP_TIME_EXCEEDED, 0, ip))[2] == ip
 

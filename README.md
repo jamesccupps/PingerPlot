@@ -150,7 +150,7 @@ CI starts the app on Ubuntu on every push: the window's self-test, a probe of lo
   updates.
 - **⋯** at the top right: export the hop table as CSV, save a session, open one, compare with a saved one, check
   for updates, report a problem.
-- The tray icon is grey when nothing is monitored and gets a red badge while a target is alerting. Click it to open
+- The tray icon is gray when nothing is monitored and gets a red badge while a target is alerting. Click it to open
   the window; right-click for *Stop all*, *Start with Windows* and *Quit*.
 
 ## Reading the results
