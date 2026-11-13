@@ -39,32 +39,33 @@ then goes stale. Step 3 brings in the releases only, and keeps them coming.
 Continuous traceroute: per-hop loss, latency, jitter and MOS over time
 ```
 
-**Full Description** (1,000 characters, SourceForge's limit; this is 962):
+**Full Description** (1,000 characters, SourceForge's limit, each line break counting as two; this is 974, as live since 1.5.0):
 
 ```
-PingerPlot shows where along a network path a connection goes wrong. Like mtr or WinMTR, it finds every router between you and a target and keeps probing all of them, so loss, latency, jitter and a voice-quality score (MOS) build up per hop over minutes or days. A problem shows up at the hop where it starts and every hop after it.
+PingerPlot shows where along a network path a connection goes wrong. Like mtr or WinMTR, it finds every router between you and a target and keeps probing all of them, so loss, latency, jitter and a voice-quality score (MOS) build up per hop. It shows where each router is and whose network it's on, and where on the path the delay is added and loss begins.
 
-Alerts judge the destination only, so a router that deprioritises ICMP never false-alarms: a banner, a desktop notification, a sound and an optional webhook (Slack, Teams, ntfy, Home Assistant). Route changes are caught within a round, and a map places the public hops.
+Everything is recorded on your PC: every probe and the router that answered it, alerts, reroutes and DNS moves. A History page shows any hour of the last year: which route was slow, which router dropped probes.
 
-ICMP needs no admin rights; TCP, UDP and DSCP marking are there too. Sessions save, reopen and compare, and a headless runner monitors from a server. Windows: installer or portable zip with signed updates. Linux: pipx.
+Alerts judge the destination only, so a router that deprioritizes ICMP never false-alarms: a banner, a notification, a sound and a webhook (Slack, Teams, ntfy, Home Assistant). ICMP needs no admin rights; TCP, UDP and DSCP too.
 
-Read-only: it never changes anything on the network. Pure Python, no dependencies, MIT. Source: https://github.com/jamesccupps/PingerPlot
+Windows: code-signed installer or portable zip with signed updates, or Scoop. Linux: pipx. Read-only, pure Python, MIT. Source: https://github.com/jamesccupps/PingerPlot
 ```
 
-**Features** (Admin → Features, if the project shows that page; one per line):
+**Features** (the Features rows on Admin → Metadata; a new row appears only when you type in the last one):
 
 ```
 Continuous traceroute: every hop's loss, latency, jitter and MOS over time
-Alerts on the destination only: banner, Windows notification, sound, webhook
-Route-change detection, live
-Timeline of every hop on one time axis; world map of the public hops
+Everything recorded; a History page for any hour of the last year
+Reroutes reported once, load balancing told apart, DNS moves followed
+Where each router is and whose network it's on; where the trouble starts
+Alerts on the destination only: banner, notification, sound, webhook
+Timeline of every hop on one time axis; a map of the path
 ICMP without administrator rights; TCP and UDP probes; DSCP marking
 Many targets at once, each with its own settings
-Probe log to CSV, saved sessions, and comparison with an earlier run
-Runs in the notification area; Start with Windows
-Signed one-click in-app updates
+CSV export of any range, saved sessions, comparison with an earlier run
+Code-signed downloads and signed one-click in-app updates
 Headless runner and one-shot reports for servers and Task Scheduler
-Installer (no admin) or portable zip; light and dark themes that follow Windows
+Installer (no admin), portable zip or Scoop; runs in the notification area
 ```
 
 **Categories** (Admin → Categorization; pick the nearest SourceForge offers):
@@ -80,16 +81,17 @@ Installer (no admin) or portable zip; light and dark themes that follow Windows
 | Development Status | 5 - Production/Stable |
 | Translations | English |
 
-**Screenshots** (Admin → Screenshots). Upload from `site/images/`, with these captions:
+**Screenshots** (Admin → Screenshots; SourceForge allows 6, and offers the upload form only below that). Upload
+from `site/images/`, with these captions:
 
 | File | Caption |
 |---|---|
-| `hops-dark.png` | A target alerting: the hop table shows the trouble starting at hop 4 and carrying through to the destination |
+| `hops-dark.png` | A target alerting: each router's location and network, and the trouble starting at hop 4 |
+| `history-light.png` | History: any hour of the last year; the detour through route 2 was slower and lost probes |
+| `map-dark.png` | The path on a map, with where the delay is added and where loss begins |
 | `timeline-dark.png` | Timeline: every hop on one time axis |
-| `hops-light.png` | The light theme |
-| `events-light.png` | Events: route changes and alerts as they happen |
-| `map-dark.png` | Map: the path's public hops |
-| `settings-dark.png` | Settings: defaults for new targets, every option described |
+| `events-light.png` | Events: reroutes, alerts raised and cleared |
+| `settings-dark.png` | Settings: defaults for new targets, recording, every option described |
 
 They come from the app's demo mode (simulated paths, documentation addresses only), never a real network.
 
