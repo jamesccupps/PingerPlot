@@ -251,3 +251,67 @@ def test_recording_keeps_up_with_a_busy_monitor(tmp_path):
     elapsed = time.perf_counter() - start
     rec.close()
     assert elapsed < 15, f"9,000 probes took {elapsed:.1f} s"
+
+
+# --- links, clearing, size ----------------------------------------------------
+
+def _link_dir(link, target):
+    """A junction on Windows (no privilege needed), a symlink elsewhere."""
+    import os
+    import subprocess
+    import sys
+    if sys.platform == "win32":
+        subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)],
+                       check=True, capture_output=True)
+    else:
+        os.symlink(target, link, target_is_directory=True)
+
+
+def test_a_linked_history_folder_is_refused(tmp_path):
+    """Run as administrator, writing through a link planted by any program
+    running as the user would create files wherever it points."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    link = tmp_path / "history"
+    _link_dir(link, elsewhere)
+    try:
+        rec = Recorder(link, clock=Clock()).start()
+        rec.event(None, T0, "info", "x")
+        rec.flush(timeout=5)
+        rec.close()
+        assert "link" in rec.problem and "won't write" in rec.problem
+        assert list(elsewhere.iterdir()) == [], "nothing was written through the link"
+    finally:
+        import os
+        os.rmdir(link) if os.name == "nt" else link.unlink()
+
+
+def test_clearing_empties_the_history_but_running_targets_keep_recording(tmp_path):
+    clock = Clock()
+    rec = _rec(tmp_path, clock)
+    old = rec.begin_run("old", "icmp", None, {})
+    rec.probe(old, T0, 1, 1, ROUTER, 5.0, 0)
+    rec.end_run(old)
+    live = rec.begin_run("live", "icmp", None, {})
+    rec.route(live, T0, [[ROUTER], [DEST]])
+    rec.probe(live, T0, 1, 1, ROUTER, 5.0, 0)
+    rec.event(live, T0, "info", "before")
+    rec.clear()
+    rec.probe(live, T0 + 1, 2, 1, ROUTER, 6.0, 0)
+    rec.event(live, T0 + 1, "info", "after")
+    rec.end_run(live)
+    rec.close()
+    r = Reader(tmp_path)
+    assert [row["target"] for row in r.runs()] == ["live"]
+    assert [e["text"] for e in r.events()] == ["after"]
+    assert [p["t"] for p in r.probes("live", 0, T0 + 10)] == [T0 + 1]
+    assert len(r.segments("live")) == 1, "the route it's on survives"
+
+
+def test_disk_bytes_counts_the_file_and_its_log(tmp_path):
+    assert history.disk_bytes(tmp_path) == 0
+    rec = _rec(tmp_path)
+    rec.event(None, T0, "info", "x")
+    rec.flush()
+    assert history.disk_bytes(tmp_path) > 0
+    rec.close()

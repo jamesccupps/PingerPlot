@@ -36,6 +36,7 @@ import json
 import os
 import queue
 import sqlite3
+import stat
 import threading
 import time
 from pathlib import Path
@@ -155,6 +156,30 @@ def default_dir() -> Path:
     return settings.config_dir() / "history"
 
 
+def _is_link(path: Path) -> bool:
+    """A symlink, or on Windows any reparse point (a junction too, which
+    os.path.islink misses before Python 3.12)."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    if stat.S_ISLNK(st.st_mode):
+        return True
+    return bool(getattr(st, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
+
+
+def disk_bytes(folder: Optional[os.PathLike] = None) -> int:
+    """What the history takes on disk, its write-ahead log included."""
+    base = (Path(folder) if folder is not None else default_dir()) / DB_NAME
+    total = 0
+    for suffix in ("", "-wal", "-shm"):
+        try:
+            total += os.stat(str(base) + suffix).st_size
+        except OSError:
+            pass
+    return total
+
+
 def open_recorder(saved: dict, program: str) -> Optional["Recorder"]:
     """The recorder the GUI or headless runner should use, from its saved
     settings' ``recording`` section, or None when recording is turned off."""
@@ -267,6 +292,12 @@ class Recorder:
         if run is not None and self.options["routes"]:
             self._q.put(("route", run, t, [list(h) for h in hops]))
 
+    def clear(self) -> None:
+        """Delete everything recorded (the file stays, empty). Runs in
+        progress carry on into the emptied history."""
+        if self._thread is not None and not self._closed:
+            self._q.put(("clear",))
+
     def end_run(self, run: Optional[int]) -> None:
         if run is not None:
             self._q.put(("end", run, self._clock()))
@@ -278,6 +309,15 @@ class Recorder:
         except OSError as exc:
             self._report(f"History recording is off: can't create {self.folder} ({exc})")
             return None
+        # Never write through a link. Run as administrator (which full TCP/UDP
+        # traceroute needs), PingerPlot would otherwise create and rewrite
+        # files wherever a link that any program running as you can plant
+        # here points: the reason the elevated app ignores a saved log path.
+        for path in (self.folder, self.path):
+            if _is_link(path):
+                self._report(f"History recording is off: {path} is a link or junction, "
+                             f"and PingerPlot won't write through one")
+                return None
         for attempt in (1, 2):
             try:
                 db = sqlite3.connect(self.path, timeout=10, isolation_level=None,
@@ -288,6 +328,9 @@ class Recorder:
                 # auto_vacuum only takes effect on a database with no tables
                 # yet, which is exactly when it's needed: retention deletes
                 # then give pages back instead of the file only ever growing.
+                # A database file is data, not code: no schema-defined
+                # function with side effects may run on our behalf.
+                db.execute("PRAGMA trusted_schema = OFF")
                 db.execute("PRAGMA auto_vacuum = INCREMENTAL")
                 db.execute("PRAGMA journal_mode = WAL")
                 db.execute("PRAGMA synchronous = NORMAL")
@@ -471,6 +514,19 @@ class Recorder:
                 for item in batch:
                     if item[0] == "close":
                         closing = True
+                    elif item[0] == "clear":
+                        # Everything goes except what keeps runs in progress
+                        # recording: their run rows and the route each is on.
+                        active = tuple(run_ids.values()) or (-1,)
+                        marks = ",".join("?" * len(active))
+                        for table in ("probes", "minutes", "events"):
+                            db.execute(f"DELETE FROM {table}")
+                        db.execute(f"DELETE FROM segments WHERE end IS NOT NULL "
+                                   f"OR run NOT IN ({marks})", active)
+                        db.execute("DELETE FROM routes WHERE id NOT IN (SELECT route FROM segments)")
+                        db.execute(f"DELETE FROM runs WHERE id NOT IN ({marks})", active)
+                        minutes.clear()
+                        last_rtt.clear()
                     elif item[0] == "flush":
                         waiting.append(item[1])
                     else:
