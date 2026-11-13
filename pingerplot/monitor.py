@@ -24,6 +24,7 @@ Threading model:
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import math
 import os
@@ -65,6 +66,10 @@ MAX_LOAD_HISTORY = 50_000  # cap a loaded session's per-hop ring buffer (DoS gua
 MAX_LOG_BYTES = 25 * 1024 * 1024  # roll the probe CSV past ~25 MB (one backup kept)
 LOG_ROTATE_RETRY_S = 60.0  # after a failed rollover, keep appending this long before retrying
 MAX_LOAD_HOPS = 1024       # cap hops loaded from a session file (defense-in-depth)
+# A hostname target is looked up again this often. Big services (Microsoft,
+# CDNs) move clients between front ends by DNS; without this a run kept
+# probing the address it started with and never saw the move.
+DNS_RECHECK_S = 300.0
 
 
 # start() keyword -> the attribute it lands in. One table, so saving a target's
@@ -114,6 +119,26 @@ def log_path_template(path: str, target: str) -> str:
     root, ext = os.path.splitext(path)
     suffix = _log_suffix(target)
     return f"{root[:-len(suffix)]}{ext}" if root.endswith(suffix) else path
+
+
+def _addresses_of(name: str) -> List[str]:
+    """Every IPv4 address ``name`` resolves to, in the resolver's order. The
+    whole set, not one: round-robin DNS rotates the order on every lookup,
+    and only an address leaving the set is a move."""
+    seen: List[str] = []
+    for info in socket.getaddrinfo(name, None, socket.AF_INET, socket.SOCK_STREAM):
+        addr = info[4][0]
+        if addr not in seen:
+            seen.append(addr)
+    return seen
+
+
+def _is_address(text: str) -> bool:
+    try:
+        ipaddress.ip_address(text)
+        return True
+    except ValueError:
+        return False
 
 
 def _build_payload(size: int) -> bytes:
@@ -186,6 +211,9 @@ class Monitor:
         # a load-balanced hop isn't reported at all (see routes.py).
         self._routes = RouteTracker()
         self._recorded_route: Optional[list] = None
+        self._dns_check = None          # the pending re-lookup (a Future), if any
+        self._dns_next = 0.0            # monotonic time of the next one
+        self._dns_failing = False
 
         # configuration (set on start)
         self.target_input = ""
@@ -358,6 +386,9 @@ class Monitor:
             self._hops = []
             self._routes = RouteTracker()
             self._recorded_route = None
+            self._dns_check = None
+            self._dns_next = time.monotonic() + DNS_RECHECK_S
+            self._dns_failing = False
             self._events.clear()
             self._active_alerts.clear()
             self._event_seq = 0
@@ -840,6 +871,9 @@ class Monitor:
                     self._notify()
                     self._interruptible_sleep(self.interval, gen)
                     continue
+                route_len = self._check_dns(route_len, gen)
+                if not self._alive(gen):
+                    break
                 route_len = self._probe_round(route_len, gen)
                 if not self._alive(gen):
                     break       # stopped or superseded mid-round: judge nothing
@@ -870,6 +904,70 @@ class Monitor:
             self.target_input, self.packet_type,
             None if self.packet_type == "icmp" else self.port, options)
         self._check_recorder()
+
+    # --- following the target's name -----------------------------------------
+    def _check_dns(self, route_len: int, gen: int) -> int:
+        """Every DNS_RECHECK_S, look a hostname target up again (on the DNS
+        pool, so a slow resolver never holds up a round) and follow it if the
+        address being probed is no longer one it resolves to."""
+        if _is_address(self.target_input) or self._dns_pool is None:
+            return route_len
+        fut = self._dns_check
+        if fut is None:
+            if time.monotonic() >= self._dns_next:
+                self._dns_check = self._dns_pool.submit(_addresses_of, self.target_input)
+            return route_len
+        if not fut.done():
+            return route_len
+        self._dns_check = None
+        self._dns_next = time.monotonic() + DNS_RECHECK_S
+        try:
+            addrs = fut.result()
+        except OSError as exc:
+            if not self._dns_failing:
+                self._dns_failing = True
+                self._log_event("warn", f"Can't look up {self.target_input} again "
+                                        f"({exc.strerror or exc}); still probing {self.target_ip}")
+            return route_len
+        if self._dns_failing:
+            self._dns_failing = False
+            self._log_event("info", f"{self.target_input} can be looked up again")
+        if not addrs or self.target_ip in addrs:
+            return route_len
+        return self._follow(addrs, gen)
+
+    def _follow(self, addrs: List[str], gen: int) -> int:
+        """The name moved: say so, start a new recorded run for the new
+        address, and trace the route to it from scratch."""
+        old, new = self.target_ip, addrs[0]
+        self._log_event("route", f"{self.target_input} now resolves to {', '.join(addrs)} "
+                                 f"(was {old}); following it to {new}")
+        # A run per destination, so every run in the history has one address.
+        self._end_recording(gen)
+        self._begin_recording(gen)
+        if self.recorder is not None:
+            self.recorder.set_target_ip(self._rec_runs.get(gen), new)
+        with self._lock:
+            if gen != self._generation:
+                return 0
+            self.target_ip = new
+            self._hops = []
+            self._routes = RouteTracker()
+            self._recorded_route = None
+            self.reached_target = False
+            self._unreached = 0
+            self.route_len = 0
+        self._retire_alerts(keep_ttl=None, reason=f"{self.target_input} moved to {new}")
+        if self.final_hop_only:
+            with self._lock:
+                self._ensure_hop(1)
+                self.route_len = 1
+            return 1
+        self._set_status(f"Tracing route to {self.target_input} [{new}]...", gen)
+        route_len = self._trace(gen)
+        # Nothing answered yet: keep probing every hop, and the round logic
+        # settles the length once the destination replies.
+        return route_len or self.max_hops
 
     def _record_route(self, route_len: int, gen: int) -> None:
         """Tell the history when the route differs from the one it has: the

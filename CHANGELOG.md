@@ -16,6 +16,21 @@ All notable changes to PingerPlot are recorded here. The format follows
   folder that can't be written) shows in the target's Events; it never stops
   the monitoring. A webhook URL is never written to it. A name that stops
   resolving is now an event too, so it's in the history.
+- **Route history.** Each distinct route to a target is recorded, with when it
+  was in use; a route that comes back is recognised as the same one.
+- **Following a name that moves.** A target given by name is looked up again
+  every 5 minutes. If the address being probed is no longer among its
+  answers (a service sending you to another front end, say), the move is an
+  event, and PingerPlot follows it: a fresh trace to the new address, and a
+  new run in the history. Round-robin DNS that merely rotates isn't a move.
+
+### Changed
+
+- **Reroutes are reported once, and load balancing isn't reported as one.**
+  A hop that alternates between routers used to log "path changed" every
+  round or two. A new router now has to hold the hop for 3 rounds to count as
+  a reroute (hops that move together are one event); one that takes turns
+  with the old router is noted once as load balancing.
 
 ## [1.4.6] — 2026-11-13
 
