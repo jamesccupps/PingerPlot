@@ -4,6 +4,19 @@ All notable changes to PingerPlot are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **History recording**, on by default: every run, every probe and the router
+  that answered it, per-minute summaries for each hop, and every event go into
+  one database in the settings folder (`history\history.sqlite3`), for the
+  window and the headless runner alike. Probes are kept 7 days, summaries and
+  events a year, 1 GB at most. Trouble with the file (damaged, a full disk, a
+  folder that can't be written) shows in the target's Events; it never stops
+  the monitoring. A webhook URL is never written to it. A name that stops
+  resolving is now an event too, so it's in the history.
+
 ## [1.4.6] — 2026-11-13
 
 TCP mode sends each probe once, and a too-short interval is explained.

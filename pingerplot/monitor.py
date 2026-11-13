@@ -43,7 +43,7 @@ try:
 except ImportError:  # pragma: no cover - non-Windows
     winsound = None  # type: ignore[assignment]
 
-from . import __version__, icmp, tcpudp
+from . import __version__, history, icmp, tcpudp
 from .model import (DEFAULT_HISTORY, Event, Hop, HopView, Sample, hop_from_session, mos,
                     mos_label, opt_str)
 
@@ -170,8 +170,17 @@ def _webhook_host(url: str) -> str:
 
 
 class Monitor:
-    def __init__(self, on_update: Optional[Callable[[], None]] = None) -> None:
+    def __init__(self, on_update: Optional[Callable[[], None]] = None,
+                 recorder: "Optional[history.Recorder]" = None) -> None:
         self.on_update = on_update
+        # The history database, shared by every target; None records nothing
+        # (a loaded session, the self-test, most tests).
+        self.recorder = recorder
+        # generation -> run handle. Per generation, not one slot: a worker
+        # that outlives stop() must still close its own run, after a new
+        # start() has already opened the next one.
+        self._rec_runs: Dict[int, Optional[int]] = {}
+        self._rec_problem_seen = 0
 
         # configuration (set on start)
         self.target_input = ""
@@ -685,6 +694,8 @@ class Monitor:
             ev = Event(self._event_seq, time.time(), kind, text)
             self._event_seq += 1
             self._events.append(ev)
+        if self.recorder is not None:
+            self.recorder.event(self._rec_runs.get(self._generation), ev.t, kind, text)
         if kind == "alert":
             self._beep()
         if kind in ("alert", "clear"):
@@ -730,11 +741,16 @@ class Monitor:
 
     def _run(self, gen: int) -> None:
         try:
+            self._begin_recording(gen)
             self._set_status(f"Resolving {self.target_input}...", gen)
             try:
                 ip = socket.gethostbyname(self.target_input)
             except OSError as exc:
-                self._set_status(f"Cannot resolve '{self.target_input}': {exc.strerror or exc}", gen)
+                why = f"Cannot resolve '{self.target_input}': {exc.strerror or exc}"
+                # An event as well as the status: a name that stopped
+                # resolving at 3 a.m. belongs in the history.
+                self._log_event("warn", why)
+                self._set_status(why, gen)
                 if gen == self._generation:
                     self.running = False
                 return
@@ -745,6 +761,8 @@ class Monitor:
                 if gen != self._generation:
                     return
                 self.target_ip = ip
+            if self.recorder is not None:
+                self.recorder.set_target_ip(self._rec_runs.get(gen), ip)
 
             if self.timeout_note:
                 # Timestamped in the Events tab rather than appended to the
@@ -819,6 +837,7 @@ class Monitor:
                 if not self._alive(gen):
                     break       # stopped or superseded mid-round: judge nothing
                 self._evaluate_alerts(route_len)
+                self._check_recorder()
                 self._set_status(self._monitor_status(route_len), gen)
                 self._notify()
                 self._interruptible_sleep(self.interval - (time.perf_counter() - t0), gen)
@@ -827,7 +846,35 @@ class Monitor:
         finally:
             if gen == self._generation:   # don't clobber a newer run's flag
                 self.running = False
+            self._end_recording(gen)
             self._notify()
+
+    # --- history -------------------------------------------------------------
+    def _begin_recording(self, gen: int) -> None:
+        if self.recorder is None:
+            return
+        options = self.start_options()
+        # Never into the history file: a webhook URL can carry a secret
+        # (Slack, Teams and ntfy put it in the path). Whether one was set is
+        # all an investigation needs.
+        options["webhook_url"] = bool(options.get("webhook_url"))
+        self._rec_runs[gen] = self.recorder.begin_run(
+            self.target_input, self.packet_type,
+            None if self.packet_type == "icmp" else self.port, options)
+        self._check_recorder()
+
+    def _end_recording(self, gen: int) -> None:
+        handle = self._rec_runs.pop(gen, None)
+        if self.recorder is not None and handle is not None:
+            self.recorder.end_run(handle)
+
+    def _check_recorder(self) -> None:
+        """Put a new recording problem (or its recovery) in this target's
+        Events, once."""
+        rec = self.recorder
+        if rec is not None and rec.problem_seq != self._rec_problem_seen:
+            self._rec_problem_seen = rec.problem_seq
+            self._log_event(rec.problem_kind, rec.problem)
 
     def _monitor_status(self, route_len: int) -> str:
         proto = self.packet_type.upper()
@@ -862,6 +909,9 @@ class Monitor:
             hop = self._ensure_hop(ttl)
             old = hop.address
             hop.record(r.rtt_ms, r.address, r.status)
+            handle = self._rec_runs.get(gen)
+        if self.recorder is not None:
+            self.recorder.probe(handle, time.time(), self._round, ttl, r.address, r.rtt_ms, r.status)
         self._log_probe(ttl, r)
         if r.reached:
             self.reached_target = True

@@ -22,7 +22,7 @@ import webbrowser
 from tkinter import filedialog, messagebox, ttk
 from typing import Dict, List, Optional
 
-from . import __version__, appicon, compare as cmpmod, geoip, icmp, settings
+from . import __version__, appicon, compare as cmpmod, geoip, history, icmp, settings
 from . import theme as themes, tkthreads, tray as traymod, updater, winplatform, xdg
 from .gui_charts import BAD_MS, WARN_MS, Ink, draw_graph, draw_map, draw_timeline, fmt_ms, row_tag
 from .gui_settings import REPO_URL, EditTargetDialog, OptionVars, SettingsPage
@@ -88,6 +88,8 @@ class App:
         self._note_until = 0.0
         self._cards: Dict[str, TargetCard] = {}
         self._settings = settings.load()             # persisted UI/engine/alert state
+        # Everything every target measures goes to one history database.
+        self.recorder = history.open_recorder(self._settings, "gui")
 
         self.scale = self._init_scaling()
         root.title("PingerPlot")
@@ -719,7 +721,7 @@ class App:
             str(options.get("log_path") or "").strip(), target)
 
         if mon is None:
-            mon = Monitor()
+            mon = Monitor(recorder=self.recorder)
             self._monitors[target] = mon
         mon.start(target, **options)
         self._notify_seq[target] = -1       # a restart numbers its events from 0 again
@@ -921,6 +923,8 @@ class App:
         for mon in mons:
             mon.shutdown()
         self._empty.shutdown()
+        if self.recorder is not None:
+            self.recorder.close()     # after the monitors: their last minutes too
         tkthreads.drain()
         self.root.destroy()
 

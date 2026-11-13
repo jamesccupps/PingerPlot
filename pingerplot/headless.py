@@ -23,7 +23,7 @@ import time
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
-from . import __version__, compare as _compare, icmp
+from . import __version__, compare as _compare, history, icmp
 from .model import csv_safe, mos, mos_label
 from .monitor import Monitor, per_target_log_path
 
@@ -175,7 +175,8 @@ def supervise(targets: List[Target], now: float,
         t.retry_at = now + t.retry_delay
 
 
-def _build_monitors(cfg: dict, base_dir: Path) -> List[Target]:
+def _build_monitors(cfg: dict, base_dir: Path,
+                    recorder: "Optional[history.Recorder]" = None) -> List[Target]:
     """Start a Monitor per configured target. Relative ``log_path``s resolve
     next to the config file (so it works regardless of the working directory).
     A malformed target is skipped with a warning rather than killing the run."""
@@ -221,7 +222,7 @@ def _build_monitors(cfg: dict, base_dir: Path) -> List[Target]:
                 # directory that did not exist failed to open and logged
                 # nothing -- which, until now, said nothing either.
                 os.makedirs(os.path.dirname(kwargs["log_path"]) or ".", exist_ok=True)
-            m = Monitor()
+            m = Monitor(recorder=recorder)
             m.start(target, **kwargs)
             targets.append(Target(target, m, kwargs))
         except (ValueError, TypeError, OSError) as exc:
@@ -305,6 +306,11 @@ def shutdown_all(targets: List[Target]) -> None:
         t.monitor.request_stop()
     for t in targets:
         t.monitor.shutdown()
+    # Then their shared history, so the last minutes they measured are saved.
+    recorders = {id(t.monitor.recorder): t.monitor.recorder for t in targets
+                 if t.monitor.recorder is not None}
+    for rec in recorders.values():
+        rec.close()
 
 
 def report_rows(monitor: Monitor) -> List[dict]:
@@ -576,9 +582,18 @@ def main(argv=None) -> int:
 
     print(f"PingerPlot {__version__} headless - starting "
           f"{len(cfg['targets'])} target(s). Ctrl-C to stop.")
-    targets = _build_monitors(cfg, cfg_path.resolve().parent)
+    # The same history database the window uses, so its History view shows
+    # what this runner recorded. A "recording" object in the config tunes it.
+    recorder = history.open_recorder(cfg, "headless")
+    if recorder is None:
+        print("History recording is off (\"recording\": {\"enabled\": false}).")
+    else:
+        print(f"Recording history to {recorder.path}")
+    targets = _build_monitors(cfg, cfg_path.resolve().parent, recorder)
     if not targets:
         print("No valid targets to monitor.", file=sys.stderr)
+        if recorder is not None:
+            recorder.close()
         return 1
     _warn_if_icmp_unusable(targets)
 
