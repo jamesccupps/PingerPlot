@@ -1613,6 +1613,9 @@ class App:
         for route in (entry[1] if entry else []):
             pts = []
             for addr, host in route:
+                # Routers only an earlier route used were never in the hop
+                # table, so nothing asked about them; the map needs them too.
+                self.geo.request(addr)
                 where = gui_hopinfo.locate(addr, host, self.geo)
                 if where is not None:
                     pts.append((where[0], where[1]))
