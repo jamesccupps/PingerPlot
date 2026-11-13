@@ -346,3 +346,24 @@ def test_an_older_file_gains_the_name_column(tmp_path):
         (7, "core1.lax1.example.net")
     db.close()
     assert rec.problem == ""
+
+
+def test_a_file_whose_tables_arent_made_yet_reads_as_empty(tmp_path):
+    """On a first run the History page can open the file in the moment
+    between the recorder creating it and creating its tables. That read
+    failed with "no such table: runs" (seen on CI's Linux runner)."""
+    from pingerplot import investigate
+    db = sqlite3.connect(tmp_path / history.DB_NAME)
+    db.execute("CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    db.execute("CREATE TABLE runs(id INTEGER PRIMARY KEY)")          # half-made
+    db.commit()
+    db.close()
+    r = Reader(tmp_path)
+    assert r.targets() == [] and r.events() == [] and r.runs() == []
+    assert investigate.series(r, "t", 0, 1e10) == [] and investigate.hops(r, "t", 0, 1e10) == []
+    # Once the recorder has made the rest, the same reader sees it.
+    rec = _rec(tmp_path)
+    rec.event(None, T0, "info", "now there are tables")
+    rec.close()
+    assert [e["text"] for e in r.events()] == ["now there are tables"]
+    r.close()

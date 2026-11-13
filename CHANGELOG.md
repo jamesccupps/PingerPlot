@@ -26,6 +26,9 @@ Restart as administrator from inside PingerPlot, for full TCP and UDP traceroute
 - **The Start menu shortcut did nothing visible while an elevated copy ran**:
   Windows dropped the "show your window" message from the ordinary process.
   The elevated copy now lets that one message through.
+- **On a first run, the History page could say "The history couldn't be
+  read: no such table"** if it opened in the moment before the history file
+  had its tables. It now reads as empty until they're there.
 
 ## [1.5.0] — 2026-11-13
 

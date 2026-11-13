@@ -674,9 +674,19 @@ class Reader:
                 return None
             # Not mode=ro: a read-only connection to a WAL database fails when
             # no writer has left its -shm file behind. query_only refuses writes.
-            self._db = sqlite3.connect(self.path, timeout=10, check_same_thread=False)
-            self._db.execute("PRAGMA query_only = ON")
-            self._db.row_factory = sqlite3.Row
+            db = sqlite3.connect(self.path, timeout=10, check_same_thread=False)
+            db.execute("PRAGMA query_only = ON")
+            # A recorder that has only just created the file may not have made
+            # its tables yet (a first run: the History page opens while the
+            # writer is still starting). Read that as empty and look again
+            # next time, rather than fail with "no such table". The last table
+            # the schema makes, so a half-made file counts as not made.
+            if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                              "AND name='segments'").fetchone():
+                db.close()
+                return None
+            db.row_factory = sqlite3.Row
+            self._db = db
         return self._db
 
     def close(self) -> None:
