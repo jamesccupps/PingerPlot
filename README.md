@@ -257,8 +257,20 @@ and which route each target was on, when. It goes into one SQLite database on th
   last second. A damaged file is set aside and a new one started; a full disk or a folder that can't be written is a
   warning in the target's Events. The webhook address is never written to it.
 
-A History view to browse and search it is next. Until then, any SQLite tool opens the file (tables `runs`,
-`probes`, `minutes`, `events`, `routes`, `segments`).
+**The History page** (next to Targets) shows what a target did over a span of time: the last hour to the last year,
+stepped back and forth with **Earlier** and **Later**, or opened from a target's right-click menu (**Show history**).
+
+- A chart of the destination's latency and loss, with the route in use drawn as a numbered colour band above it
+  and reroutes and alerts marked. Hovering reads out the moment under the pointer.
+- **Routes**: each route taken in the range, how long and what share of the time, and the destination's latency
+  and loss while on it, so the bad path stands out.
+- **Hops**: every router that answered at each hop and how it did, so "which router?" has an answer. Pick a hop
+  to graph it instead of the destination.
+- **Events**: alerts, reroutes, DNS moves, warnings and notes, filtered by kind and searched.
+- **Export…**: the range's events, minute summaries or every probe, as CSV.
+
+The file is plain SQLite (tables `runs`, `probes`, `minutes`, `events`, `routes`, `segments`), so any SQLite tool
+can open it too.
 
 ## Sessions, logs and comparing runs
 

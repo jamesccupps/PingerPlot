@@ -27,6 +27,7 @@ from . import __version__, appicon, compare as cmpmod, geoip, history, icmp, set
 from . import theme as themes, tkthreads, tray as traymod, updater, winplatform, xdg
 from . import gui_recording
 from .gui_charts import BAD_MS, WARN_MS, Ink, draw_graph, draw_map, draw_timeline, fmt_ms, row_tag
+from .gui_history import HistoryPage
 from .gui_settings import REPO_URL, EditTargetDialog, OptionVars, SettingsPage
 from .gui_updates import Updates
 from .gui_widgets import Nav, ScrollFrame, TargetCard, WheelScroll
@@ -270,7 +271,8 @@ class App:
             self.tree.tag_configure(t, background=p[t], foreground=p["fg"])
         for kind in ("alert", "clear", "route", "warn"):
             self.events_tree.tag_configure(kind, background=p[f"ev_{kind}"], foreground=p["fg"])
-        for sf in (self.cards_scroll, getattr(self, "settings_page", None)):
+        for sf in (self.cards_scroll, getattr(self, "settings_page", None),
+                   getattr(self, "history_page", None)):
             if sf is not None:
                 sf.recolor()
         self.header_icon.configure(image=self._header_icon_image())
@@ -302,8 +304,8 @@ class App:
 
         nav_row = ttk.Frame(self.root, padding=(S(24), 0, S(24), 0))
         nav_row.pack(side="top", fill="x")
-        self.nav = Nav(nav_row, self.look, [("targets", "Targets"), ("settings", "Settings")],
-                       self._show_page)
+        self.nav = Nav(nav_row, self.look, [("targets", "Targets"), ("history", "History"),
+                                            ("settings", "Settings")], self._show_page)
         self.nav.pack(side="left")
         self.nav.select("targets")
         ttk.Frame(self.root, style="Divider.TFrame", height=1).pack(side="top", fill="x")
@@ -315,6 +317,7 @@ class App:
         self.targets_page = ttk.Frame(self.pages)
         self.targets_page.pack(fill="both", expand=True)
         self.settings_page: Optional[SettingsPage] = None
+        self.history_page: Optional[HistoryPage] = None
         S = self.s
         split = ttk.Panedwindow(self.targets_page, orient="horizontal")
         split.pack(fill="both", expand=True)
@@ -326,17 +329,28 @@ class App:
         self._build_detail(right)
         self.root.bind_all("<Control-n>", lambda _e: self._focus_add())
 
-    def _show_page(self, key: str) -> None:
-        if key == "settings":
-            if self.settings_page is None:     # built on first use: it's long
-                self.settings_page = SettingsPage(self.pages, self)
-            self.targets_page.pack_forget()
-            self.settings_page.pack(fill="both", expand=True)
-        else:
-            if self.settings_page is not None:
-                self.settings_page.pack_forget()
-            self.targets_page.pack(fill="both", expand=True)
+    def _show_page(self, key: str, target: Optional[str] = None) -> None:
+        # The Settings and History pages are built on first use: both are long.
+        if key == "settings" and self.settings_page is None:
+            self.settings_page = SettingsPage(self.pages, self)
+        if key == "history" and self.history_page is None:
+            self.history_page = HistoryPage(self.pages, self)
+        pages = {"targets": self.targets_page, "settings": self.settings_page,
+                 "history": self.history_page}
+        for name, page in pages.items():
+            if page is not None and name != key:
+                page.pack_forget()
+        if self.history_page is not None and key != "history":
+            self.history_page.hide()
+        pages[key].pack(fill="both", expand=True)
+        if key == "history":
+            self.history_page.show(target or self._active)
+        elif key == "targets":
             self._draw_ver = None
+
+    def _show_history(self, name: str) -> None:
+        self.nav.select("history")
+        self._show_page("history", name)
 
     def _build_target_list(self, parent: ttk.Frame) -> None:
         S = self.s
@@ -860,6 +874,7 @@ class App:
         m = self._menu(self.root)
         if not loaded:
             m.add_command(label="Edit settings…", command=lambda: self._edit_target(name))
+            m.add_command(label="Show history", command=lambda: self._show_history(name))
             m.add_separator()
             if mon.running:
                 m.add_command(label="Resume" if mon.paused else "Pause",

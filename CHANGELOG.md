@@ -23,6 +23,12 @@ All notable changes to PingerPlot are recorded here. The format follows
   config.
 - **Route history.** Each distinct route to a target is recorded, with when it
   was in use; a route that comes back is recognised as the same one.
+- **A History page**: a target's latency and loss over the last hour to the
+  last year (stepped back and forth), with the route in use as a colour band
+  and reroutes and alerts marked; every route taken and how the destination
+  did on each; every router seen at each hop; events filtered and searched;
+  and CSV export of the range's events, minute summaries or probes. A
+  target's right-click menu has **Show history**.
 - **Following a name that moves.** A target given by name is looked up again
   every 5 minutes. If the address being probed is no longer among its
   answers (a service sending you to another front end, say), the move is an
