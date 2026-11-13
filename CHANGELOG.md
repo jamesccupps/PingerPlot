@@ -13,6 +13,10 @@ All notable changes to PingerPlot are recorded here. The format follows
   +1 s and +3 s) after the router had already answered; one silent hop holds a
   TCP round open for 3 s. A capture of three TCP targets counted 26 SYNs a
   second where 12 would do. A hop's socket now closes as soon as it answers.
+- **A probe interval shorter than the reply timeout did nothing, silently.**
+  A round waits for every hop, so a silent one holds it to the timeout; in TCP
+  mode that's at least 3 s, so "every 1 s" ran every 3 s. The Events tab now
+  says so when a target starts.
 
 ## [1.4.5] — 2026-11-10
 

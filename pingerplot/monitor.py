@@ -192,6 +192,7 @@ class Monitor:
         self._payload = icmp.DEFAULT_PAYLOAD
         self.log_path = ""
         self.timeout_note = ""   # set when start() raises a too-short timeout
+        self.interval_note = ""  # set when the interval is shorter than a round can be
         self.log_note = ""       # set when the probe log could not be opened
         self._log_fh = None
         self._rotate_retry_at = 0.0  # monotonic time before which not to retry a rollover
@@ -315,6 +316,17 @@ class Monitor:
                 f"port is indistinguishable from an unreachable host"
             )
             self.timeout_ms = TCP_REFUSAL_FLOOR_MS
+        self.interval_note = ""
+        if self.interval * 1000 < self.timeout_ms:
+            # A round waits for every hop, so a silent one holds it to the reply
+            # timeout and the next starts straight after. Silent hops are the
+            # norm on real paths, and in TCP mode the floor above sets that
+            # timeout to 3 s whatever the user typed: say why "every 1 s" isn't.
+            self.interval_note = (
+                f"probing every {self.interval:g} s, but each round waits up to "
+                f"{self.timeout_ms} ms for hops that don't answer, so while one is "
+                f"silent the rounds start about every {self.timeout_ms / 1000:g} s"
+            )
         self.log_path = (log_path or "").strip()
         self.alert_enabled = bool(alert_enabled)
         self.alert_loss_pct = max(0.0, float(alert_loss_pct))
@@ -738,6 +750,8 @@ class Monitor:
                 # Timestamped in the Events tab rather than appended to the
                 # status line, which would repeat it on every round.
                 self._log_event("info", self.timeout_note)
+            if self.interval_note:
+                self._log_event("info", self.interval_note)
             if self.log_note:
                 self._log_event("warn", self.log_note)
 
