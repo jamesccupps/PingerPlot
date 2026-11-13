@@ -201,9 +201,10 @@ def build_option_form(parent, look, ov: OptionVars, browse_log: Callable[[], Non
         return box
 
     card = section(parent, look, "Logging and webhooks")
-    setting_row(card, look, "Log every probe to",
-                "A CSV per target, flushed as it goes: probe.csv becomes probe_<target>.csv. Rolls "
-                "over at 25 MB, keeping one backup.", log_control, first=True)
+    setting_row(card, look, "Also log every probe to",
+                "Everything is in the history already (see Recording); this adds a plain CSV per "
+                "target, flushed as it goes: probe.csv becomes probe_<target>.csv. Rolls over at "
+                "25 MB, keeping one backup.", log_control, first=True)
     setting_row(card, look, "Webhook",
                 "An http(s) address that gets a JSON POST when an alert starts or ends. Delivery "
                 "failures show in the target's Events.", _entry(ov["webhook_url"], 30))
@@ -234,6 +235,8 @@ class SettingsPage(ScrollFrame):
             side="top", anchor="w", pady=(S(8), 0))
         build_option_form(body, look, app.defaults,
                           lambda: browse_log_into(app.defaults["log_path"], app.root))
+        from .gui_recording import build_section as build_recording
+        build_recording(body, look, app)
 
         card = section(body, look, "App")
 

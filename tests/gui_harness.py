@@ -94,6 +94,8 @@ def app(tk_root, isolated_settings, monkeypatch):
             except Exception:
                 pass
         a.geo.stop()
+        if getattr(a, "recorder", None) is not None:
+            a.recorder.close()
         # Finalisers that other threads queued (see pingerplot/tkthreads.py)
         # run here, on the main thread, while the interpreter still exists.
         from pingerplot import tkthreads

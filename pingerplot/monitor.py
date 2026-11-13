@@ -982,6 +982,22 @@ class Monitor:
             if self.recorder is not None:
                 self.recorder.route(self._rec_runs.get(gen), time.time(), route)
 
+    def set_recorder(self, recorder: "Optional[history.Recorder]") -> None:
+        """Start or stop recording a target that may already be running (the
+        Settings page's switch): the run in progress closes in the old
+        recorder and carries on in the new one."""
+        if recorder is self.recorder:
+            return
+        gen = self._generation
+        self._end_recording(gen)
+        self.recorder = recorder
+        self._rec_problem_seen = 0        # say what's wrong with the new one, if anything
+        self._recorded_route = None       # so the new one learns the current route
+        if recorder is not None and self.running:
+            self._begin_recording(gen)
+            if self.target_ip:
+                recorder.set_target_ip(self._rec_runs.get(gen), self.target_ip)
+
     def _end_recording(self, gen: int) -> None:
         handle = self._rec_runs.pop(gen, None)
         if self.recorder is not None and handle is not None:

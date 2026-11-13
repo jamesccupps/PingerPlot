@@ -15,6 +15,7 @@ import json
 import os
 import queue
 import sys
+import threading
 import time
 import tkinter as tk
 import urllib.parse
@@ -24,6 +25,7 @@ from typing import Dict, List, Optional
 
 from . import __version__, appicon, compare as cmpmod, geoip, history, icmp, settings
 from . import theme as themes, tkthreads, tray as traymod, updater, winplatform, xdg
+from . import gui_recording
 from .gui_charts import BAD_MS, WARN_MS, Ink, draw_graph, draw_map, draw_timeline, fmt_ms, row_tag
 from .gui_settings import REPO_URL, EditTargetDialog, OptionVars, SettingsPage
 from .gui_updates import Updates
@@ -127,6 +129,9 @@ class App:
         self.logpath_var = self.defaults["log_path"]
         self.alert_loss_var = self.defaults["alert_loss_pct"]
         self.updates = Updates(self)
+        # What the history keeps (the Settings page's Recording section).
+        self.recording = gui_recording.RecordingVars(root, self._settings.get("recording"))
+        self._recording_job = None
 
         self._build_header()
         self._build_pages()
@@ -147,6 +152,8 @@ class App:
         for var in [*self.defaults.vars.values(), self.theme_var, self.resume_var,
                     self.keep_tray_var, self.notify_var, self.updates.auto_var]:
             var.trace_add("write", lambda *_a: self._save_soon())
+        for var in self.recording.vars.values():
+            var.trace_add("write", lambda *_a: (self._save_soon(), self._apply_recording_soon()))
         root.protocol("WM_SAVE_YOURSELF", self._save_settings)
 
         if not icmp.is_available():
@@ -948,6 +955,7 @@ class App:
                 "told_hidden": bool(self._settings.get("told_hidden", False))}
         self.defaults.save_settings(data)
         self.updates.save(data)
+        data["recording"] = self.recording.options()
         # Live targets only. A loaded session lives in the same dict so the
         # detail views can render it, but its key is "<name> (loaded)" -- not
         # a hostname. Saving it meant _restore_targets called _start() on it
@@ -958,6 +966,37 @@ class App:
         data["target_options"] = {n: m.start_options() for n, m in self._monitors.items()
                                   if n not in self._loaded}
         settings.save(data)
+
+    # --- the history -------------------------------------------------------
+    def _apply_recording_soon(self) -> None:
+        # Typing "30" into a days box is two changes; open or close nothing
+        # until the typing stops.
+        if self._recording_job is not None:
+            self.root.after_cancel(self._recording_job)
+        self._recording_job = self.root.after(800, self._apply_recording)
+
+    def _apply_recording(self) -> None:
+        """Make the recorder match the Recording section, live: turning it
+        on records running targets from now, off closes their runs."""
+        self._recording_job = None
+        opts = self.recording.options()
+        live = [m for n, m in self._monitors.items() if n not in self._loaded]
+        if opts["enabled"]:
+            if self.recorder is None:
+                self.recorder = history.Recorder(options=opts, program="gui").start()
+                for mon in live:
+                    mon.set_recorder(self.recorder)
+            else:
+                self.recorder.set_options(opts)
+        elif self.recorder is not None:
+            old, self.recorder = self.recorder, None
+            for mon in live:
+                mon.set_recorder(None)
+            # close() waits for the last writes; not on the window's thread.
+            threading.Thread(target=old.close, name="history-close", daemon=True).start()
+
+    def clear_history(self) -> None:
+        gui_recording.clear_history(self)
 
     def _restore_targets(self, force: bool = False) -> None:
         """If enabled (or ``force``d), re-add and start the last session's
