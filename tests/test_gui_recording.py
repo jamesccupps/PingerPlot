@@ -66,9 +66,14 @@ def test_turning_recording_off_and_on_applies_to_a_running_target(app, monkeypat
     mon._begin_recording(1)
     app._monitors["example.com"] = mon
 
+    old = app.recorder
     app.recording["enabled"].set(False)
     app._apply_recording()
     assert app.recorder is None and mon.recorder is None and mon._rec_runs == {}
+    # The old recorder closes on a thread of its own (the window never waits
+    # on the disk); its last writes, the first run's end among them, land
+    # when that finishes. CI's Linux runner once read the history first.
+    old._thread.join(10)
 
     app.recording["enabled"].set(True)
     app._apply_recording()
