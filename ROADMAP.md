@@ -6,9 +6,8 @@ What's planned or been asked for, roughly in order. Ideas welcome as
 ## Next
 
 1.4 (an installer and a portable zip, signed in-app updates, the notification area, Start with Windows, the
-new window, a project page) is done; see the [CHANGELOG](CHANGELOG.md). 1.5 (everything recorded, the History
-page, reroutes and DNS moves tracked, where routers are and whose, the map's "where the trouble is") is on `main`,
-unreleased. Next up:
+new window, a project page) and 1.5 (everything recorded, the History page, reroutes and DNS moves tracked, where
+routers are and whose, the map's "where the trouble is") are done; see the [CHANGELOG](CHANGELOG.md). Next up:
 
 - **winget and SourceForge** listings, as the sibling projects have, so `winget install PingerPlot` works. The
   SourceForge listing is ready to paste ([packaging/sourceforge](packaging/sourceforge/README.md)).

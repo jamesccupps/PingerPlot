@@ -4,7 +4,11 @@ All notable changes to PingerPlot are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.5.0] — 2026-11-13
+
+Everything PingerPlot measures is recorded, a History page to look back through it,
+reroutes and DNS moves tracked, where each router is and whose network it's on,
+and where on the path the trouble is.
 
 ### Added
 
@@ -22,9 +26,9 @@ All notable changes to PingerPlot are recorded here. The format follows
   headless runner takes the same options as a `recording` object in its
   config.
 - **Route history.** Each distinct route to a target is recorded, with when it
-  was in use; a route that comes back is recognised as the same one.
+  was in use; a route that comes back is recognized as the same one.
 - **A History page**: a target's latency and loss over the last hour to the
-  last year (stepped back and forth), with the route in use as a colour band
+  last year (stepped back and forth), with the route in use as a color band
   and reroutes and alerts marked; every route taken and how the destination
   did on each; every router seen at each hop; events filtered and searched;
   and CSV export of the range's events, minute summaries or probes. A
@@ -34,10 +38,9 @@ All notable changes to PingerPlot are recorded here. The format follows
   answers (a service sending you to another front end, say), the move is an
   event, and PingerPlot follows it: a fresh trace to the new address, and a
   new run in the history. Round-robin DNS that merely rotates isn't a move.
-
 - **Where each router is, and whose network.** The hop table gains Location
   and Network columns, and a hop's right-click menu **Details…**: where the
-  router is by its name and by the IP database (each labelled, and said when
+  router is by its name and by the IP database (each labeled, and said when
   they disagree), its network (AS number and owner), and every router seen at
   that hop in the last day. The History page's Hops tab shows the same for
   every router it lists. Router names are recorded in the history for this.
@@ -45,7 +48,6 @@ All notable changes to PingerPlot are recorded here. The format follows
   where they stand (CLLI codes like `chcgil`, airport codes like `dfw01`,
   `Dallas1`), and for the backbone that's usually right where IP geolocation
   isn't.
-
 - **Where the trouble is**, under the map: each place on the path, the delay
   it adds and the loss that starts there, worst first, with a one-line
   verdict ("Loss reaching the destination starts in Denver (hop 5, 12%); the
@@ -65,6 +67,10 @@ All notable changes to PingerPlot are recorded here. The format follows
   `lookups.json`), at most 500 a day, with an hour's pause if the service says
   to slow down. **Settings → Look up where routers are** turns it off, and the
   Map then asks only while it's open, as before.
+- **The window opens wider** (1280 instead of 1180, never wider than the
+  screen), and a table's text columns shorten before any number column is
+  pushed out of view; if a narrow window still can't fit them all, a
+  horizontal scrollbar appears. The hop graph's axis shows round numbers.
 - **Reroutes are reported once, and load balancing isn't reported as one.**
   A hop that alternates between routers used to log "path changed" every
   round or two. A new router now has to hold the hop for 3 rounds to count as
@@ -705,6 +711,7 @@ have relied on — see **Changed** before comparing old exports with new ones.
 
 - Initial public release.
 
+[1.5.0]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.5.0
 [1.4.6]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.4.6
 [1.4.5]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.4.5
 [1.4.4]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.4.4

@@ -133,7 +133,7 @@
       <p class="sub"><span id="version">Free and open source (MIT).</span> Windows 10 and 11 (64-bit); <a href="https://github.com/jamesccupps/PingerPlot#linux">Linux</a> with pipx. <a href="https://github.com/jamesccupps/PingerPlot/releases">All releases</a></p>
     </div>
     <figure class="demo">
-      <img src="images/hops-dark.png" width="1769" height="1184" alt="PingerPlot in the dark theme: four targets, the selected one alerting with a red banner, a hop table where trouble starts at hop 4, and the destination's latency graph">
+      <img src="images/hops-dark.png" width="1919" height="1184" alt="PingerPlot in the dark theme: four targets, the selected one alerting with a red banner, a hop table where trouble starts at hop 4, and the destination's latency graph">
       <figcaption>Demo mode: simulated paths with documentation addresses.</figcaption>
     </figure>
   </div>
@@ -146,10 +146,12 @@
       <div class="card"><h3>Every hop, all the time</h3><p>Each round is a full traceroute, so every hop gets current, average, best and worst latency, jitter and loss over minutes or days, not one snapshot.</p></div>
       <div class="card"><h3>The path over time</h3><p>The Timeline draws every hop on one time axis. A latency step shows up as the row where the bars get tall, and stays tall for every hop after it.</p></div>
       <div class="card"><h3>Alerts that mean something</h3><p>Sustained loss, latency or a poor MOS at the destination, over a window you choose, never a router in the middle that just deprioritizes ICMP. A banner, a notification, a sound, and a webhook to Slack, Teams, ntfy or Home Assistant.</p></div>
-      <div class="card"><h3>Route changes, live</h3><p>A hop whose router changes, or a path that grows or shrinks, is caught within a round and written to the Events list.</p></div>
+      <div class="card"><h3>Route changes, live</h3><p>A router that takes over a hop and stays is a reroute, reported once; routers that take turns are load balancing, noted once. A name that DNS moves to another server is followed.</p></div>
+      <div class="card"><h3>Everything recorded</h3><p>Every probe, the router that answered it, every event and every route go into a history on your PC, with nothing to set up. The History page shows any hour of the last year: which route was slow, which router dropped probes.</p></div>
+      <div class="card"><h3>Where the trouble is</h3><p>Each router's city, from its name or the IP database, and whose network it's on. Under the map, the place that adds the delay and the place where loss reaching the destination begins.</p></div>
       <div class="card"><h3>ICMP, TCP and UDP</h3><p>ICMP needs no administrator rights. TCP to a port answers "is this service up, and how fast?". DSCP marking measures the path as voice or video traffic would see it, and a fixed source address picks the interface.</p></div>
       <div class="card"><h3>MOS for calls</h3><p>The ITU-T E-model's 1 to 5 voice-quality score for the destination: one number for whether the path is good enough for a call, and an alert when it isn't.</p></div>
-      <div class="card"><h3>A record you can compare</h3><p>Every probe to a size-capped CSV per target, sessions you can save and reopen, and a per-hop comparison with an earlier run that calls a changed router "rerouted" rather than inventing a difference.</p></div>
+      <div class="card"><h3>A record you can compare</h3><p>Export any range of the history as CSV, save and reopen sessions, and compare hop by hop with an earlier run that calls a changed router "rerouted" rather than inventing a difference.</p></div>
       <div class="card"><h3>In the background, or headless</h3><p>Closing the window keeps monitoring from the notification area; Start with Windows puts it there when you sign in. A headless runner does the same for a server or Task Scheduler, with one-shot reports for tickets.</p></div>
       <div class="card"><h3>Signed updates, nothing else sent</h3><p>The installer and the programs are code-signed by James Cupps. It checks GitHub once a day and installs a new version with one click, only if the download carries the release signature built into the app. Probes go only to your targets; where routers are is asked of ipwho.is with their address alone, about once a month each, and Settings turns it off.</p></div>
     </div>
@@ -158,11 +160,12 @@
   <section>
     <h2>A closer look</h2>
     <div class="shots">
-      <figure><img src="images/timeline-dark.png" width="1769" height="1184" alt="The Timeline view: six hops stacked on one time axis, loss and latency rising from hop 4 onwards" loading="lazy"><figcaption>Timeline: the whole path on one time axis. The trouble starts at hop 4.</figcaption></figure>
-      <figure><img src="images/hops-light.png" width="1769" height="1184" alt="The Hops view in the light theme" loading="lazy"><figcaption>The Hops view in the light theme. Rows turn amber or red on loss or latency.</figcaption></figure>
-      <figure><img src="images/events-light.png" width="1769" height="1184" alt="The Events view: a route change, alerts raised and cleared, with times" loading="lazy"><figcaption>Events: route changes and alerts as they happen.</figcaption></figure>
-      <figure><img src="images/map-dark.png" width="1769" height="1184" alt="The Map view, zoomed to the path: Portland, Boston, Chicago and Denver joined by the route" loading="lazy"><figcaption>Map: the path's public hops, zoomed to fit, when you open it.</figcaption></figure>
-      <figure><img src="images/settings-dark.png" width="1769" height="1184" alt="The Settings page: probing, alert thresholds and the app's options" loading="lazy"><figcaption>Settings: defaults for new targets, and the app's own options.</figcaption></figure>
+      <figure><img src="images/timeline-dark.png" width="1919" height="1184" alt="The Timeline view: six hops stacked on one time axis, loss and latency rising from hop 4 onwards" loading="lazy"><figcaption>Timeline: the whole path on one time axis. The trouble starts at hop 4.</figcaption></figure>
+      <figure><img src="images/hops-light.png" width="1919" height="1184" alt="The Hops view in the light theme" loading="lazy"><figcaption>The Hops view in the light theme. Rows turn amber or red on loss or latency.</figcaption></figure>
+      <figure><img src="images/events-light.png" width="1919" height="1184" alt="The Events view: a route change, alerts raised and cleared, with times" loading="lazy"><figcaption>Events: route changes and alerts as they happen.</figcaption></figure>
+      <figure><img src="images/history-light.png" width="1919" height="1184" alt="The History page: six hours of a target's latency and loss, the route in use as a colored band, and a table of routes showing the detour was slower and lost probes" loading="lazy"><figcaption>History: any hour of the last year. The detour through route 2 was slower and lost probes.</figcaption></figure>
+      <figure><img src="images/map-dark.png" width="1919" height="1184" alt="The Map view, zoomed to the path, with a table below ranking the places on it by the delay they add and the loss that starts there" loading="lazy"><figcaption>Map: the path zoomed to fit, and where the trouble is.</figcaption></figure>
+      <figure><img src="images/settings-dark.png" width="1919" height="1184" alt="The Settings page: probing, alert thresholds and the app's options" loading="lazy"><figcaption>Settings: defaults for new targets, and the app's own options.</figcaption></figure>
     </div>
     <p class="note">All pictures are from the app's demo mode: simulated paths with documentation addresses.</p>
   </section>

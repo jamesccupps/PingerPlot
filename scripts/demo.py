@@ -3,7 +3,8 @@
     python scripts/demo.py                  # the app, monitoring four made-up paths
     python scripts/demo.py --shots DIR      # take the README/site pictures, then quit (Windows)
 
-The real engine runs: traces, rounds, statistics, alerts, route-change events.
+The real engine runs: traces, rounds, statistics, alerts, route-change events,
+and the history (seeded with a few hours of pretend past for the History page).
 Only the network is pretend: ``icmp.ping`` answers from simulated paths, names
 resolve to made-up hosts, and the Map tab gets made-up locations. Every address
 is RFC 5737 documentation space or a private LAN address, so no picture can
@@ -110,6 +111,64 @@ PATHS = {
 NAMES = {p.name: ip for ip, p in PATHS.items()}
 REVERSE = {h.addr: h.name for p in PATHS.values() for h in p.hops}
 WHERE = {h.addr: h.where for p in PATHS.values() for h in p.hops if h.where}
+
+# The detour in voip.example.com's pretend past: hop 4 through Kansas City,
+# slower and lossy, for the History page to find.
+DETOUR = Hop("198.51.100.98", "peer7.example.net", 47.0, 5.0, loss=0.06,
+             where=(39.10, -94.58, "Kansas City", "US"))
+REVERSE[DETOUR.addr] = DETOUR.name
+WHERE[DETOUR.addr] = DETOUR.where
+
+
+def seed_history(hours=4.0, step=10.0):
+    """Hours of pretend past for voip.example.com in the (temporary)
+    history, so the History page has something to show: a reroute through
+    Kansas City that was slower and lost probes, an alert, and the way back.
+    The same simulated network as the rest of the demo."""
+    from pingerplot import history
+    hops = PATHS["203.0.113.80"].hops
+    now = time.time()
+    t0 = now - hours * 3600
+    away, back = now - 2.5 * 3600, now - 1.6 * 3600
+    clock = [t0]
+    rec = history.Recorder(clock=lambda: clock[0]).start()
+    run = rec.begin_run("voip.example.com", "icmp", None, dict(DEMO_OPTIONS))
+    rec.set_target_ip(run, "203.0.113.80")
+    rnd = random.Random(7)
+    detoured = None
+    t, n = t0, 0
+    while t < now - 120:
+        clock[0] = t
+        on = away <= t < back
+        if on != detoured:
+            route = [[h.addr] for h in hops]
+            if on:
+                route[3] = [DETOUR.addr]
+            rec.route(run, t, route)
+            if detoured is not None:
+                a, b = (hops[3].addr, DETOUR.addr) if on else (DETOUR.addr, hops[3].addr)
+                rec.event(run, t, "route", f"Route changed at hop 4: {a} -> {b}")
+            detoured = on
+        for ttl, h in enumerate(hops, 1):
+            if on and ttl == 4:
+                h = DETOUR
+            worse = on and ttl >= 4
+            if rnd.random() < h.loss + (0.08 if worse else 0):
+                rec.probe(run, t, n, ttl, None, None, IP_REQ_TIMED_OUT)
+                continue
+            ms = h.ms + (16 if worse and ttl > 4 else 0)
+            rtt = max(0.2, rnd.gauss(ms, h.jitter + (4 if worse else 0)))
+            rec.probe(run, t, n, ttl, h.addr, rtt,
+                      IP_SUCCESS if ttl == len(hops) else IP_TTL_EXPIRED_TRANSIT)
+        t, n = t + step, n + 1
+    rec.event(run, away + 900, "alert", "Hop 6 (voip.example.com): 15% packet loss over last 10 probes")
+    rec.event(run, back + 30, "clear",
+              "Cleared (route changed): Hop 6 (voip.example.com): 15% packet loss over last 10 probes")
+    for h in [*hops, DETOUR]:
+        rec.name(h.addr, h.name)
+    clock[0] = now - 120
+    rec.end_run(run)
+    rec.close()
 
 
 def pretend_ping(dest_ip, ttl=128, timeout_ms=1000, payload=b"", tos=0, source_ip=None):
@@ -249,6 +308,7 @@ SHOTS = [
     ("map-dark.png", "dark", "map"),
     ("events-light.png", "light", "events"),
     ("settings-dark.png", "dark", "settings"),
+    ("history-light.png", "light", "history"),
 ]
 
 
@@ -259,15 +319,19 @@ def take(out, name, theme_name, tab, warmup):
     from pingerplot import gui, settings, winplatform
     settings.save({"theme": theme_name, "resume_on_launch": False})
     install()
+    seed_history()
     winplatform.enable_dpi_awareness()
     root = tk.Tk()
     app = gui.App(root)
-    root.geometry(f"{app.s(1180)}x{app.s(760)}+40+40")
+    root.geometry(f"{app.s(1280)}x{app.s(760)}+40+40")
     start_demo(app)
 
     def shoot():
         if tab == "settings":
             app.nav.select("settings", notify=True)
+        elif tab == "history":
+            app.nav.select("history", notify=True)
+            app.history_page.range_var.set("Last 6 hours")
         else:
             app.detail_nav.select(tab, notify=True)
         app._refresh_once()
@@ -294,6 +358,7 @@ def main():
     import tkinter as tk
     from pingerplot import gui, winplatform
     install()
+    seed_history()
     winplatform.enable_dpi_awareness()
     root = tk.Tk()
     app = gui.App(root)

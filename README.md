@@ -265,7 +265,7 @@ and which route each target was on, when. It goes into one SQLite database on th
 **The History page** (next to Targets) shows what a target did over a span of time: the last hour to the last year,
 stepped back and forth with **Earlier** and **Later**, or opened from a target's right-click menu (**Show history**).
 
-- A chart of the destination's latency and loss, with the route in use drawn as a numbered colour band above it
+- A chart of the destination's latency and loss, with the route in use drawn as a numbered color band above it
   and reroutes and alerts marked. Hovering reads out the moment under the pointer.
 - **Routes**: each route taken in the range, how long and what share of the time, and the destination's latency
   and loss while on it, so the bad path stands out.
