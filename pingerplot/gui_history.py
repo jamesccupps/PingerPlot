@@ -19,7 +19,6 @@ results come back through the app's UI queue. Everything can be exported.
 from __future__ import annotations
 
 import csv
-import math
 import threading
 import time
 import tkinter as tk
@@ -27,8 +26,8 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Dict, List, Optional
 
 from . import gui_hopinfo, history, investigate
-from .gui_charts import fmt_ms
-from .gui_widgets import Nav
+from .gui_charts import fmt_ms, nice_max
+from .gui_widgets import Nav, fit_columns, side_scroll
 from .model import csv_safe
 
 RANGES = (("Last hour", 3600), ("Last 6 hours", 6 * 3600), ("Last 24 hours", 86400),
@@ -65,19 +64,6 @@ def _duration(seconds: float) -> str:
     if seconds < 86400:
         return f"{seconds // 3600} h {seconds % 3600 // 60:02d} min"
     return f"{seconds // 86400} d {seconds % 86400 // 3600} h"
-
-
-def nice_max(v: float) -> float:
-    """The axis top: ``v`` rounded up to a round step (1, 1.5, 2, 3, 4, 5, 6
-    or 8 times a power of ten), so the gridlines read 0 / 40 / 80 rather
-    than 0 / 31 / 62."""
-    if v <= 0:
-        return 1.0
-    exp = 10 ** math.floor(math.log10(v))
-    for m in (1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10):
-        if m * exp >= v - 1e-9:
-            return m * exp
-    return 10 * exp
 
 
 def route_colour(index: int, dark: bool) -> str:
@@ -250,11 +236,15 @@ class HistoryPage(ttk.Frame):
             tree.column("#0", width=S(width), stretch=False, anchor="w")
         for key, title, width, stretch, anchor in cols:
             tree.heading(key, text=title, anchor=anchor)
-            tree.column(key, width=S(width), stretch=stretch, anchor=anchor)
+            tree.column(key, width=S(width), stretch=False, anchor=anchor)
+        # The text columns (stretch=True above) give way, down to 70 px,
+        # before any number is pushed out of view.
+        fit_columns(tree, {key: (S(width), S(70)) for key, _t, width, stretch, _a in cols if stretch})
         vsb = ttk.Scrollbar(card, orient="vertical", command=tree.yview, style="Card.Vertical.TScrollbar")
         tree.configure(yscrollcommand=vsb.set)
         vsb.pack(side="right", fill="y")
         tree.pack(side="left", fill="both", expand=True)
+        side_scroll(tree, card)
         return card, tree
 
     def _build_routes(self, host):
@@ -267,7 +257,7 @@ class HistoryPage(ttk.Frame):
     def _build_hops(self, host):
         card, self.hops_tree = self._table(host, (
             ("router", "Router", 130, False, "w"), ("name", "Name", 220, True, "w"),
-            ("where", "Where", 130, False, "w"), ("net", "Network", 170, False, "w"),
+            ("where", "Where", 130, True, "w"), ("net", "Network", 170, True, "w"),
             ("share", "Answered", 80, False, "e"),
             ("loss", "Loss", 60, False, "e"), ("avg", "Avg", 60, False, "e"),
             ("min", "Best", 60, False, "e"), ("max", "Worst", 60, False, "e"),

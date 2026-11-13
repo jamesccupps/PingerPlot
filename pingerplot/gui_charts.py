@@ -56,6 +56,19 @@ class Ink:
                 "dest": self.col["fg_dest"], "ok": self.col["fg_ok"]}[row_tag(v, is_dest)]
 
 
+def nice_max(v: float) -> float:
+    """The axis top: ``v`` rounded up to a round step (1, 1.5, 2, 3, 4, 5, 6
+    or 8 times a power of ten), so the gridlines read 0 / 40 / 80 rather
+    than 0 / 31 / 62."""
+    if v <= 0:
+        return 1.0
+    exp = 10 ** math.floor(math.log10(v))
+    for m in (1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10):
+        if m * exp >= v - 1e-9:
+            return m * exp
+    return 10 * exp
+
+
 def _flush_segment(c, ink: Ink, segment: List[float], baseline: float) -> None:
     if len(segment) >= 4:  # at least two points
         poly = [segment[0], baseline] + segment + [segment[-2], baseline]
@@ -106,12 +119,12 @@ def draw_graph(c, ink: Ink, ttl: Optional[int], samples: List[Sample]) -> None:
     x0, x1 = pad_l, w - pad_r
     y_base, y_top = h - pad_b, pad_t
     rtts = [s.rtt for s in samples if s.rtt is not None]
-    y_max = max(10.0, (max(rtts) if rtts else 50.0) * 1.15)
+    y_max = nice_max(max(10.0, (max(rtts) if rtts else 50.0) * 1.1))
 
     for frac in (0.0, 0.25, 0.5, 0.75, 1.0):
         y = y_base + (y_top - y_base) * frac
         c.create_line(x0, y, x1, y, fill=ink.col["grid"])
-        c.create_text(x0 - S(8), y, text=f"{y_max * frac:.0f}", anchor="e",
+        c.create_text(x0 - S(8), y, text=f"{y_max * frac:g}", anchor="e",
                       fill=ink.col["axis_text"], font=ink.font(-2))
 
     title = "Select a hop to graph" if ttl is None else f"Hop {ttl} · latency (ms)"

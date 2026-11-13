@@ -30,7 +30,7 @@ from .gui_charts import BAD_MS, WARN_MS, Ink, draw_graph, draw_map, draw_timelin
 from .gui_history import HistoryPage
 from .gui_settings import REPO_URL, EditTargetDialog, OptionVars, SettingsPage
 from .gui_updates import Updates
-from .gui_widgets import Nav, ScrollFrame, TargetCard, WheelScroll
+from .gui_widgets import Nav, ScrollFrame, TargetCard, WheelScroll, fit_columns, side_scroll
 from .model import HopView, csv_safe, draw_version, mos, mos_label
 from . import monitor
 from .monitor import Monitor
@@ -61,6 +61,12 @@ COLUMNS = [
     ("worst", "Worst", 56, "e"),
     ("jitter", "Jitter", 56, "e"),
 ]
+
+# The text columns share whatever width the table has, down to these
+# minimums, and shorten their text first: the numbers to their right must
+# never be pushed out of sight (Location and Network made the table wider
+# than the pane at the default window size, and Best to Jitter vanished).
+TEXT_MIN = {"hostname": 80, "place": 70, "network": 70}
 
 _ms = fmt_ms
 
@@ -105,7 +111,9 @@ class App:
         self.scale = self._init_scaling()
         root.title("PingerPlot")
         self._set_window_icon()
-        root.geometry(f"{self.s(1180)}x{self.s(780)}")
+        # Wide enough for the hop table's columns, but never wider than the screen.
+        width = min(self.s(1280), root.winfo_screenwidth() - self.s(40))
+        root.geometry(f"{width}x{self.s(780)}")
         root.minsize(self.s(900), self.s(560))
         root.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -459,8 +467,10 @@ class App:
         self.tree = ttk.Treeview(table_card, columns=cols, show="headings", selectmode="browse")
         for key, title, width, anchor in COLUMNS:
             self.tree.heading(key, text=title, anchor=anchor if anchor != "center" else "center")
-            self.tree.column(key, width=S(width), anchor=anchor, stretch=(key == "hostname"),
-                             minwidth=S(80) if key == "hostname" else S(width))
+            self.tree.column(key, width=S(width), anchor=anchor, stretch=False,
+                             minwidth=S(TEXT_MIN.get(key, width)))
+        fit_columns(self.tree, {key: (S(width), S(TEXT_MIN[key]))
+                                for key, _t, width, _a in COLUMNS if key in TEXT_MIN})
         self.tree.bind("<ButtonRelease-1>", self._on_user_select)
         self.tree.bind("<KeyRelease-Up>", self._on_user_select)
         self.tree.bind("<KeyRelease-Down>", self._on_user_select)
@@ -470,6 +480,7 @@ class App:
         self.tree.configure(yscrollcommand=vsb.set)
         vsb.pack(side="right", fill="y")
         self.tree.pack(side="left", fill="both", expand=True)
+        side_scroll(self.tree, table_card)
 
         self.canvas = tk.Canvas(graph_card, highlightthickness=0, bd=0)
         self.canvas.pack(fill="both", expand=True)

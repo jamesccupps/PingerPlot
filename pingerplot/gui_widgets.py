@@ -195,3 +195,54 @@ def section(parent, look, heading: str) -> ttk.Frame:
     card = ttk.Frame(parent, style="Tile.TFrame", padding=(S(1), S(4)))
     card.pack(side="top", fill="x")
     return card
+
+
+def fit_columns(tree: ttk.Treeview, flex: Dict[str, Tuple[int, int]]) -> None:
+    """Keep every column of ``tree`` on screen: the columns not in ``flex``
+    keep their width, and the ``flex`` ones (key -> (preferred, minimum),
+    screen pixels) share what's left, each shortening toward its minimum
+    before anything is pushed out of view.
+
+    ttk's own ``stretch`` only hands out spare width; it doesn't take it
+    back when the table is narrower than its columns, so a long table simply
+    lost its right-hand columns (the hop table's numbers, once Location and
+    Network joined it)."""
+    for key in flex:
+        tree.column(key, stretch=False)
+
+    def fit(event=None) -> None:
+        width = event.width if event is not None else tree.winfo_width()
+        if width <= 1:
+            return
+        fixed = sum(int(tree.column(c, "width")) for c in tree["columns"] if c not in flex)
+        if "tree" in str(tree.cget("show")):
+            fixed += int(tree.column("#0", "width"))
+        room = width - fixed - 4
+        preferred = sum(p for p, _m in flex.values())
+        floor = sum(m for _p, m in flex.values())
+        for key, (pref, minimum) in flex.items():
+            if room >= preferred:
+                share = pref + (room - preferred) * pref // preferred
+            elif room > floor:
+                share = minimum + (room - floor) * (pref - minimum) // max(1, preferred - floor)
+            else:
+                share = minimum
+            tree.column(key, width=max(minimum, int(share)))
+    tree.bind("<Configure>", fit, add="+")
+
+
+def side_scroll(tree: ttk.Treeview, parent) -> ttk.Scrollbar:
+    """A horizontal scrollbar for ``tree`` that's there only when its columns
+    don't fit: in a narrow window nothing is cut off out of reach, and in a
+    wide one there's no empty bar."""
+    bar = ttk.Scrollbar(parent, orient="horizontal", command=tree.xview,
+                        style="Card.Horizontal.TScrollbar")
+
+    def update(first, last) -> None:
+        if float(first) <= 0.0 and float(last) >= 1.0:
+            bar.pack_forget()
+        elif not bar.winfo_ismapped():
+            bar.pack(side="bottom", fill="x", before=tree)
+        bar.set(first, last)
+    tree.configure(xscrollcommand=update)
+    return bar
