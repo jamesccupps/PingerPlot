@@ -16,6 +16,10 @@ folder, shared by every target and by the GUI and headless runner alike:
   enough to answer "which router, which minute" long after the probes are gone.
 * ``events``  -- every event the run logged: alerts, clears, route changes,
   warnings, notes.
+* ``routes``  -- each distinct path to a target (the routers known at every
+  hop), and ``segments``: when a run was on which route. A route that comes
+  back is recognised as the same one, so "it flips between these two paths"
+  shows as two routes taking turns.
 * ``runs``    -- what was monitored, how, and when.
 
 Writes go through one background thread that batches them into transactions,
@@ -37,6 +41,8 @@ import time
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
+from .routes import compatible
+
 SCHEMA_VERSION = 1
 DB_NAME = "history.sqlite3"
 
@@ -45,6 +51,7 @@ DEFAULTS = {
     "probes": True, "probe_days": 7,
     "summaries": True, "summary_days": 365,
     "events": True, "event_days": 365,
+    "routes": True,
     "max_mb": 1024,
 }
 # (key, lowest, highest): the Settings page's own limits.
@@ -102,6 +109,21 @@ CREATE TABLE IF NOT EXISTS events(
     text TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS events_t ON events(t);
+CREATE TABLE IF NOT EXISTS routes(
+    id INTEGER PRIMARY KEY,
+    target TEXT NOT NULL,
+    dest TEXT,
+    hops TEXT NOT NULL,
+    first REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS routes_target ON routes(target);
+CREATE TABLE IF NOT EXISTS segments(
+    run INTEGER NOT NULL,
+    route INTEGER NOT NULL,
+    start REAL NOT NULL,
+    end REAL
+);
+CREATE INDEX IF NOT EXISTS segments_start ON segments(start);
 """
 
 
@@ -240,6 +262,11 @@ class Recorder:
         if self.options["events"] and not self._closed:
             self._q.put(("event", run, t, kind, text))
 
+    def route(self, run: Optional[int], t: float, hops: List[List[str]]) -> None:
+        """The run is on this route from ``t`` (each hop's known routers)."""
+        if run is not None and self.options["routes"]:
+            self._q.put(("route", run, t, [list(h) for h in hops]))
+
     def end_run(self, run: Optional[int]) -> None:
         if run is not None:
             self._q.put(("end", run, self._clock()))
@@ -305,6 +332,7 @@ class Recorder:
         db = self._open()
         addr_ids: Dict[str, int] = {"": NO_REPLY}
         run_ids: Dict[int, int] = {}      # handle -> runs.id
+        open_seg: Dict[int, Tuple[int, int]] = {}   # runs.id -> (segment rowid, route id)
         minutes: Dict[Tuple[int, int, int, int], _Minute] = {}
         last_rtt: Dict[Tuple[int, int], float] = {}
         next_maint = 0.0
@@ -377,9 +405,39 @@ class Recorder:
             elif op == "event":
                 _, _, t, kind, text = item
                 db.execute("INSERT INTO events VALUES(?,?,?,?)", (run, t, kind, text))
+            elif op == "route":
+                _, _, t, hops = item
+                target, dest = db.execute("SELECT target, target_ip FROM runs WHERE id=?",
+                                          (run,)).fetchone()
+                route_id = None
+                for rid, stored in db.execute(
+                        "SELECT id, hops FROM routes WHERE target=? AND dest IS ? ORDER BY id",
+                        (target, dest)).fetchall():
+                    old = json.loads(stored)
+                    if compatible(old, hops):
+                        route_id = rid
+                        merged = [sorted(set(a) | set(b)) for a, b in zip(old, hops)]
+                        if merged != old:    # more load balancing seen: widen it
+                            db.execute("UPDATE routes SET hops=? WHERE id=?",
+                                       (json.dumps(merged), rid))
+                        break
+                if route_id is None:
+                    route_id = db.execute(
+                        "INSERT INTO routes(target, dest, hops, first) VALUES(?,?,?,?)",
+                        (target, dest, json.dumps(hops), t)).lastrowid
+                current = open_seg.get(run)
+                if current is None or current[1] != route_id:
+                    if current is not None:
+                        db.execute("UPDATE segments SET end=? WHERE rowid=?", (t, current[0]))
+                    seg = db.execute("INSERT INTO segments(run, route, start) VALUES(?,?,?)",
+                                     (run, route_id, t)).lastrowid
+                    open_seg[run] = (seg, route_id)
             elif op == "target_ip":
                 db.execute("UPDATE runs SET target_ip=? WHERE id=?", (item[2], run))
             elif op == "end":
+                seg = open_seg.pop(run, None)
+                if seg is not None:
+                    db.execute("UPDATE segments SET end=? WHERE rowid=?", (item[2], seg[0]))
                 flush_minutes(run=run)
                 for key in [k for k in last_rtt if k[0] == run]:
                     del last_rtt[key]
@@ -436,6 +494,7 @@ class Recorder:
                 # exist; nothing later may point at them.
                 addr_ids.clear()
                 addr_ids[""] = NO_REPLY
+                open_seg.clear()
                 try:
                     for handle in [h for h, rid in run_ids.items() if not db.execute(
                             "SELECT 1 FROM runs WHERE id=?", (rid,)).fetchone()]:
@@ -485,6 +544,10 @@ class Recorder:
             db.execute("DELETE FROM minutes WHERE minute < ?",
                        (int((now - o["summary_days"] * 86400) // 60),))
             db.execute("DELETE FROM events WHERE t < ?", (now - o["event_days"] * 86400,))
+            # Route history is tiny; it lives as long as the events about it.
+            db.execute("DELETE FROM segments WHERE end IS NOT NULL AND end < ?",
+                       (now - o["event_days"] * 86400,))
+            db.execute("DELETE FROM routes WHERE id NOT IN (SELECT route FROM segments)")
             keep = max(o["probe_days"], o["summary_days"], o["event_days"]) * 86400
             db.execute("DELETE FROM runs WHERE ended IS NOT NULL AND ended < ?", (now - keep,))
             db.execute("COMMIT")
@@ -592,6 +655,21 @@ class Reader:
             "JOIN runs r ON r.id = p.run JOIN addrs a ON a.id = p.addr "
             "WHERE p.t >= ? AND p.t <= ? AND r.target = ? ORDER BY p.t, p.ttl",
             (since, until, target))
+
+    def routes(self, target: str) -> List[sqlite3.Row]:
+        """Every route recorded to ``target`` (``hops`` is JSON: each hop's
+        routers), oldest first."""
+        return self._rows("SELECT id, dest, hops, first FROM routes WHERE target=? ORDER BY id",
+                          (target,))
+
+    def segments(self, target: str, since: float = 0.0,
+                 until: float = 1e18) -> List[sqlite3.Row]:
+        """When the target was on which route: start, end (None = still on
+        it, or the program stopped without closing it), route id."""
+        return self._rows(
+            "SELECT s.start, s.end, s.route, r.target_ip AS dest FROM segments s "
+            "JOIN runs r ON r.id = s.run WHERE r.target = ? AND s.start <= ? "
+            "AND coalesce(s.end, 1e18) >= ? ORDER BY s.start", (target, until, since))
 
     def minutes(self, target: str, since: float, until: float) -> List[sqlite3.Row]:
         return self._rows(

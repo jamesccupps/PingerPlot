@@ -44,6 +44,7 @@ except ImportError:  # pragma: no cover - non-Windows
     winsound = None  # type: ignore[assignment]
 
 from . import __version__, history, icmp, tcpudp
+from .routes import RouteTracker
 from .model import (DEFAULT_HISTORY, Event, Hop, HopView, Sample, hop_from_session, mos,
                     mos_label, opt_str)
 
@@ -181,6 +182,10 @@ class Monitor:
         # start() has already opened the next one.
         self._rec_runs: Dict[int, Optional[int]] = {}
         self._rec_problem_seen = 0
+        # Which routers answer at each hop, so a reroute is reported once and
+        # a load-balanced hop isn't reported at all (see routes.py).
+        self._routes = RouteTracker()
+        self._recorded_route: Optional[list] = None
 
         # configuration (set on start)
         self.target_input = ""
@@ -351,6 +356,8 @@ class Monitor:
             self._generation += 1
             gen = self._generation
             self._hops = []
+            self._routes = RouteTracker()
+            self._recorded_route = None
             self._events.clear()
             self._active_alerts.clear()
             self._event_seq = 0
@@ -836,6 +843,7 @@ class Monitor:
                 route_len = self._probe_round(route_len, gen)
                 if not self._alive(gen):
                     break       # stopped or superseded mid-round: judge nothing
+                self._record_route(route_len, gen)
                 self._evaluate_alerts(route_len)
                 self._check_recorder()
                 self._set_status(self._monitor_status(route_len), gen)
@@ -862,6 +870,19 @@ class Monitor:
             self.target_input, self.packet_type,
             None if self.packet_type == "icmp" else self.port, options)
         self._check_recorder()
+
+    def _record_route(self, route_len: int, gen: int) -> None:
+        """Tell the history when the route differs from the one it has: the
+        first round, a reroute, a newly seen load-balanced router, a route
+        that got longer or shorter."""
+        if self.final_hop_only:
+            return
+        self._routes.trim(route_len)
+        route = self._routes.signature(route_len)
+        if route != self._recorded_route and any(route):
+            self._recorded_route = route
+            if self.recorder is not None:
+                self.recorder.route(self._rec_runs.get(gen), time.time(), route)
 
     def _end_recording(self, gen: int) -> None:
         handle = self._rec_runs.pop(gen, None)
@@ -907,7 +928,6 @@ class Monitor:
             if gen != self._generation:
                 return
             hop = self._ensure_hop(ttl)
-            old = hop.address
             hop.record(r.rtt_ms, r.address, r.status)
             handle = self._rec_runs.get(gen)
         if self.recorder is not None:
@@ -915,8 +935,6 @@ class Monitor:
         self._log_probe(ttl, r)
         if r.reached:
             self.reached_target = True
-        if old and r.address and r.address != old:
-            self._log_event("route", f"Hop {ttl}: path changed {old} -> {r.address}")
         if r.address:
             self._maybe_resolve(ttl, r.address)
 
@@ -1021,6 +1039,12 @@ class Monitor:
             self._apply_probe(ttl, r, gen)
             if r.reached and min_reached is None:
                 min_reached = ttl
+
+        if self._alive(gen):
+            for change in self._routes.observe(
+                    {ttl: (results[ttl].address if ttl in results else None)
+                     for ttl in range(1, route_len + 1)}):
+                self._log_event("route" if change.kind == "reroute" else "info", change.text)
 
         if min_reached is not None:
             self._unreached = 0
