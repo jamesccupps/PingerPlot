@@ -42,3 +42,17 @@ def test_the_clue_is_reported():
 
 def test_ambiguous_portland_says_only_portland():
     assert str(places.from_name("ae1.portland.example.net")) == "Portland"
+
+
+def test_every_city_named_has_coordinates_except_the_ambiguous_one():
+    cities = {v[0] for table in (places.CLLI, places.CODES, places.NAMES) for v in table.values()}
+    missing = sorted(c for c in cities if c not in places.COORDS)
+    assert missing == ["Portland"]
+    for city, (lat, lon) in places.COORDS.items():
+        assert -90 <= lat <= 90 and -180 <= lon <= 180, city
+
+
+def test_coords_of_a_place():
+    assert places.coords(places.from_name("ae0.cr1.ams2.example.net")) == (52.37, 4.90)
+    assert places.coords(places.from_name("ae1.portland.example.net")) is None
+    assert places.coords(None) is None

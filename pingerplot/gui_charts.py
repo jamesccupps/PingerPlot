@@ -312,10 +312,13 @@ def map_view(points, w: float, h: float, margin: float = 0.0):
     return lambda lon, lat: (w / 2.0 + (lon * k - cx) * scale, h / 2.0 - (lat - cy) * scale)
 
 
-def draw_map(c, ink: Ink, views: List[HopView], geo) -> str:
+def draw_map(c, ink: Ink, views: List[HopView], geo, locate=None, past=None) -> str:
     """Located public hops on the coastline backdrop, joined in path order,
     zoomed to the path (map_view). Asks ``geo`` for any it hasn't looked up.
-    Returns the header caption."""
+    ``locate(address, hostname, geo)`` gives ``(lat, lon, label, source)``
+    (a router's name first, then the IP database); ``past`` is earlier
+    routes, each a list of ``(lat, lon)``, drawn faded underneath. Returns
+    the header caption."""
     S = ink.s
     c.delete("all")
     w, h = c.winfo_width(), c.winfo_height()
@@ -324,14 +327,21 @@ def draw_map(c, ink: Ink, views: List[HopView], geo) -> str:
 
     public = 0
     found = []
+    by_name = 0
     for v in views:
         if v.address and geoip._is_public(v.address):
             public += 1
             geo.request(v.address)
+        where = locate(v.address, v.hostname, geo) if locate is not None else None
+        if where is None and v.address:
             g = geo.get(v.address)
-            if g:
-                found.append((v, g))
-    proj = map_view([(g.lon, g.lat) for _v, g in found], w, h, margin=S(24))
+            where = (g.lat, g.lon, g.city or g.country, "ip") if g else None
+        if where is not None:
+            found.append((v, _Spot(where[0], where[1], where[2])))
+            by_name += where[3] == "name"
+    past = [r for r in (past or []) if len(r) >= 2]
+    proj = map_view([(g.lon, g.lat) for _v, g in found] +
+                    [(lon, lat) for route in past for lat, lon in route], w, h, margin=S(24))
 
     for poly in worldmap.COASTLINES:
         pts = []
@@ -339,6 +349,17 @@ def draw_map(c, ink: Ink, views: List[HopView], geo) -> str:
             pts.extend(proj(lon, lat))
         if len(pts) >= 4:
             c.create_line(pts, fill=ink.col["grid"], width=1)
+
+    # Earlier routes first, faded and dashed, so the current one reads on top.
+    for route in past:
+        pts = []
+        for lat, lon in route:
+            pts.extend(proj(lon, lat))
+        c.create_line(pts, fill=ink.col["axis_text"], width=1, dash=(3, 4))
+        for i in range(0, len(pts), 2):
+            r = max(2, S(3))
+            c.create_oval(pts[i] - r, pts[i + 1] - r, pts[i] + r, pts[i + 1] + r,
+                          outline=ink.col["axis_text"], fill="")
 
     located = [(v, g) + proj(g.lon, g.lat) for v, g in found]
 
@@ -358,5 +379,16 @@ def draw_map(c, ink: Ink, views: List[HopView], geo) -> str:
     # misbehaving. Without it, a map that has quietly stopped resolving looks
     # identical to one whose hops simply have no location.
     note = f"  ·  {geo.failures} lookup error(s), retrying" if geo.failures else ""
-    return (f"{len(located)} of {public} public hops located by ipwho.is "
-            f"(private and LAN hops have no location){note}")
+    paused = f"  ·  lookups paused: {geo.paused}" if getattr(geo, "paused", "") else ""
+    earlier = f"  ·  {len(past)} earlier route(s) dashed" if past else ""
+    return (f"{len(located)} of {public} public hops located: {by_name} by the router's name, "
+            f"{len(located) - by_name} by ipwho.is (private and LAN hops have no location)"
+            f"{earlier}{note}{paused}")
+
+
+class _Spot:
+    """Where a hop is drawn: what the label code reads from a GeoInfo."""
+    __slots__ = ("lat", "lon", "city", "country")
+
+    def __init__(self, lat, lon, city) -> None:
+        self.lat, self.lon, self.city, self.country = lat, lon, city, ""

@@ -139,7 +139,11 @@ CI starts the app on Ubuntu on every push: the window's self-test, a probe of lo
      it follows the destination. Right-click a hop for **Details…**: where it is by its name and by the IP
      database (each says which), whose network it's on, and every router seen at that hop in the last day.
    - **Timeline**: every hop stacked on one time axis.
-   - **Map**: the public hops located on a map zoomed to the path (see [privacy](#updates-and-privacy)).
+   - **Map**: the path on a map, zoomed to fit, each router placed by its name when that names a city and by
+     the IP database otherwise (see [privacy](#updates-and-privacy)); the target's other routes from the last
+     day are dashed underneath. Below it, **where the trouble is**: each place on the path, the delay it adds
+     and the loss that starts there and carries to the destination (loss that stops at a router is that router
+     ignoring pings, and isn't counted), with a one-line verdict.
    - **Events**: route changes, alerts raised and cleared, warnings.
 3. **Pause**, **Stop** and **Edit settings** are at the top right. Editing a target's settings restarts it with
    them.

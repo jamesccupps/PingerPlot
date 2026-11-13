@@ -31,6 +31,20 @@ def location(address: Optional[str], hostname: Optional[str], geo) -> str:
     return info.city or info.country
 
 
+def locate(address: Optional[str], hostname: Optional[str], geo):
+    """Where to draw a router: ``(lat, lon, label, source)``, from its name
+    when that names a known city, else from the IP database, else None.
+    ``source`` is "name" or "ip"."""
+    hint = places.from_name(hostname)
+    point = places.coords(hint)
+    if point is not None:
+        return point[0], point[1], hint.city, "name"
+    info = geo.get(address) if address else None
+    if info is not None:
+        return info.lat, info.lon, info.city or info.country, "ip"
+    return None
+
+
 def network(address: Optional[str], geo) -> str:
     info = geo.get(address) if address else None
     return info.network() if info is not None else ""

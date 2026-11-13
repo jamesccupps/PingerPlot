@@ -46,6 +46,17 @@ All notable changes to PingerPlot are recorded here. The format follows
   `Dallas1`), and for the backbone that's usually right where IP geolocation
   isn't.
 
+- **Where the trouble is**, under the map: each place on the path, the delay
+  it adds and the loss that starts there, worst first, with a one-line
+  verdict ("Loss reaching the destination starts in Denver (hop 5, 12%); the
+  most delay is added in Chicago (+30 ms)."). Loss counts only as far as it
+  carries toward the destination, so a router that merely ignores pings
+  isn't blamed.
+- **A better map**: routers are placed by the city in their name when there
+  is one, which for the backbone beats IP geolocation, and the caption says
+  how many were placed which way; the target's other routes from the last
+  day are drawn dashed underneath, so a reroute shows on the map.
+
 ### Changed
 
 - **Router lookups run while monitoring**, not only while the Map is open, so

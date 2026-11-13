@@ -741,6 +741,17 @@ class Reader:
             "JOIN runs r ON r.id = s.run WHERE r.target = ? AND s.start <= ? "
             "AND coalesce(s.end, 1e18) >= ? ORDER BY s.start", (target, until, since))
 
+    def names(self, addrs: Iterable[str]) -> Dict[str, str]:
+        """The DNS names recorded for these routers (those that have one)."""
+        addrs = [a for a in set(addrs) if a]
+        out: Dict[str, str] = {}
+        for i in range(0, len(addrs), 500):
+            chunk = addrs[i:i + 500]
+            for row in self._rows(f"SELECT addr, name FROM addrs WHERE name IS NOT NULL AND name != '' "
+                                  f"AND addr IN ({','.join('?' * len(chunk))})", chunk):
+                out[row["addr"]] = row["name"]
+        return out
+
     def minutes(self, target: str, since: float, until: float) -> List[sqlite3.Row]:
         return self._rows(
             "SELECT m.minute, m.ttl, a.addr, m.sent, m.recv, m.rtt_sum, m.rtt_min, m.rtt_max, "

@@ -25,7 +25,7 @@ from typing import Dict, List, Optional
 
 from . import __version__, appicon, compare as cmpmod, geoip, history, icmp, settings
 from . import theme as themes, tkthreads, tray as traymod, updater, winplatform, xdg
-from . import gui_hopinfo, gui_recording
+from . import gui_hopinfo, gui_recording, investigate, trouble
 from .gui_charts import BAD_MS, WARN_MS, Ink, draw_graph, draw_map, draw_timeline, fmt_ms, row_tag
 from .gui_history import HistoryPage
 from .gui_settings import REPO_URL, EditTargetDialog, OptionVars, SettingsPage
@@ -88,6 +88,9 @@ class App:
         self.geo = geoip.GeoResolver(settings.config_dir() / geoip.CACHE_NAME)
         self._geo_started = False
         self._geo_fed = 0.0
+        # Earlier routes for the map, per target: (loaded at, [[(addr, name), ...], ...]).
+        self._past_routes: Dict[str, tuple] = {}
+        self._past_loading: set = set()
         self._selected_ttl: Optional[int] = None    # hop currently graphed
         self._last_ttl: Optional[int] = None         # destination hop, per refresh
         self._pinned = False                         # True once the user picks a row
@@ -497,6 +500,23 @@ class App:
             text="Router locations come from ipwho.is (public router addresses only, never private "
                  "or LAN ones) and from the routers' own names.")
         self.map_header.pack(side="top", anchor="w", pady=(0, self.s(6)))
+        # Under the map (packed first so it keeps its room): where on the
+        # path the trouble is, by place (trouble.py).
+        S = self.s
+        box = ttk.Frame(view)
+        box.pack(side="bottom", fill="x", pady=(S(8), 0))
+        self.trouble_label = ttk.Label(box, text="", style="Strong.TLabel", wraplength=S(900),
+                                       justify="left")
+        self.trouble_label.pack(side="top", anchor="w")
+        tcard = self._card(box)
+        tcard.pack(side="top", fill="x", pady=(S(4), 0))
+        cols = (("place", "Place", 240, True), ("hops", "Hops", 120, False),
+                ("delay", "Delay added", 110, False), ("loss", "Loss starting here", 150, False))
+        self.trouble_tree = ttk.Treeview(tcard, columns=[c[0] for c in cols], show="headings", height=4)
+        for key, title, width, stretch in cols:
+            self.trouble_tree.heading(key, text=title, anchor="w")
+            self.trouble_tree.column(key, width=S(width), stretch=stretch, anchor="w")
+        self.trouble_tree.pack(fill="x")
         card = self._card(view)
         card.pack(side="top", fill="both", expand=True)
         self.map_canvas = tk.Canvas(card, highlightthickness=0, bd=0)
@@ -1542,9 +1562,77 @@ class App:
             self.geo.start()           # the Map view is open
             self._geo_started = True
         views, _s, _ip, _in = self.monitor.snapshot()
-        caption = draw_map(self.map_canvas, self._ink(), views, self.geo)
+        caption = draw_map(self.map_canvas, self._ink(), views, self.geo,
+                           locate=gui_hopinfo.locate, past=self._past_route_points())
         if caption:
             self.map_header.configure(text=caption)
+        self._fill_trouble(views)
+
+    def _fill_trouble(self, views) -> None:
+        """Rank the places on the path: the delay each adds, and where loss
+        that reaches the destination begins."""
+        tree = self.trouble_tree
+        tree.delete(*tree.get_children())
+        rows = trouble.rank(views, lambda v: gui_hopinfo.location(v.address, v.hostname, self.geo))
+        self.trouble_label.configure(
+            text=trouble.verdict(rows) or "Where the trouble is shows once hops have answered "
+                                          "and been placed.")
+        for r in rows[:8]:
+            hops = ", ".join(str(t) for t in r.ttls)
+            tree.insert("", "end", values=(
+                r.place, f"hop{'s' if len(r.ttls) > 1 else ''} {hops}",
+                f"+{r.delay_added:.0f} ms" if r.delay_added >= 0.5 else "",
+                f"{r.loss_starts:.0f}%" if r.loss_starts >= 0.5 else ""))
+
+    # --- earlier routes, for the map --------------------------------------------
+    def _past_route_points(self) -> list:
+        """The active target's other routes from the last day, as points to
+        draw faded: located by name or the IP database at draw time, so a
+        lookup that lands later moves them too. Loaded off the window's
+        thread, at most once a minute."""
+        name = self._active
+        if not name or name in self._loaded:
+            return []
+        entry = self._past_routes.get(name)
+        if (entry is None or time.monotonic() - entry[0] > 60) and name not in self._past_loading:
+            self._past_loading.add(name)
+            threading.Thread(target=self._load_past_routes, args=(name,), name="past-routes",
+                             daemon=True).start()
+        out = []
+        for route in (entry[1] if entry else []):
+            pts = []
+            for addr, host in route:
+                where = gui_hopinfo.locate(addr, host, self.geo)
+                if where is not None:
+                    pts.append((where[0], where[1]))
+            if len(pts) >= 2:
+                out.append(pts)
+        return out
+
+    def _load_past_routes(self, name: str) -> None:
+        routes = []
+        reader = history.Reader()
+        try:
+            now = time.time()
+            rows = investigate.routes(reader, name, now - 86400, now, now=now)
+            if len(rows) > 1:
+                current = max(rows, key=lambda r: max(b for _a, b in r.spans))
+                others = sorted((r for r in rows if r is not current),
+                                key=lambda r: -max(b for _a, b in r.spans))[:3]
+                names = reader.names(a for r in others for hop in r.hops for a in hop)
+                for r in others:
+                    routes.append([(hop[0], names.get(hop[0])) for hop in r.hops if hop])
+        except Exception:
+            routes = []          # a locked or damaged history: no earlier routes, no fuss
+        finally:
+            reader.close()
+
+        def done():
+            self._past_routes[name] = (time.monotonic(), routes)
+            self._past_loading.discard(name)
+            if routes:
+                self._draw_ver = None
+        self._post(done)
 
 
 def _enable_windows_dpi_awareness() -> None:

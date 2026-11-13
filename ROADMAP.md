@@ -6,18 +6,19 @@ What's planned or been asked for, roughly in order. Ideas welcome as
 ## Next
 
 1.4 (an installer and a portable zip, signed in-app updates, the notification area, Start with Windows, the
-new window, a project page) is done; see the [CHANGELOG](CHANGELOG.md). Next up:
+new window, a project page) is done; see the [CHANGELOG](CHANGELOG.md). 1.5 (everything recorded, the History
+page, reroutes and DNS moves tracked, where routers are and whose, the map's "where the trouble is") is on `main`,
+unreleased. Next up:
 
 - **winget and SourceForge** listings, as the sibling projects have, so `winget install PingerPlot` works. The
   SourceForge listing is ready to paste ([packaging/sourceforge](packaging/sourceforge/README.md)).
 
 ## Later, or if asked
 
-- **"Where is the problem?"** A one-line verdict from the hop statistics: the first hop whose loss or latency carries
-  through to the destination ("problem starts at hop 4: +38 ms, 12% loss"), and which loss to ignore because it stops
-  at an intermediate router. For the status line, alerts and webhooks.
-- **Long-term history**: per-minute summaries kept for months in `sqlite3` (standard library), with a time range on
-  the graphs, so "what did the path do at 3 a.m. Tuesday?" has an answer without a CSV and a spreadsheet.
+- **"Where is the problem?" in alerts and webhooks**: the Map's verdict (where loss reaching the destination starts,
+  where the delay is added) in the alert text and the webhook payload too.
+- **History in the headless runner's reports**: the History page's routes and per-place verdict from the command
+  line, for a scheduled check.
 - **Webhook formats**: ntfy (title, priority, tags), Slack/Teams, or the current generic JSON; a *Send test* button;
   an optional "still alerting" reminder.
 - **Service checks in final-hop mode**: BACnet ReadProperty (UDP 47808), DNS query time and HTTPS time to first
