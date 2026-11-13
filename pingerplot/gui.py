@@ -25,7 +25,7 @@ from typing import Dict, List, Optional
 
 from . import __version__, appicon, compare as cmpmod, geoip, history, icmp, settings
 from . import theme as themes, tkthreads, tray as traymod, updater, winplatform, xdg
-from . import gui_recording
+from . import gui_hopinfo, gui_recording
 from .gui_charts import BAD_MS, WARN_MS, Ink, draw_graph, draw_map, draw_timeline, fmt_ms, row_tag
 from .gui_history import HistoryPage
 from .gui_settings import REPO_URL, EditTargetDialog, OptionVars, SettingsPage
@@ -51,6 +51,8 @@ COLUMNS = [
     ("ttl", "Hop", 44, "center"),
     ("address", "Address", 118, "w"),
     ("hostname", "Hostname", 170, "w"),
+    ("place", "Location", 120, "w"),
+    ("network", "Network", 175, "w"),
     ("loss", "Loss", 52, "e"),
     ("sent", "Sent", 50, "e"),
     ("cur", "Last", 50, "e"),
@@ -81,8 +83,11 @@ class App:
         self._active: Optional[str] = None           # which one the detail shows
         self._empty = Monitor()                      # placeholder when nothing selected
         self._loaded: "set[str]" = set()             # offline sessions, not live targets
-        self.geo = geoip.GeoResolver()               # for the Map view (lazy/opt-in)
+        # Where routers are and whose network: looked up while monitoring
+        # (Settings -> Look up where routers are), answers kept a month.
+        self.geo = geoip.GeoResolver(settings.config_dir() / geoip.CACHE_NAME)
         self._geo_started = False
+        self._geo_fed = 0.0
         self._selected_ttl: Optional[int] = None    # hop currently graphed
         self._last_ttl: Optional[int] = None         # destination hop, per refresh
         self._pinned = False                         # True once the user picks a row
@@ -111,6 +116,7 @@ class App:
         self.resume_var = tk.BooleanVar(value=True)   # resume last targets on launch
         self.keep_tray_var = tk.BooleanVar(value=True)  # closing hides to the tray
         self.notify_var = tk.BooleanVar(value=True)     # a notification per alert
+        self.lookup_var = tk.BooleanVar(value=True)     # look up where routers are
         # Start at sign-in: the Run key on Windows, an XDG autostart entry on
         # Linux (same set_autostart/autostart_enabled names in both modules).
         self._autostart = winplatform if winplatform.IS_WINDOWS else (xdg if xdg.IS_LINUX else None)
@@ -155,6 +161,8 @@ class App:
             var.trace_add("write", lambda *_a: self._save_soon())
         for var in self.recording.vars.values():
             var.trace_add("write", lambda *_a: (self._save_soon(), self._apply_recording_soon()))
+        self.lookup_var.trace_add("write", lambda *_a: (self._save_soon(), self._apply_lookups()))
+        self._apply_lookups()
         root.protocol("WM_SAVE_YOURSELF", self._save_settings)
 
         if not icmp.is_available():
@@ -486,8 +494,8 @@ class App:
         view = ttk.Frame(host)
         self.map_header = ttk.Label(
             view, style="Muted.TLabel",
-            text="Opening this view looks up public hop addresses with ipwho.is. "
-                 "Private and LAN addresses are never sent.")
+            text="Router locations come from ipwho.is (public router addresses only, never private "
+                 "or LAN ones) and from the routers' own names.")
         self.map_header.pack(side="top", anchor="w", pady=(0, self.s(6)))
         card = self._card(view)
         card.pack(side="top", fill="both", expand=True)
@@ -897,6 +905,10 @@ class App:
         ip = str(vals[1]) if len(vals) > 1 else ""
         host = str(vals[2]) if len(vals) > 2 else ""
         m = self._menu(self.tree)
+        ttl = int(vals[0]) if vals else 0
+        if ttl and self._active not in self._loaded:
+            m.add_command(label="Details…", command=lambda: self._hop_details(ttl, ip, host))
+            m.add_separator()
         if ip and ip != "*":
             m.add_command(label=f"Copy address   {ip}", command=lambda: self._clip(ip))
         if host and host not in ("", "(resolving…)"):
@@ -956,7 +968,7 @@ class App:
         s = self._settings
         self.defaults.load_settings(s)
         for var, key in ((self.resume_var, "resume_on_launch"), (self.keep_tray_var, "keep_in_tray"),
-                         (self.notify_var, "notify")):
+                         (self.notify_var, "notify"), (self.lookup_var, "lookup_hops")):
             if isinstance(s.get(key), bool):
                 var.set(s[key])
         self.updates.load(s)
@@ -967,6 +979,7 @@ class App:
                 "resume_on_launch": bool(self.resume_var.get()),
                 "keep_in_tray": bool(self.keep_tray_var.get()),
                 "notify": bool(self.notify_var.get()),
+                "lookup_hops": bool(self.lookup_var.get()),
                 "told_hidden": bool(self._settings.get("told_hidden", False))}
         self.defaults.save_settings(data)
         self.updates.save(data)
@@ -1012,6 +1025,37 @@ class App:
 
     def clear_history(self) -> None:
         gui_recording.clear_history(self)
+
+    # --- where routers are ----------------------------------------------------
+    def _apply_lookups(self) -> None:
+        """On: look routers up while monitoring. Off: stop, and the Map goes
+        back to asking only while it's open."""
+        if self.lookup_var.get():
+            if not self._geo_started:
+                self.geo.start()
+                self._geo_started = True
+        elif self._geo_started:
+            self.geo.stop()
+            self._geo_started = False
+
+    def _feed_lookups(self) -> None:
+        """Queue every running target's routers, every few seconds. Each is
+        asked about once a month at most (the resolver remembers)."""
+        now = time.monotonic()
+        if not self.lookup_var.get() or now - self._geo_fed < 5.0:
+            return
+        self._geo_fed = now
+        for name, mon in self._monitors.items():
+            if name not in self._loaded:
+                for addr in mon.hop_addresses():
+                    self.geo.request(addr)
+
+    def _hop_details(self, ttl: int, address: str, hostname: str) -> None:
+        name = self._active
+        if name is None:
+            return
+        gui_hopinfo.HopDetails(self, name, ttl, address if address != "*" else None,
+                               hostname or None)
 
     def _restore_targets(self, force: bool = False) -> None:
         """If enabled (or ``force``d), re-add and start the last session's
@@ -1083,7 +1127,8 @@ class App:
                         f"# samples={info['samples']}  window={window}"):
                     w.writerow([line])
                 w.writerow(["hop", "ip", "hostname", "sent", "received", "loss_pct",
-                            "current_ms", "avg_ms", "min_ms", "max_ms", "jitter_ms", "status", "mos"])
+                            "current_ms", "avg_ms", "min_ms", "max_ms", "jitter_ms", "status", "mos",
+                            "location", "network"])
                 last_ttl = views[-1].ttl
                 for v in views:
                     m = mos(v.avg, v.jitter, v.loss_pct) if v.ttl == last_ttl else None
@@ -1094,6 +1139,8 @@ class App:
                         _csv_num(v.best), _csv_num(v.worst), _csv_num(v.jitter),
                         icmp.status_text(v.last_status) if v.last_status is not None else "",
                         f"{m:.2f}" if m is not None else "",
+                        csv_safe(gui_hopinfo.location(v.address, v.hostname, self.geo)),
+                        csv_safe(gui_hopinfo.network(v.address, self.geo)),
                     ])
         except OSError as exc:
             messagebox.showerror("Export failed", str(exc))
@@ -1268,6 +1315,7 @@ class App:
         self._update_tray()
         if self.root.state() == "withdrawn":
             return              # in the tray: nothing on screen to update
+        self._feed_lookups()
         self._update_cards()
         views, status, target_ip, _target_input = self.monitor.snapshot()
         self._update_detail(views, status, target_ip)
@@ -1433,7 +1481,9 @@ class App:
         for v in views:
             iid = str(v.ttl)
             hostname = v.hostname if v.hostname else ("(resolving…)" if v.address and v.hostname is None else "")
-            values = (v.ttl, v.address or "*", hostname, f"{v.loss_pct:.0f}%", v.sent,
+            values = (v.ttl, v.address or "*", hostname,
+                      gui_hopinfo.location(v.address, v.hostname, self.geo),
+                      gui_hopinfo.network(v.address, self.geo), f"{v.loss_pct:.0f}%", v.sent,
                       _ms(v.current), _ms(v.avg), _ms(v.best), _ms(v.worst), _ms(v.jitter))
             tag = row_tag(v, is_dest=(v.ttl == last_ttl))
             if self.tree.exists(iid):
@@ -1488,8 +1538,8 @@ class App:
     def _draw_map(self) -> None:
         if self.detail_nav.current != "map":
             return
-        if not self._geo_started:      # opt-in: only talk to ipwho.is once the
-            self.geo.start()           # Map view is actually opened
+        if not self._geo_started:      # lookups off: talk to ipwho.is only while
+            self.geo.start()           # the Map view is open
             self._geo_started = True
         views, _s, _ip, _in = self.monitor.snapshot()
         caption = draw_map(self.map_canvas, self._ink(), views, self.geo)

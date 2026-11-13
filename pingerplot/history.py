@@ -77,7 +77,7 @@ CREATE TABLE IF NOT EXISTS runs(
     program TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS runs_target ON runs(target, started);
-CREATE TABLE IF NOT EXISTS addrs(id INTEGER PRIMARY KEY, addr TEXT NOT NULL UNIQUE);
+CREATE TABLE IF NOT EXISTS addrs(id INTEGER PRIMARY KEY, addr TEXT NOT NULL UNIQUE, name TEXT);
 CREATE TABLE IF NOT EXISTS probes(
     run INTEGER NOT NULL,
     t REAL NOT NULL,
@@ -298,6 +298,12 @@ class Recorder:
         if self._thread is not None and not self._closed:
             self._q.put(("clear",))
 
+    def name(self, addr: Optional[str], name: Optional[str]) -> None:
+        """A router's DNS name ("" for none), so the history can say what
+        and where it was long after the run."""
+        if addr and name is not None and self._thread is not None and not self._closed:
+            self._q.put(("name", None, addr, name))
+
     def end_run(self, run: Optional[int]) -> None:
         if run is not None:
             self._q.put(("end", run, self._clock()))
@@ -344,6 +350,11 @@ class Recorder:
                                  f"PingerPlot (schema {version[0]})")
                     return None
                 db.execute("INSERT OR IGNORE INTO addrs(id, addr) VALUES(?, '')", (NO_REPLY,))
+                # Router names came after the first files were made: add the
+                # column to a file that doesn't have it.
+                cols = {row[1] for row in db.execute("PRAGMA table_info(addrs)")}
+                if "name" not in cols:
+                    db.execute("ALTER TABLE addrs ADD COLUMN name TEXT")
                 return db
             except sqlite3.DatabaseError as exc:
                 try:
@@ -475,6 +486,9 @@ class Recorder:
                     seg = db.execute("INSERT INTO segments(run, route, start) VALUES(?,?,?)",
                                      (run, route_id, t)).lastrowid
                     open_seg[run] = (seg, route_id)
+            elif op == "name":
+                aid = addr_id(item[2])
+                db.execute("UPDATE addrs SET name=? WHERE id=?", (item[3], aid))
             elif op == "target_ip":
                 db.execute("UPDATE runs SET target_ip=? WHERE id=?", (item[2], run))
             elif op == "end":

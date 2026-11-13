@@ -453,6 +453,11 @@ class Monitor:
             _, _, loss, _, avg, _, _, jitter = self._hops[-1].compute()
             return (n, loss, avg, jitter, self.reached_target)
 
+    def hop_addresses(self) -> List[str]:
+        """The routers answering at each hop now (for looking them up)."""
+        with self._lock:
+            return [h.address for h in self._hops if h.address]
+
     def samples_for(self, ttl: int) -> List[Sample]:
         with self._lock:
             for h in self._hops:
@@ -1354,6 +1359,8 @@ class Monitor:
                 if hop.address == address:
                     hop.hostname = name
                 hop.resolving = False
+        if self.recorder is not None:
+            self.recorder.name(address, name)
 
     def _interruptible_sleep(self, seconds: float, gen: int) -> None:
         end = time.perf_counter() + max(0.0, seconds)

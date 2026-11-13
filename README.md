@@ -134,9 +134,10 @@ CI starts the app on Ubuntu on every push: the window's self-test, a probe of lo
 1. Type a host name or IP address in the box at the top left (your gateway, `8.8.8.8`, a server you care about)
    and press **Add**. Add as many as you like; each gets a card.
 2. Click a card to see that target: its status and MOS, then four views.
-   - **Hops**: the table (address, hostname, loss, sent, last, average, best, worst, jitter), rows amber or red
-     on loss or high latency, over a latency graph. Click a row to graph that hop; until you do, it follows the
-     destination.
+   - **Hops**: the table (address, hostname, location, network, loss, sent, last, average, best, worst, jitter),
+     rows amber or red on loss or high latency, over a latency graph. Click a row to graph that hop; until you do,
+     it follows the destination. Right-click a hop for **Details…**: where it is by its name and by the IP
+     database (each says which), whose network it's on, and every router seen at that hop in the last day.
    - **Timeline**: every hop stacked on one time axis.
    - **Map**: the public hops located on a map zoomed to the path (see [privacy](#updates-and-privacy)).
    - **Events**: route changes, alerts raised and cleared, warnings.
@@ -144,7 +145,7 @@ CI starts the app on Ubuntu on every push: the window's self-test, a probe of lo
    them.
 
 - **⋯** on a card, or a right-click, has *Edit settings…*, *Pause*/*Resume*, *Stop*/*Start* and *Remove*.
-  Right-click a hop to copy its address, hostname or row. Ctrl+N goes back to the box.
+  Right-click a hop for its details, or to copy its address, hostname or row. Ctrl+N goes back to the box.
 - **Settings** holds the defaults for new targets (probing, alerts, logging and webhooks) and the app's own
   options: theme, resuming your targets at start, Start with Windows, the notification area, notifications and
   updates.
@@ -293,8 +294,11 @@ replies. It talks to three other places:
 
 - Your DNS server, for each hop's hostname (**Settings → Look up hostnames**), and every 5 minutes for a target you
   gave by name, to notice when it moves.
-- [ipwho.is](https://ipwho.is), only when you open the **Map** view: the public hops' addresses, to place them on
-  the map. Private and LAN addresses are never sent. Rate-limited and cached. Don't open Map if you'd rather not.
+- [ipwho.is](https://ipwho.is), for where each public router is and whose network it's on (the Location and
+  Network columns, Details, History and the map): the router's address only, never a private, LAN or
+  carrier-NAT one. Each router is asked about once a month (answers are kept in `lookups.json`), one at a time,
+  at most 500 a day. **Settings → Look up where routers are** turns it off; then only the **Map** asks, while
+  it's open. A router's city is also read from its name (`chcgil`, `dfw01`, `Dallas1`), which sends nothing.
 - GitHub, once a day, for this project's `latest.json` (installed, portable and pipx copies, never a git
   checkout; turn it off in **Settings → Updates**). Nothing is downloaded until you click **Install**; a pipx copy
   is only told to run `pipx reinstall pingerplot`. An installed copy then runs the new installer
@@ -308,7 +312,8 @@ problem…** opens a GitHub issue form with the version filled in, which you edi
 ## Where it keeps things
 
 - `%APPDATA%\PingerPlot\` holds `settings.json` (your targets, each with its settings, and the app's options),
-  `update.log`, and the history in `history\history.sqlite3`. On Linux and macOS it's `$XDG_CONFIG_HOME/PingerPlot`, usually `~/.config/PingerPlot`.
+  `update.log`, the history in `history\history.sqlite3`, and `lookups.json` (where routers are, kept a month).
+  On Linux and macOS it's `$XDG_CONFIG_HOME/PingerPlot`, usually `~/.config/PingerPlot`.
 - A portable copy keeps them beside `PingerPlot.exe` instead. Delete `portable.txt` to make it use `%APPDATA%`.
 - On Linux, the menu and sign-in entries are `~/.local/share/applications/pingerplot.desktop` and
   `~/.config/autostart/pingerplot.desktop`, and the icon they use is in `~/.cache/PingerPlot`.

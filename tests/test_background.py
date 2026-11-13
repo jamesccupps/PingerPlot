@@ -46,6 +46,9 @@ class FakeMonitor:
     def samples_for(self, ttl):
         return []
 
+    def hop_addresses(self):
+        return []
+
     def all_samples(self):
         return {}
 

@@ -145,7 +145,17 @@ def install():
 
     def lookup(self, ip):
         lat, lon, city, country = WHERE[ip]
-        return geoip.GeoInfo(lat=lat, lon=lon, city=city, region="", country=country, isp="")
+        name = REVERSE.get(ip, "")
+        # Networks numbered from the AS range set aside for documentation
+        # (RFC 5398), so no picture names a real one.
+        if name.endswith("example.com"):
+            asn, org = 64511, "Example Voice"
+        elif name.startswith("peer"):
+            asn, org = 64500, "Example Transit"
+        else:
+            asn, org = 64496, "Example ISP"
+        return geoip.GeoInfo(lat=lat, lon=lon, city=city, region="", country=country, isp=org,
+                             asn=asn, org=org)
     geoip.GeoResolver._lookup = lookup
     geoip._MIN_INTERVAL = 0.05
 

@@ -46,6 +46,7 @@ class Router:
     rtt_min: Optional[float]
     rtt_max: Optional[float]
     jitter: Optional[float]
+    name: Optional[str] = None      # its DNS name, if it was resolved while recorded
 
 
 @dataclass
@@ -125,18 +126,18 @@ def hops(reader: Reader, target: str, since: float, until: float) -> List[HopRow
         return []
     rows = db.execute(
         "SELECT m.ttl, a.addr, sum(m.sent), sum(m.recv), sum(m.rtt_sum), min(m.rtt_min), "
-        "max(m.rtt_max), sum(m.jit_sum), sum(m.jit_n) FROM minutes m "
+        "max(m.rtt_max), sum(m.jit_sum), sum(m.jit_n), max(a.name) FROM minutes m "
         "JOIN runs r ON r.id = m.run JOIN addrs a ON a.id = m.addr "
         "WHERE r.target = ? AND m.minute BETWEEN ? AND ? GROUP BY m.ttl, a.addr ORDER BY m.ttl",
         (target, int(since // 60), int(until // 60))).fetchall()
     out: Dict[int, HopRow] = {}
-    for ttl, addr, sent, recv, rtt_sum, rmin, rmax, jsum, jn in rows:
+    for ttl, addr, sent, recv, rtt_sum, rmin, rmax, jsum, jn, name in rows:
         hop = out.setdefault(ttl, HopRow(ttl, 0, 0))
         hop.sent += sent
         hop.recv += recv
         if addr:
             hop.routers.append(Router(addr, recv, rtt_sum / recv if recv else None, rmin, rmax,
-                                      jsum / jn if jn else None))
+                                      jsum / jn if jn else None, name))
     for hop in out.values():
         hop.routers.sort(key=lambda r: -r.recv)
     return [out[t] for t in sorted(out)]

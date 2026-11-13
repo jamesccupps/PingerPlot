@@ -252,6 +252,12 @@ class SettingsPage(ScrollFrame):
         setting_row(card, look, "Theme", "", theme_control, first=True)
         setting_row(card, look, "Resume targets when the app starts",
                     "Each with the settings it was running with.", _switch(app.resume_var))
+        setting_row(card, look, "Look up where routers are",
+                    "Each public router's location and network owner, from ipwho.is, for the hop "
+                    "table, Details, History and the map. Only router addresses are sent (never "
+                    "private or LAN ones), each about once a month; router names are read for "
+                    "their city without sending anything. Off, the Map looks up only while open.",
+                    _switch(app.lookup_var))
         app.build_app_settings(card)
         app.updates.build_section(body)
 

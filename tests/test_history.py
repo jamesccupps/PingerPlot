@@ -315,3 +315,34 @@ def test_disk_bytes_counts_the_file_and_its_log(tmp_path):
     rec.flush()
     assert history.disk_bytes(tmp_path) > 0
     rec.close()
+
+
+# --- router names ---------------------------------------------------------------
+
+def test_router_names_are_kept_with_the_history(tmp_path):
+    from pingerplot import investigate
+    rec = _rec(tmp_path)
+    run = rec.begin_run("t", "icmp", None, {})
+    rec.probe(run, T0, 1, 1, ROUTER, 5.0, 0)
+    rec.name(ROUTER, "ae-5.r21.chcgil09.us.bb.example.net")
+    rec.end_run(run)
+    rec.close()
+    (hop,) = investigate.hops(Reader(tmp_path), "t", T0 - 60, T0 + 60)
+    assert hop.routers[0].name == "ae-5.r21.chcgil09.us.bb.example.net"
+
+
+def test_an_older_file_gains_the_name_column(tmp_path):
+    db = sqlite3.connect(tmp_path / history.DB_NAME, isolation_level=None)
+    db.executescript(history._SCHEMA.replace(
+        "addr TEXT NOT NULL UNIQUE, name TEXT)", "addr TEXT NOT NULL UNIQUE)"))
+    db.execute("INSERT INTO meta VALUES('schema', '1')")
+    db.execute("INSERT INTO addrs(id, addr) VALUES(7, ?)", (ROUTER,))
+    db.close()
+    rec = _rec(tmp_path)
+    rec.name(ROUTER, "core1.lax1.example.net")
+    rec.close()
+    db = sqlite3.connect(tmp_path / history.DB_NAME)
+    assert db.execute("SELECT id, name FROM addrs WHERE addr=?", (ROUTER,)).fetchone() == \
+        (7, "core1.lax1.example.net")
+    db.close()
+    assert rec.problem == ""

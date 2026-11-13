@@ -35,8 +35,25 @@ All notable changes to PingerPlot are recorded here. The format follows
   event, and PingerPlot follows it: a fresh trace to the new address, and a
   new run in the history. Round-robin DNS that merely rotates isn't a move.
 
+- **Where each router is, and whose network.** The hop table gains Location
+  and Network columns, and a hop's right-click menu **Details…**: where the
+  router is by its name and by the IP database (each labelled, and said when
+  they disagree), its network (AS number and owner), and every router seen at
+  that hop in the last day. The History page's Hops tab shows the same for
+  every router it lists. Router names are recorded in the history for this.
+- **A router's city from its name**, offline: carriers name routers after
+  where they stand (CLLI codes like `chcgil`, airport codes like `dfw01`,
+  `Dallas1`), and for the backbone that's usually right where IP geolocation
+  isn't.
+
 ### Changed
 
+- **Router lookups run while monitoring**, not only while the Map is open, so
+  the tables and the history can say where routers are. Only public router
+  addresses go to ipwho.is, each about once a month (answers are kept in
+  `lookups.json`), at most 500 a day, with an hour's pause if the service says
+  to slow down. **Settings → Look up where routers are** turns it off, and the
+  Map then asks only while it's open, as before.
 - **Reroutes are reported once, and load balancing isn't reported as one.**
   A hop that alternates between routers used to log "path changed" every
   round or two. A new router now has to hold the hop for 3 rounds to count as

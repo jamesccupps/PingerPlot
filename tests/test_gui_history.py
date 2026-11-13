@@ -155,3 +155,25 @@ def test_route_colours_are_stable_and_fold_to_grey():
 def test_the_history_tab_is_in_the_header(app):
     assert "history" in app.nav._labels
     assert isinstance(HistoryPage, type)
+
+
+def test_hops_show_each_routers_name_place_and_network(app):
+    from pingerplot.geoip import GeoInfo
+    now = time.time()
+    rec = app.recorder
+    run = rec.begin_run("named.example.com", "icmp", None, {})
+    for i in range(30):
+        rec.probe(run, now - 1800 + i, i, 1, R1, 3.0, 0)
+    rec.name(R1, "be3036.ccr22.dfw01.atlas.example.com")
+    rec.end_run(run)
+    rec.flush()
+    # As a cache loaded from disk holds it: answered, so never asked again.
+    app.geo.cache[R1] = GeoInfo(1, 2, "Elsewhere", "", "US", "ISP", 64500, "Example Transit")
+    app.geo._seen.add(R1)
+    app._show_page("history", "named.example.com")
+    _drain(app)
+    tree = app.history_page.hops_tree
+    values = tree.item(tree.get_children()[0], "values")
+    assert values[0] == R1 and values[1].startswith("be3036")
+    assert values[2] == "Dallas, US", "the name's answer, not the database's"
+    assert values[3] == "AS64500 Example Transit"
