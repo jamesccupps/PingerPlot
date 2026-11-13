@@ -305,6 +305,23 @@ def probe_path(
     senders: dict = {}   # ttl -> [sock_or_None, start_time]
     key_ttl: dict = {}   # tcp: src_port -> ttl ; udp: dst_port -> ttl
     results: dict = {}
+
+    def settle(ttl: int, result: PingResult) -> None:
+        # Close the hop's socket the moment its answer is in. Windows keeps
+        # resending the SYN of a connecting socket (+1 s, +3 s) whatever the
+        # router said, and one silent hop holds the round open to the TCP
+        # timeout floor: with every socket left to the end, most hops went
+        # out two or three times and the routers answered each copy.
+        results[ttl] = result
+        pending.discard(ttl)
+        sock = senders[ttl][0]
+        if sock is not None:
+            senders[ttl][0] = None
+            try:
+                sock.close()
+            except OSError:
+                pass
+
     try:
         for ttl in ttls:
             if mode == "tcp":
@@ -383,17 +400,15 @@ def probe_path(
                     responder = socket.inet_ntoa(data[12:16])
                     rtt = (now - senders[ttl][1]) * 1000.0
                     if kind == "dest" and responder == dest_ip:
-                        results[ttl] = PingResult(IP_SUCCESS, rtt, responder, True)
+                        settle(ttl, PingResult(IP_SUCCESS, rtt, responder, True))
                     else:
-                        results[ttl] = PingResult(IP_TTL_EXPIRED_TRANSIT, rtt, responder, False)
-                    pending.discard(ttl)
+                        settle(ttl, PingResult(IP_TTL_EXPIRED_TRANSIT, rtt, responder, False))
             if mode == "tcp" and (w or x):
                 for ttl in list(pending):
                     s = senders[ttl][0]
                     if s in w or s in x:
                         err = s.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
-                        results[ttl] = _tcp_reach(err, (now - senders[ttl][1]) * 1000.0, dest_ip)
-                        pending.discard(ttl)
+                        settle(ttl, _tcp_reach(err, (now - senders[ttl][1]) * 1000.0, dest_ip))
         for ttl in pending:
             results[ttl] = PingResult(IP_REQ_TIMED_OUT, None, None, False)
         return results

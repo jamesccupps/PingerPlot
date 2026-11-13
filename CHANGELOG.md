@@ -4,6 +4,16 @@ All notable changes to PingerPlot are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **TCP mode sent most probes two or three times.** Each hop's socket stayed
+  open until the whole round ended, and Windows kept resending its SYN (at
+  +1 s and +3 s) after the router had already answered; one silent hop holds a
+  TCP round open for 3 s. A capture of three TCP targets counted 26 SYNs a
+  second where 12 would do. A hop's socket now closes as soon as it answers.
+
 ## [1.4.5] — 2026-11-10
 
 PingerPlot is in a Scoop bucket, and Start with Windows works with it.
