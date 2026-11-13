@@ -4,7 +4,9 @@ All notable changes to PingerPlot are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.4.6] — 2026-11-13
+
+TCP mode sends each probe once, and a too-short interval is explained.
 
 ### Fixed
 
@@ -17,6 +19,12 @@ All notable changes to PingerPlot are recorded here. The format follows
   A round waits for every hop, so a silent one holds it to the timeout; in TCP
   mode that's at least 3 s, so "every 1 s" ran every 3 s. The Events tab now
   says so when a target starts.
+
+### Documentation
+
+- The README says which mode to leave running: ICMP. A TCP trace sends each
+  hop from its own port, so on load-balanced links it can join two paths, and
+  its SYNs can look like a SYN flood to intrusion detection.
 
 ## [1.4.5] — 2026-11-10
 
@@ -630,6 +638,7 @@ have relied on — see **Changed** before comparing old exports with new ones.
 
 - Initial public release.
 
+[1.4.6]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.4.6
 [1.4.5]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.4.5
 [1.4.4]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.4.4
 [1.4.3]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.4.3
