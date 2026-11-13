@@ -204,6 +204,19 @@ An *open* UDP port stays silent and reads as a timeout, so prefer TCP for a defi
 > mode therefore waits at least 3000 ms and says so in Events. `TCP_MAXRT` doesn't help: it replaces
 > `WSAECONNREFUSED` with `WSAETIMEDOUT` and destroys the very distinction the probe exists to draw.
 
+**ICMP for watching, TCP for checking.** For a target you leave running, use ICMP:
+
+- **Path mixing.** A TCP traceroute sends each hop from its own socket, so each hop leaves from its own source
+  port. Routers that spread traffic over parallel links (ECMP) pick the link from the addresses and ports, so
+  neighboring hops can take different links and the hop list can join two paths into one. Paris traceroute
+  prevents that by keeping every hop's ports the same, which takes raw TCP sends, and Windows forbids those.
+- **ICMP is steadier, not immune.** ICMP mode uses one identifier for a whole round. Each probe's sequence number
+  still changes the checksum some balancers hash, but a new port per hop splits far more often.
+- **It can look like an attack.** TCP mode sends a SYN to the target's port for every hop of every round. Intrusion
+  detection that ignores the TTL can take that for a SYN flood.
+
+Use TCP to check a particular service, or to trace a path that blocks ICMP.
+
 ### DSCP and source address
 
 **DSCP** (Settings → Probing) marks each probe with a DiffServ code point, so a path with QoS can be measured as the
