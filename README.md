@@ -26,7 +26,7 @@ when the destination degrades, and needs no administrator rights for ICMP.
 - **The path over time.** The Timeline draws every hop on one time axis: a latency step shows up as the row where
   the bars get tall, and stays tall for every hop after it.
 - **Alerts that mean something.** Sustained loss, latency or a poor MOS at the *destination*, over a window you
-  choose, never a router in the middle that just deprioritises ICMP. A banner, a sound, a Windows notification and
+  choose, never a router in the middle that just deprioritizes ICMP. A banner, a sound, a Windows notification and
   an optional webhook (Slack, Teams, ntfy, Home Assistant…).
 - **Route changes, live.** A hop whose router changes, or a path that grows or shrinks, goes into the Events list.
 - **Many targets at once,** each with its own settings, each a card with its hop count, loss, latency and MOS.
@@ -174,7 +174,7 @@ a 20-probe window. `0` turns a check off. An alert raises when it crosses the th
 recovers; both go into Events, the banner, a notification (**Settings → Show a notification for alerts**), the
 optional sound and the webhook.
 
-Alerts judge the destination only, the one hop whose numbers aren't muddied by routers deprioritising ICMP, and
+Alerts judge the destination only, the one hop whose numbers aren't muddied by routers deprioritizing ICMP, and
 only once it has answered, so a target that simply blocks ICMP never false-alarms. The window counts only probes
 since the destination took its current hop number: after a reroute, a hop's history can belong to a router that
 held that TTL in the meantime, and its rate-limited "TTL exceeded" replies aren't the destination's loss. The hop
@@ -193,7 +193,7 @@ is why it needs no administrator rights. The others:
 |---|---|---|
 | **ICMP** | No | The default. Full traceroute and monitoring. |
 | **TCP, destination only** | No | "Is this service up, and how fast?": a TCP handshake to a port (443, 3389, a device's web page). No per-hop trace. |
-| **TCP / UDP, full traceroute** | **Yes** | A per-hop trace where ICMP is blocked or deprioritised. Probes go out on a normal socket with `IP_TTL`; routers' "TTL exceeded" replies are captured on a raw `SIO_RCVALL` socket, which needs elevation. Right-click the shortcut and choose **Run as administrator**. |
+| **TCP / UDP, full traceroute** | **Yes** | A per-hop trace where ICMP is blocked or deprioritized. Probes go out on a normal socket with `IP_TTL`; routers' "TTL exceeded" replies are captured on a raw `SIO_RCVALL` socket, which needs elevation. Right-click the shortcut and choose **Run as administrator**. |
 
 Without admin, a full TCP/UDP traceroute is refused with a message rather than showing misleading all-timeout hops.
 An *open* UDP port stays silent and reads as a timeout, so prefer TCP for a definitive "the service is up".
