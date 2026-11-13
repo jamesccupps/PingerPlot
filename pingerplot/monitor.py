@@ -234,6 +234,7 @@ class Monitor:
         self._payload = icmp.DEFAULT_PAYLOAD
         self.log_path = ""
         self.timeout_note = ""   # set when start() raises a too-short timeout
+        self.needs_admin = False  # stopped because full TCP/UDP needs Administrator
         self.interval_note = ""  # set when the interval is shorter than a round can be
         self.log_note = ""       # set when the probe log could not be opened
         self._log_fh = None
@@ -348,6 +349,7 @@ class Monitor:
         self.source_ip = (source_ip or "").strip()
         self._payload = _build_payload(self.packet_size)
         self.timeout_note = ""
+        self.needs_admin = False
         if self.packet_type == "tcp" and self.timeout_ms < TCP_REFUSAL_FLOOR_MS:
             # Raise it rather than let the probe report a closed port as an
             # unreachable host. Silently overriding a setting the user typed
@@ -842,6 +844,7 @@ class Monitor:
                 # The option names are the Settings page's. Elevation is the
                 # fix only where the capture exists: SIO_RCVALL is Windows'.
                 if sys.platform == "win32":
+                    self.needs_admin = True     # the window offers to restart elevated
                     why = (f"Full {kind} traceroute needs Administrator (raw capture). Run "
                            "PingerPlot as administrator, switch")
                 else:

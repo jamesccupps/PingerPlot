@@ -351,6 +351,7 @@ class TrayIcon:
                 _creating = None
             if not self.hwnd:
                 raise OSError(ctypes.get_last_error(), "CreateWindowExW failed")
+            winplatform.allow_show_message(self.hwnd)
             _instances[self.hwnd] = self
             self.ok = self._add_icon()
         except OSError:

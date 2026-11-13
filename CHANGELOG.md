@@ -4,6 +4,27 @@ All notable changes to PingerPlot are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Restart as administrator, from inside PingerPlot**, for full TCP and UDP
+  traceroute: **⋯ → Restart as administrator**, the same in the tray menu and
+  Settings, and a button on a target stopped because it needs it. Windows
+  asks first (naming the publisher); the elevated copy resumes the same
+  targets. The window's title says "(Administrator)" while it is. For the
+  installed, portable and Scoop copies; from source, `launch.ps1 -Elevated`.
+
+### Fixed
+
+- **With a copy running as administrator, an ordinary launch started a
+  second PingerPlot** that probed everything again: the elevated copy's lock
+  couldn't be opened, and "access denied" was taken for "not running". It
+  now counts as running.
+- **The Start menu shortcut did nothing visible while an elevated copy ran**:
+  Windows dropped the "show your window" message from the ordinary process.
+  The elevated copy now lets that one message through.
+
 ## [1.5.0] — 2026-11-13
 
 Everything PingerPlot measures is recorded, a History page to look back through it,

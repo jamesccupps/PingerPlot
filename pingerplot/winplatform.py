@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -278,7 +279,13 @@ class SingleInstance:
         k32 = ctypes.windll.kernel32
         k32.CreateMutexW.restype = wintypes.HANDLE
         self.handle = k32.CreateMutexW(None, False, name)
-        self.already_running = k32.GetLastError() == 183    # ERROR_ALREADY_EXISTS
+        err = k32.GetLastError()
+        # ERROR_ALREADY_EXISTS, or ERROR_ACCESS_DENIED with no handle: a copy
+        # running as administrator made the mutex, and its default security
+        # keeps an ordinary process from opening it. Taking that as "none
+        # running" started a second PingerPlot probing everything twice
+        # (review M3).
+        self.already_running = err == 183 or (not self.handle and err == 5)
 
     def signal_existing(self) -> bool:
         if not IS_WINDOWS:
@@ -295,3 +302,65 @@ class SingleInstance:
         if self.handle:
             ctypes.windll.kernel32.CloseHandle(self.handle)
             self.handle = None
+
+
+def wait_for_instance(timeout: float = 20.0, poll: float = 0.25) -> "SingleInstance":
+    """The single-instance lock, waiting up to ``timeout`` for the copy that
+    restarted this one to finish closing. The handle is let go between tries:
+    held, it would keep the old copy's mutex alive and the wait could never
+    end."""
+    deadline = time.monotonic() + timeout
+    while True:
+        inst = SingleInstance()
+        if not inst.already_running or time.monotonic() >= deadline:
+            return inst
+        inst.release()
+        time.sleep(poll)
+
+
+def allow_show_message(hwnd) -> None:
+    """Let a copy started normally ask this one to show its window even when
+    this one runs as administrator: Windows drops messages from a lower
+    integrity level (UIPI) unless the window opts in, so clicking the Start
+    menu shortcut did nothing visible (review M3)."""
+    if not IS_WINDOWS or not hwnd:
+        return
+    try:
+        u32 = ctypes.windll.user32
+        u32.ChangeWindowMessageFilterEx.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.DWORD,
+                                                    ctypes.c_void_p]
+        u32.ChangeWindowMessageFilterEx(hwnd, WM_SHOW_WINDOW, 1, None)    # MSGFLT_ALLOW
+    except (AttributeError, OSError):
+        pass
+
+
+# --- Restart as administrator ---------------------------------------------------
+
+RESTARTED = "--restarted"
+
+
+def can_elevate() -> bool:
+    """Whether "Restart as administrator" is on offer: Windows, a built copy
+    (installed, portable or Scoop; from source, launch.ps1 -Elevated does it),
+    and not running as administrator already."""
+    return IS_WINDOWS and bool(getattr(sys, "frozen", False)) and not is_elevated()
+
+
+def relaunch_elevated() -> Optional[str]:
+    """Start this copy again as administrator; Windows asks first, naming the
+    publisher. Returns None once it has started (this copy should then quit),
+    or why it didn't."""
+    if not IS_WINDOWS:
+        return "Running as administrator is a Windows feature."
+    exe = str(_frozen_exe())
+    sh = ctypes.windll.shell32
+    sh.ShellExecuteW.argtypes = [wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR,
+                                 wintypes.LPCWSTR, wintypes.LPCWSTR, ctypes.c_int]
+    sh.ShellExecuteW.restype = ctypes.c_void_p
+    rc = sh.ShellExecuteW(None, "runas", exe, RESTARTED, str(Path(exe).parent), 1)
+    rc = rc or 0
+    if rc > 32:
+        return None
+    if rc == 5:          # SE_ERR_ACCESSDENIED: the prompt was answered No, or policy forbids it
+        return "Windows didn't start it as administrator: the prompt was answered No."
+    return f"Windows couldn't start {Path(exe).name} as administrator (error {rc})."

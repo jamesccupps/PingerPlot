@@ -198,7 +198,7 @@ is why it needs no administrator rights. The others:
 |---|---|---|
 | **ICMP** | No | The default. Full traceroute and monitoring. |
 | **TCP, destination only** | No | "Is this service up, and how fast?": a TCP handshake to a port (443, 3389, a device's web page). No per-hop trace. |
-| **TCP / UDP, full traceroute** | **Yes** | A per-hop trace where ICMP is blocked or deprioritized. Probes go out on a normal socket with `IP_TTL`; routers' "TTL exceeded" replies are captured on a raw `SIO_RCVALL` socket, which needs elevation. Right-click the shortcut and choose **Run as administrator**. |
+| **TCP / UDP, full traceroute** | **Yes** | A per-hop trace where ICMP is blocked or deprioritized. Probes go out on a normal socket with `IP_TTL`; routers' "TTL exceeded" replies are captured on a raw `SIO_RCVALL` socket, which needs elevation: **⋯ → Restart as administrator** (also in the tray menu, Settings, and on a target that needs it). Windows asks first, naming the publisher; your targets carry on. |
 
 Without admin, a full TCP/UDP traceroute is refused with a message rather than showing misleading all-timeout hops.
 An *open* UDP port stays silent and reads as a timeout, so prefer TCP for a definitive "the service is up".
@@ -468,7 +468,7 @@ session if you want the probes logged.
 | What you see | Fix |
 |---|---|
 | Loss at a hop in the middle | Usually normal: that router rate-limits the replies it generates. Only loss that reaches the destination row is a problem. |
-| "Full TCP/UDP traceroute needs Administrator" | Right-click the shortcut → **Run as administrator**, or use ICMP, or TCP with **Destination only**. |
+| "Full TCP/UDP traceroute needs Administrator" | Click **Restart as administrator** beside it (or ⋯ → Restart as administrator), or use ICMP, or TCP with **Destination only**. From source, `launch.ps1 -Elevated`. |
 | "Full TCP/UDP traceroute is Windows-only for now" (Linux, macOS) | Use ICMP, or TCP with **Destination only**. |
 | "PingerPlot's window needs Tk" (Linux) | Install the package it names for your distribution (see [Linux](#linux)). |
 | A target shows "Cannot resolve" | DNS for that name failed. The window doesn't retry by itself: **⋯ → Start** on its card once the network is up. (The headless runner retries.) |

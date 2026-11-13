@@ -415,6 +415,10 @@ class App:
         self.stop_btn.pack(side="left", padx=(S(6), 0))
         self.edit_btn = ttk.Button(buttons, text="Edit settings", command=self._edit_active)
         self.edit_btn.pack(side="left", padx=(S(6), 0))
+        # Shown only for a target stopped because it needs Administrator.
+        self.elevate_btn = ttk.Button(buttons, text="Restart as administrator",
+                                      style="Accent.TButton", command=self._restart_elevated)
+        self._elevate_shown = False
 
         stats = ttk.Frame(parent)
         stats.pack(side="top", fill="x", pady=(S(6), 0))
@@ -582,6 +586,18 @@ class App:
                         "work but full TCP/UDP traceroute doesn't: for that, run PingerPlot as "
                         "administrator when you need it.",
                         switch(self.autostart_var, self._toggle_autostart))
+            if self._elevated:
+                setting_row(card, self.look, "Running as administrator",
+                            "Full TCP and UDP traceroute work in this session. To go back, quit "
+                            "and open PingerPlot as usual.")
+            elif winplatform.can_elevate():
+                setting_row(card, self.look, "Run as administrator",
+                            "Full TCP and UDP traceroute (every hop, not just the destination) "
+                            "need it, to read the replies Windows would otherwise keep to "
+                            "itself. Windows asks first; your targets carry on.",
+                            lambda row: ttk.Button(row, text="Restart as administrator",
+                                                   style="Card.TButton",
+                                                   command=self._restart_elevated))
         elif xdg.IS_LINUX:
             setting_row(card, self.look, "Start when you sign in",
                         "Opens PingerPlot minimized when you sign in to your desktop, and resumes "
@@ -658,8 +674,22 @@ class App:
             items.append(M("Start with Windows", lambda: self._post(self._tray_toggle_autostart),
                            checked=winplatform.autostart_enabled()))
         items += self.updates.tray_items(M)
+        if winplatform.can_elevate():
+            items.append(M("Restart as administrator", lambda: self._post(self._restart_elevated)))
         items += [M(), M("Quit", lambda: self._post(self._quit))]
         return items
+
+    def _restart_elevated(self) -> None:
+        """Start again as administrator (for full TCP/UDP traceroute): save,
+        ask Windows to start this copy elevated, and on its way, close. The
+        new copy waits for this one to let go of the single-instance lock and
+        resumes the same targets."""
+        self._save_settings()
+        why = winplatform.relaunch_elevated()
+        if why:
+            messagebox.showwarning("PingerPlot", why, parent=self.root)
+            return
+        self._quit()
 
     def _tray_toggle_autostart(self) -> None:
         self.autostart_var.set(not winplatform.autostart_enabled())
@@ -897,6 +927,8 @@ class App:
         m.add_command(label="Open a saved session…", command=self._load_session)
         m.add_command(label="Compare with a saved session…", command=self._compare_with_baseline)
         m.add_separator()
+        if winplatform.can_elevate():
+            m.add_command(label="Restart as administrator", command=self._restart_elevated)
         m.add_command(label="Check for updates", command=self._check_for_updates)
         m.add_command(label="Report a problem…", command=lambda: webbrowser.open(self.report_url()))
         m.add_command(label="Project page", command=lambda: webbrowser.open(REPO_URL))
@@ -1350,6 +1382,7 @@ class App:
         self._update_cards()
         views, status, target_ip, _target_input = self.monitor.snapshot()
         self._update_detail(views, status, target_ip)
+        self._update_elevate_button()
         self._update_table(views)
         self._update_events()
         # Redraw the visible canvas only when its data changed since the last
@@ -1388,7 +1421,8 @@ class App:
             dot, text = c["text3"], "Not monitoring"
         self.status_dot.configure(foreground=dot)
         self.status_text.configure(text=text)
-        title = "PingerPlot" + (f" · {alerting} alerting" if alerting else "")
+        title = "PingerPlot" + (" (Administrator)" if self._elevated else "") + (
+            f" · {alerting} alerting" if alerting else "")
         if self.root.title() != title:
             self.root.title(title)
         if self._note_until and time.monotonic() > self._note_until:
@@ -1431,6 +1465,15 @@ class App:
             self.cards_empty.pack_forget()
         elif not self.cards_empty.winfo_ismapped():
             self.cards_empty.pack(side="top", anchor="w")
+
+    def _update_elevate_button(self) -> None:
+        want = bool(getattr(self.monitor, "needs_admin", False)) and winplatform.can_elevate()
+        if want != self._elevate_shown:
+            self._elevate_shown = want
+            if want:
+                self.elevate_btn.pack(side="left", padx=(self.s(6), 0))
+            else:
+                self.elevate_btn.pack_forget()
 
     def _update_detail(self, views: List[HopView], status: str, target_ip: Optional[str]) -> None:
         mon = self._active_monitor()
@@ -1680,7 +1723,10 @@ def main() -> None:
     winplatform.set_app_id()
     # One copy at a time: two would each restore and save the same target list
     # and probe every target twice. A second launch shows the first instead.
-    instance = winplatform.SingleInstance()
+    restarted = winplatform.RESTARTED in argv
+    # Restarted as administrator: the copy that started this one is closing,
+    # so wait for its lock rather than show it and leave.
+    instance = winplatform.wait_for_instance() if restarted else winplatform.SingleInstance()
     if instance.already_running and instance.signal_existing():
         return
     updated, failed = "--updated" in argv, "--update-failed" in argv
@@ -1690,7 +1736,8 @@ def main() -> None:
     # The X11 window class, so a Linux desktop matches the window to its
     # menu entry (StartupWMClass) and its icon in the dock.
     root = tk.Tk(className=xdg.WM_CLASS)
-    app = App(root, use_tray=True, start_minimized="--minimized" in argv, resume=updated or failed)
+    app = App(root, use_tray=True, start_minimized="--minimized" in argv,
+              resume=updated or failed or restarted)
     if updated:
         app._note(f"Updated to {__version__}", seconds=30)
     if failed:
