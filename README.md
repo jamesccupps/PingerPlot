@@ -237,6 +237,29 @@ route. A silent fallback is the dangerous outcome: the numbers look fine and des
 Both are recorded in the status line, the report header, the CSV export header and the saved session: a marked or
 pinned run measured something different from a plain one.
 
+## History
+
+Everything PingerPlot measures is kept, with nothing to set up: every probe and the router that answered it,
+per-minute loss, latency and jitter for each hop and router, every event (alerts, reroutes, DNS moves, warnings),
+and which route each target was on, when. It goes into one SQLite database on this computer (see
+[Where it keeps things](#where-it-keeps-things)), shared by the window and the headless runner.
+
+- **Reroutes, not noise.** A hop whose router changes and stays changed for 3 rounds is a reroute: one event that
+  names the hops that moved. A hop that takes turns between routers (load balancing over parallel links) is noted
+  once and not reported again. A route that comes back is recognized as the one seen before.
+- **A name that moves is followed.** A target given by name is looked up again every 5 minutes. If the address
+  being probed is no longer among the answers (a service sending you to another front end, say), that's an event,
+  and PingerPlot traces the route to the new address. Round-robin DNS that only rotates the order isn't a move.
+- **Settings → Recording**: turn it off, choose how long to keep probes (7 days), minute summaries and events (a
+  year), and a size limit (1 GB; past it the oldest probes go first). **What to record** picks which parts are kept.
+  **Open folder** shows the file; **Clear history** empties it. Changes apply at once, to running targets too.
+- **Robust.** Writes happen on their own thread, so probing never waits on the disk, and a crash loses at most the
+  last second. A damaged file is set aside and a new one started; a full disk or a folder that can't be written is a
+  warning in the target's Events. The webhook address is never written to it.
+
+A History view to browse and search it is next. Until then, any SQLite tool opens the file (tables `runs`,
+`probes`, `minutes`, `events`, `routes`, `segments`).
+
 ## Sessions, logs and comparing runs
 
 - **Probe log** (Settings → Logging and webhooks): every probe of every round to CSV, with a round number, so "did
@@ -256,7 +279,8 @@ pinned run measured something different from a plain one.
 PingerPlot sends probes to the targets you add and nowhere else, and reads nothing on your network beyond the
 replies. It talks to three other places:
 
-- Your DNS server, for each hop's hostname (**Settings → Look up hostnames**).
+- Your DNS server, for each hop's hostname (**Settings → Look up hostnames**), and every 5 minutes for a target you
+  gave by name, to notice when it moves.
 - [ipwho.is](https://ipwho.is), only when you open the **Map** view: the public hops' addresses, to place them on
   the map. Private and LAN addresses are never sent. Rate-limited and cached. Don't open Map if you'd rather not.
 - GitHub, once a day, for this project's `latest.json` (installed, portable and pipx copies, never a git
@@ -265,13 +289,14 @@ replies. It talks to three other places:
   silently and restarts; a portable copy swaps its program files in place and restarts, and puts everything back
   if that fails. Your targets resume either way.
 
-Plus the webhook address, if you set one. It sends nothing about you or your PC anywhere. **⋯ → Report a
+Plus the webhook address, if you set one. The history stays on this computer. It sends nothing about you or your
+PC anywhere. **⋯ → Report a
 problem…** opens a GitHub issue form with the version filled in, which you edit and send yourself.
 
 ## Where it keeps things
 
-- `%APPDATA%\PingerPlot\` holds `settings.json` (your targets, each with its settings, and the app's options) and
-  `update.log`. On Linux and macOS it's `$XDG_CONFIG_HOME/PingerPlot`, usually `~/.config/PingerPlot`.
+- `%APPDATA%\PingerPlot\` holds `settings.json` (your targets, each with its settings, and the app's options),
+  `update.log`, and the history in `history\history.sqlite3`. On Linux and macOS it's `$XDG_CONFIG_HOME/PingerPlot`, usually `~/.config/PingerPlot`.
 - A portable copy keeps them beside `PingerPlot.exe` instead. Delete `portable.txt` to make it use `%APPDATA%`.
 - On Linux, the menu and sign-in entries are `~/.local/share/applications/pingerplot.desktop` and
   `~/.config/autostart/pingerplot.desktop`, and the icon they use is in `~/.cache/PingerPlot`.
@@ -310,6 +335,10 @@ Relative `log_path`s resolve next to the config file, and the folder is created 
 task at `pingerplot-headless.exe C:\path\to\monitor.json` (or `pythonw.exe -m pingerplot.headless …` from source).
 Besides the status lines, it prints every event as it happens: alerts raised and cleared, route changes, and
 warnings such as a probe log it couldn't open or a webhook that wasn't delivered.
+
+It records into the same [history](#history) as the window, so the window shows what it measured. A `recording`
+object in the config changes that: `"recording": {"enabled": false}` turns it off, and `probe_days`,
+`summary_days`, `event_days` and `max_mb` set how much is kept, as in Settings → Recording.
 
 A target whose name doesn't resolve at start, the normal case for a task that runs at boot before DNS is up, is
 **restarted automatically**, the delay backing off from 30 s to 5 minutes while it keeps failing. Restarts are
@@ -433,7 +462,7 @@ session if you want the probes logged.
 
 - **Installed:** quit PingerPlot (right-click its icon in the notification area → **Quit**), then **Settings → Apps →
   Installed apps → PingerPlot → Uninstall**. That removes the program, its shortcuts and its Start with Windows
-  entry. Your settings stay in `%APPDATA%\PingerPlot`, so a reinstall picks up your targets; delete that folder if
+  entry. Your settings and history stay in `%APPDATA%\PingerPlot`, so a reinstall picks up your targets; delete that folder if
   you don't need them.
 - **Portable:** turn off **Start with Windows** in Settings *first*, then quit and delete the folder. The folder holds
   the settings too. Start with Windows is a registry entry, not a file in the folder, so deleting the folder first

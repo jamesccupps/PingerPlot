@@ -16,6 +16,11 @@ All notable changes to PingerPlot are recorded here. The format follows
   folder that can't be written) shows in the target's Events; it never stops
   the monitoring. A webhook URL is never written to it. A name that stops
   resolving is now an event too, so it's in the history.
+- **Settings → Recording**: turn the history off, choose how long each part
+  is kept and the size limit, pick what's recorded (**What to record**), open
+  its folder or clear it. Changes apply at once, to running targets too. The
+  headless runner takes the same options as a `recording` object in its
+  config.
 - **Route history.** Each distinct route to a target is recorded, with when it
   was in use; a route that comes back is recognised as the same one.
 - **Following a name that moves.** A target given by name is looked up again
