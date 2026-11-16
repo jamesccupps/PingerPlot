@@ -300,8 +300,8 @@ replies. It talks to three other places:
 - Your DNS server, for each hop's hostname (**Settings → Look up hostnames**), and every 5 minutes for a target you
   gave by name, to notice when it moves.
 - [ipwho.is](https://ipwho.is), for where each public router is and whose network it's on (the Location and
-  Network columns, Details, History and the map): the router's address only, never a private, LAN or
-  carrier-NAT one. Each router is asked about once a month (answers are kept in `lookups.json`), one at a time,
+  Network columns, Details, History and the map): each public hop's address only, the destination's included,
+  never a private, LAN or carrier-NAT one. Each router is asked about once a month (answers are kept in `lookups.json`), one at a time,
   at most 500 a day. **Settings → Look up where routers are** turns it off; then only the **Map** asks, while
   it's open. A router's city is also read from its name (`chcgil`, `dfw01`, `Dallas1`), which sends nothing.
 - GitHub, once a day, for this project's `latest.json` (installed, portable and pipx copies, never a git
