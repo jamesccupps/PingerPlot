@@ -16,6 +16,25 @@ def test_target_options_merges_defaults_and_overrides():
     assert kw["alert_sound"] is False      # headless never beeps
 
 
+def test_a_quoted_false_is_refused_not_taken_as_true():
+    """bool("false") is True: the option used to switch on."""
+    import pytest
+    for key in ("final_hop_only", "resolve_names", "alert_enabled"):
+        with pytest.raises(ValueError, match=key):
+            headless._target_options({}, {"target": "192.0.2.1", key: "false"})
+    _t, kw = headless._target_options({}, {"target": "192.0.2.1", "final_hop_only": 0,
+                                           "alert_enabled": False})
+    assert kw["final_hop_only"] is False and kw["alert_enabled"] is False
+
+
+def test_a_status_interval_that_isnt_a_number_is_a_reason_not_a_traceback(tmp_path, capsys):
+    cfg = tmp_path / "monitor.json"
+    cfg.write_text(json.dumps({"status_interval": "often", "targets": [{"target": "192.0.2.1"}]}),
+                   encoding="utf-8")
+    assert headless.main([str(cfg)]) == 1
+    assert "status_interval" in capsys.readouterr().err
+
+
 def test_target_options_blank_target():
     target, _kw = headless._target_options({}, {"target": "   "})
     assert target == ""

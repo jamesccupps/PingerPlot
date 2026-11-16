@@ -72,6 +72,18 @@ def should_stop() -> bool:
     return _STOP.is_set()
 
 
+def _flag(opts: dict, key: str, default: bool) -> bool:
+    """A true/false setting. bool("false") is True, so a quoted "false"
+    turned the option on (2026-11 review): only JSON's true and false (and 0
+    or 1) are taken; anything else skips the target with a reason."""
+    value = opts.get(key, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    raise ValueError(f"{key} must be true or false (no quotes), not {value!r}")
+
+
 def _target_options(defaults: dict, target_cfg: dict) -> Tuple[str, dict]:
     """Merge ``defaults`` with a target's overrides and return
     ``(target, start_kwargs)``. Unknown keys are ignored; ``alert_sound`` is
@@ -83,16 +95,16 @@ def _target_options(defaults: dict, target_cfg: dict) -> Tuple[str, dict]:
         interval=float(opts.get("interval", 2.5)),
         timeout_ms=int(opts.get("timeout_ms", 1000)),
         max_hops=int(opts.get("max_hops", 30)),
-        resolve_names=bool(opts.get("resolve_names", True)),
+        resolve_names=_flag(opts, "resolve_names", True),
         packet_size=int(opts.get("packet_size", 32)),
         send_delay_ms=int(opts.get("send_delay_ms", 0)),
-        final_hop_only=bool(opts.get("final_hop_only", False)),
+        final_hop_only=_flag(opts, "final_hop_only", False),
         packet_type=str(opts.get("packet_type", "icmp")),
         port=int(opts.get("port", 443)),
         dscp=int(opts.get("dscp", 0)),
         source_ip=str(opts.get("source_ip", "")),
         log_path=str(opts.get("log_path", "")),
-        alert_enabled=bool(opts.get("alert_enabled", True)),
+        alert_enabled=_flag(opts, "alert_enabled", True),
         alert_loss_pct=float(opts.get("alert_loss_pct", 20)),
         alert_latency_ms=float(opts.get("alert_latency_ms", 250)),
         alert_window=int(opts.get("alert_window", 20)),
@@ -577,8 +589,13 @@ def main(argv=None) -> int:
         print("Config must be a JSON object with a non-empty 'targets' list.", file=sys.stderr)
         return 1
 
-    status_interval = (args.status_interval if args.status_interval is not None
-                       else float(cfg.get("status_interval", 60)))
+    try:
+        status_interval = (args.status_interval if args.status_interval is not None
+                           else float(cfg.get("status_interval", 60)))
+    except (TypeError, ValueError) as exc:
+        # It was outside any handler: a traceback instead of a reason.
+        print(f"Config: status_interval must be a number of seconds ({exc}).", file=sys.stderr)
+        return 1
 
     print(f"PingerPlot {__version__} headless - starting "
           f"{len(cfg['targets'])} target(s). Ctrl-C to stop.")
