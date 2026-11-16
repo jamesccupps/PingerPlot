@@ -235,6 +235,20 @@ def opt_str(value) -> Optional[str]:
     return value if isinstance(value, str) else None
 
 
+MAX_NAME = 253     # the longest a DNS name can be
+
+
+def host_name(value) -> Optional[str]:
+    """A router's name as it may be shown, printed and saved: text only,
+    without control or formatting characters, at most MAX_NAME long. A PTR
+    record says whatever its owner likes, escape sequences and line breaks
+    included, and the headless reports print names straight to a console
+    (2026-11 review); a session file's names are someone else's too."""
+    if not isinstance(value, str):
+        return None
+    return "".join(ch for ch in value if ch.isprintable())[:MAX_NAME]
+
+
 def hop_from_session(hd, max_history: Optional[int] = None) -> Optional[Hop]:
     """Rebuild a :class:`Hop` from one entry of a saved session's ``hops``
     list, or None if the entry is unusable.
@@ -254,7 +268,7 @@ def hop_from_session(hd, max_history: Optional[int] = None) -> Optional[Hop]:
             history = min(history, max_history)
         hop = Hop(int(hd["ttl"]), history=history)
         hop.address = opt_str(hd.get("address"))
-        hop.hostname = opt_str(hd.get("hostname"))
+        hop.hostname = host_name(hd.get("hostname"))
         status = hd.get("last_status")
         hop.last_status = status if isinstance(status, int) else None
         for pair in samples[-history:]:

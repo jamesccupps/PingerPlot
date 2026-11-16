@@ -90,6 +90,21 @@ def test_loaded_options_are_held_to_the_same_limits_as_start():
     m.shutdown()
 
 
+def test_names_lose_control_characters_from_a_ptr_record_or_a_file(monkeypatch):
+    """A PTR record is whatever its owner wrote; the headless reports print
+    names straight to a console."""
+    from pingerplot import monitor as monitor_mod
+    evil = "r1.example.net\x1b[2J\r\nFAKE LINE\u202e"
+    monkeypatch.setattr(monitor_mod.socket, "gethostbyaddr", lambda _a: (evil, [], []))
+    m = Monitor()
+    m.load_dict({"hops": [dict(GOOD_HOP, hostname=evil)]})
+    assert m._hops[0].hostname == "r1.example.net[2JFAKE LINE"
+    m._hops[0].hostname = None
+    m._resolve_worker(1, GOOD_HOP["address"])
+    assert m._hops[0].hostname == "r1.example.net[2JFAKE LINE"
+    m.shutdown()
+
+
 def test_a_bad_config_value_keeps_the_rest_of_the_session():
     m = Monitor()
     m.load_dict({"target_input": "example.net", "hops": [GOOD_HOP],

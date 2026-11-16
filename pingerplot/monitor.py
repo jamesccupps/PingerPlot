@@ -47,7 +47,7 @@ except ImportError:  # pragma: no cover - non-Windows
 from . import __version__, history, icmp, tcpudp
 from .routes import RouteTracker
 from .model import (DEFAULT_HISTORY, Event, Hop, HopView, Sample, hop_from_session, mos,
-                    mos_label, opt_str, plausible_time)
+                    host_name, mos_label, opt_str, plausible_time)
 
 GROW_PROBE_SPAN = 8       # extra TTLs to probe when looking for a longer route
 UNREACHED_BEFORE_GROW = 3  # consecutive dest-miss rounds before probing deeper
@@ -1377,7 +1377,7 @@ class Monitor:
 
     def _resolve_worker(self, ttl: int, address: str) -> None:
         try:
-            name = socket.gethostbyaddr(address)[0]
+            name = host_name(socket.gethostbyaddr(address)[0]) or ""
         except OSError:
             name = ""  # no PTR record; remember that so we don't retry forever
         with self._lock:
