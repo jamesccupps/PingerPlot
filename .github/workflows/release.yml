@@ -329,6 +329,11 @@ jobs:
     needs: [windows, verify]
     if: needs.windows.outputs.signtest != 'true'
     runs-on: ubuntu-latest
+    # Its own environment, admitting v* tags only, holds the key as an
+    # environment secret: a repository secret can be read by a workflow on
+    # any branch. Not the release environment: Azure trusts that one's
+    # identity, and the authenticode job is the only one in it.
+    environment: update-signing
     permissions:
       contents: read
 

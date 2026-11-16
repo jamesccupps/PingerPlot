@@ -682,6 +682,7 @@ def test_only_the_sign_job_sees_the_signing_key():
         assert read <= allowed.get(name, set()), f"job {name!r} reads {sorted(read)}"
     sign = "\n".join(ln for ln in jobs["sign"].splitlines() if not ln.strip().startswith("#"))
     assert "UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}" in sign
+    assert "environment: update-signing" in sign,         "the key is an environment secret (v* tags only), not a repository one"
     assert "contents: read" in sign and "contents: write" not in sign
     for forbidden in ("pip ", "pytest", "PyInstaller", "setup-python", "build_windows"):
         assert forbidden not in sign, f"the sign job runs {forbidden.strip()}"
@@ -728,7 +729,8 @@ def test_only_the_authenticode_job_can_sign_in_to_azure():
     jobs = _jobs((REPO / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8"))
     for name, job in jobs.items():
         if name != "authenticode":
-            assert "id-token" not in job and "environment:" not in job, name
+            assert "id-token" not in job and "environment: release" not in job, name
+            assert name == "sign" or "environment:" not in job, name
     for wf in WORKFLOWS:
         if wf.name != "release.yml":
             text = wf.read_text(encoding="utf-8")
