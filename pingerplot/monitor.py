@@ -141,7 +141,7 @@ def _is_address(text: str) -> bool:
         return False
 
 
-def _text(value, name: str) -> str:
+def text_option(value, name: str) -> str:
     """A text option: a string, or nothing. Anything else (a hand-edited
     settings.json with ``"source_ip": 5``) is refused like a bad number, with
     TypeError, so the caller's fall-back to defaults runs; ``.strip()`` on it
@@ -359,7 +359,7 @@ class Monitor:
         self.port = max(1, min(int(port), 65535))
         self.dscp = max(0, min(int(dscp), 63))
         self._tos = icmp.dscp_to_tos(self.dscp)
-        self.source_ip = _text(source_ip, "source_ip")
+        self.source_ip = text_option(source_ip, "source_ip")
         self._payload = _build_payload(self.packet_size)
         self.timeout_note = ""
         self.needs_admin = False
@@ -384,7 +384,7 @@ class Monitor:
                 f"{self.timeout_ms} ms for hops that don't answer, so while one is "
                 f"silent the rounds start about every {self.timeout_ms / 1000:g} s"
             )
-        self.log_path = _text(log_path, "log_path")
+        self.log_path = text_option(log_path, "log_path")
         self.alert_enabled = bool(alert_enabled)
         self.alert_loss_pct = max(0.0, float(alert_loss_pct))
         self.alert_latency_ms = max(0.0, float(alert_latency_ms))
@@ -392,7 +392,7 @@ class Monitor:
         self.alert_sound = bool(alert_sound)
         # MOS runs 1.0-5.0; anything above 5 would alert permanently.
         self.alert_mos = max(0.0, min(float(alert_mos), 5.0))
-        self.webhook_url = _text(webhook_url, "webhook_url")
+        self.webhook_url = text_option(webhook_url, "webhook_url")
         self._rotate_retry_at = 0.0
         self._rotate_failing = False
         with self._lock:

@@ -807,8 +807,11 @@ class App:
         options = dict(options)
         # One log setting, many targets: each gets its own file, or their rows
         # interleave in a CSV that has no target column.
+        # text_option, not str(): {"a": 1} from a hand-edited settings.json
+        # became a log file called "{'a': 1}" in the working folder; refused,
+        # the target falls back to the defaults instead.
         options["log_path"] = monitor.per_target_log_path(
-            str(options.get("log_path") or "").strip(), target)
+            monitor.text_option(options.get("log_path"), "log_path"), target)
 
         if mon is None:
             mon = Monitor(recorder=self.recorder)

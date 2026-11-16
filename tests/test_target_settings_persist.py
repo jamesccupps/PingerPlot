@@ -67,7 +67,8 @@ def test_a_target_saved_by_an_older_version_uses_the_toolbar(app, isolated_setti
 
 
 def test_a_corrupt_saved_entry_falls_back_instead_of_killing_startup(app, isolated_settings,
-                                                                    monkeypatch, no_probing):
+                                                                    monkeypatch, no_probing,
+                                                                    tmp_path):
     """_restore_targets runs inside App.__init__: an exception there means the
     app does not open at all."""
     isolated_settings.save({
@@ -85,7 +86,12 @@ def test_a_corrupt_saved_entry_falls_back_instead_of_killing_startup(app, isolat
     app._settings = isolated_settings.load()
     app._settings["targets"] = ["192.0.2.1", "192.0.2.2", "192.0.2.3", "192.0.2.4", "192.0.2.5"]
     app.resume_var.set(True)
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
     app._restore_targets()
     assert set(app._monitors) == {"192.0.2.1", "192.0.2.2", "192.0.2.3", "192.0.2.4", "192.0.2.5"}
+    assert list(cwd.iterdir()) == [], "a dict made into a log file's name"
+    assert app._monitors["192.0.2.5"].log_path == ""
     for m in app._monitors.values():
         assert m.interval == float(app.interval_var.get())
