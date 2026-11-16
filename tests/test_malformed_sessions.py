@@ -79,6 +79,17 @@ def test_impossible_times_and_round_trips_are_dropped():
     m.shutdown()
 
 
+def test_loaded_options_are_held_to_the_same_limits_as_start():
+    m = Monitor()
+    m.load_dict({"hops": [GOOD_HOP], "config": json.loads(
+        '{"interval": Infinity, "timeout_ms": 1e300, "max_hops": -4, "packet_size": 99999,'
+        '"send_delay_ms": -1, "packet_type": "gre", "port": 99999, "dscp": 64}')})
+    assert m.interval == 2.5, "non-finite: the default stays"
+    assert m.timeout_ms == 10_000 and m.max_hops == 1 and m.packet_size == 1472
+    assert m.send_delay_ms == 0 and m.packet_type == "icmp" and m.port == 65535 and m.dscp == 63
+    m.shutdown()
+
+
 def test_a_bad_config_value_keeps_the_rest_of_the_session():
     m = Monitor()
     m.load_dict({"target_input": "example.net", "hops": [GOOD_HOP],

@@ -581,11 +581,19 @@ class Monitor:
         cfg = data.get("config")
         cfg = cfg if isinstance(cfg, dict) else {}
 
-        def _cfg(key, conv, current):
+        def _cfg(key, conv, current, lo=None, hi=None):
+            # Within the same floors and ceilings start() applies: shown and
+            # exported as the session's settings, so an interval of Infinity
+            # or a port of 99999 would be a header that can't be true.
             try:
-                return conv(cfg[key]) if key in cfg else current
+                value = conv(cfg[key]) if key in cfg else current
             except (TypeError, ValueError, OverflowError):
                 return current
+            if isinstance(value, float) and not math.isfinite(value):
+                return current
+            if lo is not None:
+                value = max(lo, min(value, hi))
+            return value
 
         def _int(value) -> int:
             try:
@@ -617,14 +625,15 @@ class Monitor:
             self.route_len = _int(data.get("route_len"))
             self.reached_target = bool(data.get("reached_target", False))
             self.final_hop_only = bool(data.get("final_hop_only", False))
-            self.interval = _cfg("interval", float, self.interval)
-            self.timeout_ms = _cfg("timeout_ms", int, self.timeout_ms)
-            self.max_hops = _cfg("max_hops", int, self.max_hops)
-            self.packet_size = _cfg("packet_size", int, self.packet_size)
-            self.send_delay_ms = _cfg("send_delay_ms", int, self.send_delay_ms)
-            self.packet_type = _cfg("packet_type", str, self.packet_type)
-            self.port = _cfg("port", int, self.port)
-            self.dscp = _cfg("dscp", int, self.dscp)
+            self.interval = _cfg("interval", float, self.interval, 0.25, float("inf"))
+            self.timeout_ms = _cfg("timeout_ms", int, self.timeout_ms, 100, MAX_TIMEOUT_MS)
+            self.max_hops = _cfg("max_hops", int, self.max_hops, 1, MAX_HOPS_CEILING)
+            self.packet_size = _cfg("packet_size", int, self.packet_size, 0, 1472)
+            self.send_delay_ms = _cfg("send_delay_ms", int, self.send_delay_ms, 0, 1000)
+            packet_type = _cfg("packet_type", str, self.packet_type)
+            self.packet_type = packet_type if packet_type in ("icmp", "tcp", "udp") else "icmp"
+            self.port = _cfg("port", int, self.port, 1, 65535)
+            self.dscp = _cfg("dscp", int, self.dscp, 0, 63)
             self.source_ip = opt_str(cfg.get("source_ip")) or ""
             self._hops = hops
             self._events.clear()
