@@ -440,7 +440,13 @@ def _read_reply(sock: socket.socket, dest_ip: str, start: float,
     responder = addr[0] if addr else None
     rtt = _rtt_ms(ancdata, sent_ns, start)
     if icmp_type == ICMP_ECHO_REPLY:
-        return PingResult(IP_SUCCESS, rtt, responder or dest_ip, True)
+        # The target's own answer, or not ours: on Linux the identifier isn't
+        # checked (the kernel rewrites it), so any host's echo reply carrying
+        # our sequence number was taken as the target reached, with that
+        # host's address as the target's (2026-11 review).
+        if responder is not None and responder != dest_ip:
+            return None
+        return PingResult(IP_SUCCESS, rtt, dest_ip, True)
     if icmp_type == ICMP_TIME_EXCEEDED:
         # The macOS path: the error arrives as an ordinary readable message
         # rather than through an error queue.

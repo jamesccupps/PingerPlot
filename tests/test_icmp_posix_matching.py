@@ -163,6 +163,30 @@ def test_ping_skips_a_strangers_reply_on_macos(monkeypatch):
     assert r.reached and r.address == DEST, r
 
 
+class _FakeLinuxSocket(_FakeMacSocket):
+    """A stranger's echo reply with our sequence number (and, as Linux
+    rewrites identifiers, nothing else to tell it apart) before the target's."""
+
+    def sendto(self, pkt, _addr):
+        _t, _c, _s, ident, seq = struct.unpack("!BBHHH", pkt[:8])
+        self.queue = [(_echo_reply(ident, seq), ("192.0.2.200", 0)),
+                      (_echo_reply(ident, seq), (DEST, 0))]
+        return len(pkt)
+
+    def recvmsg(self, *_a):          # the error queue: empty
+        raise BlockingIOError
+
+
+def test_an_echo_reply_counts_only_from_the_target(monkeypatch):
+    monkeypatch.setattr(icmp_posix, "_SUPPORTED_PLATFORM", True)
+    monkeypatch.setattr(icmp_posix, "_LINUX", True)
+    monkeypatch.setattr(icmp_posix, "_SO_TIMESTAMPNS", None)
+    monkeypatch.setattr(icmp_posix.socket, "socket", _FakeLinuxSocket)
+    monkeypatch.setattr(icmp_posix.select, "select", lambda r, w, x, t: (r, [], []))
+    r = icmp_posix.ping(DEST, ttl=64, timeout_ms=500)
+    assert r.reached and r.address == DEST, r
+
+
 def test_build_echo_still_carries_the_sequence_it_was_given():
     pkt = build_echo(IDENT, SEQ, b"x")
     assert struct.unpack("!HH", pkt[4:8]) == (IDENT, SEQ)
