@@ -129,6 +129,57 @@ class MockCapture:
         self.sock.close()
 
 
+class UdpRound:
+    """Answers a parallel UDP round the way routers do. Each hop's probe
+    leaves from its own socket, to the port that was set, and the reply is
+    matched on that socket's source port, which the OS picks. So the replies
+    can only be built once the probes are out: :meth:`answer` waits for each
+    hop's send, then quotes its real source port back through ``capture``.
+
+    Wraps ``socket.socket`` with a subclass, so everything below it is real.
+    """
+
+    def __init__(self, capture: "MockCapture", monkeypatch, module) -> None:
+        self.capture = capture
+        self.sent: dict = {}           # ttl -> (source port, destination port)
+        owner = self
+        real = socket.socket
+
+        class _Probe(real):
+            _ttl = None
+
+            def setsockopt(self, level, opt, value, *rest):
+                if level == socket.IPPROTO_IP and opt == socket.IP_TTL:
+                    self._ttl = value
+                return super().setsockopt(level, opt, value, *rest)
+
+            def sendto(self, data, *args):
+                n = super().sendto(data, *args)
+                if self._ttl is not None:
+                    owner.sent[self._ttl] = (self.getsockname()[1], args[-1][1])
+                return n
+        monkeypatch.setattr(module.socket, "socket", _Probe)
+
+    def answer(self, replies, wait: float = 2.0) -> None:
+        """``replies``: (ttl, router address, ICMP type) and optionally a
+        dict of :func:`router_reply` keywords, sent in the order given once
+        every ttl named has been probed."""
+        def run():
+            deadline = time.monotonic() + wait
+            want = {r[0] for r in replies}
+            while not want <= set(self.sent) and time.monotonic() < deadline:
+                time.sleep(0.002)
+            packets = []
+            for r in replies:
+                ttl, router, itype = r[:3]
+                kw = dict(r[3]) if len(r) > 3 else {}
+                proto = kw.pop("proto", socket.IPPROTO_UDP)
+                sport, dport = self.sent.get(ttl, (0, 0))
+                packets.append(router_reply(router, itype, proto, sport, dport, **kw))
+            self.capture.send_after(packets, delay=0.0)
+        threading.Thread(target=run, daemon=True).start()
+
+
 class LoopbackService:
     """A real TCP listener, for the branch where the connect itself proves the
     destination answered (which is how "TCP, final hop only" works with no

@@ -20,7 +20,7 @@ import pytest
 from pingerplot import icmp, tcpudp
 from mock_router import (
     DEST, ICMP_DEST_UNREACH, ICMP_TTL_EXCEEDED, LoopbackService, MockCapture,
-    SilentPath, closed_tcp_port, router_reply,
+    SilentPath, UdpRound, closed_tcp_port, router_reply,
 )
 
 UDP_BASE = 33434
@@ -39,14 +39,15 @@ def test_udp_round_attributes_each_reply_to_the_right_hop(capture, monkeypatch):
     """Two routers answer TTL-exceeded, the destination answers port-unreach,
     and one hop stays silent. Every TTL must come back, correctly labelled."""
     capture.install(monkeypatch, tcpudp)
-    capture.send_after([
-        router_reply("10.0.0.1", ICMP_TTL_EXCEEDED, socket.IPPROTO_UDP, 40000, UDP_BASE + 1),
-        router_reply("10.0.0.2", ICMP_TTL_EXCEEDED, socket.IPPROTO_UDP, 40000, UDP_BASE + 2),
-        router_reply(DEST, ICMP_DEST_UNREACH, socket.IPPROTO_UDP, 40000, UDP_BASE + 3),
-    ])
+    rnd = UdpRound(capture, monkeypatch, tcpudp)
+    rnd.answer([(1, "10.0.0.1", ICMP_TTL_EXCEEDED), (2, "10.0.0.2", ICMP_TTL_EXCEEDED),
+                (3, DEST, ICMP_DEST_UNREACH)])
     res = tcpudp.probe_path(DEST, [1, 2, 3, 4], timeout_ms=800, mode="udp",
                             port=UDP_BASE, local_ip="0.0.0.0")
 
+    assert {dport for _sport, dport in rnd.sent.values()} == {UDP_BASE}, \
+        "every hop goes to the port that was set"
+    assert len({sport for sport, _dport in rnd.sent.values()}) == 4, "each hop its own key"
     assert set(res) == {1, 2, 3, 4}, "a probed TTL was dropped from the round"
     assert res[1].address == "10.0.0.1" and not res[1].reached
     assert res[2].address == "10.0.0.2" and not res[2].reached
@@ -58,11 +59,9 @@ def test_udp_round_attributes_each_reply_to_the_right_hop(capture, monkeypatch):
 
 def test_replies_arriving_out_of_order_still_land_on_the_right_hop(capture, monkeypatch):
     capture.install(monkeypatch, tcpudp)
-    capture.send_after([
-        router_reply("10.0.0.3", ICMP_TTL_EXCEEDED, socket.IPPROTO_UDP, 40000, UDP_BASE + 3),
-        router_reply("10.0.0.1", ICMP_TTL_EXCEEDED, socket.IPPROTO_UDP, 40000, UDP_BASE + 1),
-        router_reply("10.0.0.2", ICMP_TTL_EXCEEDED, socket.IPPROTO_UDP, 40000, UDP_BASE + 2),
-    ])
+    UdpRound(capture, monkeypatch, tcpudp).answer([
+        (3, "10.0.0.3", ICMP_TTL_EXCEEDED), (1, "10.0.0.1", ICMP_TTL_EXCEEDED),
+        (2, "10.0.0.2", ICMP_TTL_EXCEEDED)])
     res = tcpudp.probe_path(DEST, [1, 2, 3], timeout_ms=800, mode="udp",
                             port=UDP_BASE, local_ip="0.0.0.0")
     assert [res[t].address for t in (1, 2, 3)] == ["10.0.0.1", "10.0.0.2", "10.0.0.3"]
@@ -73,12 +72,9 @@ def test_another_hosts_icmp_is_not_mistaken_for_ours(capture, monkeypatch):
     monitors on the box may hold the same ports. An error must be ignored
     unless it echoes OUR destination."""
     capture.install(monkeypatch, tcpudp)
-    capture.send_after([
-        router_reply("10.9.9.9", ICMP_TTL_EXCEEDED, socket.IPPROTO_UDP,
-                     40000, UDP_BASE + 1, dst_ip="198.51.100.7"),
-        router_reply("10.0.0.1", ICMP_TTL_EXCEEDED, socket.IPPROTO_UDP,
-                     40000, UDP_BASE + 1),
-    ])
+    UdpRound(capture, monkeypatch, tcpudp).answer([
+        (1, "10.9.9.9", ICMP_TTL_EXCEEDED, {"dst_ip": "198.51.100.7"}),
+        (1, "10.0.0.1", ICMP_TTL_EXCEEDED)])
     res = tcpudp.probe_path(DEST, [1], timeout_ms=800, mode="udp",
                             port=UDP_BASE, local_ip="0.0.0.0")
     assert res[1].address == "10.0.0.1"
@@ -87,8 +83,21 @@ def test_another_hosts_icmp_is_not_mistaken_for_ours(capture, monkeypatch):
 def test_wrong_protocol_error_is_ignored(capture, monkeypatch):
     """A TCP-quoting error must not satisfy a UDP round even on a port match."""
     capture.install(monkeypatch, tcpudp)
+    UdpRound(capture, monkeypatch, tcpudp).answer([
+        (1, "10.0.0.1", ICMP_TTL_EXCEEDED, {"proto": socket.IPPROTO_TCP})])
+    res = tcpudp.probe_path(DEST, [1], timeout_ms=400, mode="udp",
+                            port=UDP_BASE, local_ip="0.0.0.0")
+    assert res[1].status == icmp.IP_REQ_TIMED_OUT
+
+
+def test_a_reply_that_only_guesses_the_destination_port_is_ignored(capture, monkeypatch):
+    """Hop N used to go to port+N-1 and be matched on that alone, so a forged
+    reply needed only a predictable number. Now it must quote the hop's own
+    source port, which the OS picked."""
+    capture.install(monkeypatch, tcpudp)
     capture.send_after([
-        router_reply("10.0.0.1", ICMP_TTL_EXCEEDED, socket.IPPROTO_TCP, 40000, UDP_BASE + 1),
+        router_reply("10.0.0.1", ICMP_TTL_EXCEEDED, socket.IPPROTO_UDP, 40000, UDP_BASE),
+        router_reply("10.0.0.1", ICMP_TTL_EXCEEDED, socket.IPPROTO_UDP, 40000, UDP_BASE + 1),
     ])
     res = tcpudp.probe_path(DEST, [1], timeout_ms=400, mode="udp",
                             port=UDP_BASE, local_ip="0.0.0.0")
@@ -101,10 +110,8 @@ def test_ip_options_do_not_break_correlation(capture, monkeypatch, outer_ihl, in
     including its own. A fixed-20-byte assumption on either header would decode
     the ports out of the option bytes."""
     capture.install(monkeypatch, tcpudp)
-    capture.send_after([
-        router_reply("10.0.0.1", ICMP_TTL_EXCEEDED, socket.IPPROTO_UDP,
-                     40000, UDP_BASE + 1, outer_ihl=outer_ihl, inner_ihl=inner_ihl),
-    ])
+    UdpRound(capture, monkeypatch, tcpudp).answer([
+        (1, "10.0.0.1", ICMP_TTL_EXCEEDED, {"outer_ihl": outer_ihl, "inner_ihl": inner_ihl})])
     res = tcpudp.probe_path(DEST, [1], timeout_ms=600, mode="udp",
                             port=UDP_BASE, local_ip="0.0.0.0")
     assert res[1].address == "10.0.0.1", f"outer ihl={outer_ihl} inner ihl={inner_ihl}"
@@ -122,10 +129,8 @@ def test_round_ends_early_once_every_hop_has_answered(capture, monkeypatch):
     """With no silent hop left, the loop must not sit out the whole timeout."""
     import time
     capture.install(monkeypatch, tcpudp)
-    capture.send_after([
-        router_reply("10.0.0.1", ICMP_TTL_EXCEEDED, socket.IPPROTO_UDP, 40000, UDP_BASE + 1),
-        router_reply(DEST, ICMP_DEST_UNREACH, socket.IPPROTO_UDP, 40000, UDP_BASE + 2),
-    ])
+    UdpRound(capture, monkeypatch, tcpudp).answer([
+        (1, "10.0.0.1", ICMP_TTL_EXCEEDED), (2, DEST, ICMP_DEST_UNREACH)])
     t0 = time.perf_counter()
     res = tcpudp.probe_path(DEST, [1, 2], timeout_ms=3000, mode="udp",
                             port=UDP_BASE, local_ip="0.0.0.0")

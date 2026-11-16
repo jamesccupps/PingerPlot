@@ -48,7 +48,8 @@ site-packages enabled; `py -3.12` matches the release build). Linux needs
   (`IP_RECVERR`, Linux) or as a readable message (macOS); kernel receive timestamps (`SO_TIMESTAMPNS`, Linux);
   `reply_is_ours()` matches replies to probes; `next_seq()`.
 - `pingerplot/tcpudp.py`: TCP/UDP probes. `probe()` (one), `probe_path()` (a round in parallel on one capture
-  socket), `_parse()`/`_match()` (ICMP errors), `source_problem()`, strict source binding.
+  socket; every hop to the port set, each from its own socket, matched on its source port: no per-hop port walk),
+  `_parse()`/`_match()` (ICMP errors), `source_problem()`, strict source binding.
 - `pingerplot/gui.py`: `App`. Header (status, the ⋯ menu), Targets / Settings pages; target cards on the left; the
   detail on the right (MOS, the red alert banner, Hops / Timeline / Map / Events). `_start(target, options)`: a new
   target gets the Settings page's defaults (`_default_options()`), a stopped one its own options. A 700 ms refresh

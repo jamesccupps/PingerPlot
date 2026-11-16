@@ -201,6 +201,7 @@ is why it needs no administrator rights. The others:
 | **TCP / UDP, full traceroute** | **Yes** | A per-hop trace where ICMP is blocked or deprioritized. Probes go out on a normal socket with `IP_TTL`; routers' "TTL exceeded" replies are captured on a raw `SIO_RCVALL` socket, which needs elevation: **⋯ → Restart as administrator** (also in the tray menu, Settings, and on a target that needs it). Windows asks first, naming the publisher; your targets carry on. |
 
 Without admin, a full TCP/UDP traceroute is refused with a message rather than showing misleading all-timeout hops.
+Every probe goes to the port you set, TCP and UDP alike, so the trace follows the path that port's traffic takes.
 An *open* UDP port stays silent and reads as a timeout, so prefer TCP for a definitive "the service is up".
 
 > **TCP reply timeout.** Windows doesn't hand a connecting socket the RST the moment it arrives: it finishes

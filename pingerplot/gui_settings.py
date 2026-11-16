@@ -152,7 +152,7 @@ def build_option_form(parent, look, ov: OptionVars, browse_log: Callable[[], Non
                 "takes; tracing every hop with them needs Administrator on Windows.",
                 probe_type, first=True)
     setting_row(card, look, "Port",
-                "TCP: the service's port. UDP: the first port; each hop uses the next one up.",
+                "TCP: the service's port. UDP: the port every probe goes to.",
                 _spin(look, ov["port"], 1, 65535))
     setting_row(card, look, "Probe every (seconds)", "", _spin(look, ov["interval"], 0.5, 60, 0.5))
     setting_row(card, look, "Reply timeout (ms)",

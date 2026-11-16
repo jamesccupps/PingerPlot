@@ -303,7 +303,7 @@ def probe_path(
 
     timeout = max(0.05, timeout_ms / 1000.0)
     senders: dict = {}   # ttl -> [sock_or_None, start_time]
-    key_ttl: dict = {}   # tcp: src_port -> ttl ; udp: dst_port -> ttl
+    key_ttl: dict = {}   # each hop's own socket's source port -> ttl
     results: dict = {}
 
     def settle(ttl: int, result: PingResult) -> None:
@@ -340,11 +340,15 @@ def probe_path(
                 except OSError:
                     pass
                 senders[ttl] = [s, start]
-            else:  # udp: a distinct destination port per hop correlates the reply
-                # Wrapping to 0 makes sendto() fail with EINVAL, and that error
-                # is caught and discarded below -- so the hop vanished from the
-                # round with no trace. Keep the walk inside 1..65535.
-                key = ((port + ttl - 1) % 65535) + 1
+            else:
+                # udp: like TCP, every hop goes to the port that was set, from
+                # its own socket, and the reply is matched on that socket's
+                # source port. Hop N used to go to port+N-1 (classic
+                # traceroute's walk): the first trace (probe()) used the port
+                # set and every round after it a different one, so a firewall
+                # passing only that port let the trace through and dropped the
+                # rounds, and a forged reply needed only a predictable
+                # destination port (2026-11 review).
                 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 s.setsockopt(socket.IPPROTO_IP, socket.IP_TTL, int(ttl))
                 _set_tos(s, tos)
@@ -357,18 +361,25 @@ def probe_path(
                     continue
                 start = time.perf_counter()
                 try:
-                    s.sendto(payload or b"\x00", (dest_ip, key))
+                    s.sendto(payload or b"\x00", (dest_ip, port))
+                    key = s.getsockname()[1]
                 except OSError:
-                    pass
-                finally:
-                    s.close()
-                senders[ttl] = [None, start]
+                    key = 0          # it never left: the hop times out
+                # Kept open until its answer is in (settle) or the round ends:
+                # closed, its source port could be handed to the next hop's
+                # socket, and two hops would share a key.
+                senders[ttl] = [s, start]
+                if not key:
+                    continue
             key_ttl[key] = ttl
 
         pending = set(ttls) - set(results)   # minus any refused at bind
         deadline = time.perf_counter() + timeout
         while pending and time.perf_counter() < deadline:
-            wlist = [senders[t][0] for t in pending if senders[t][0] is not None]
+            # A UDP socket is always writable: in the list it would wake
+            # select() at once, every time, for the whole round.
+            wlist = [senders[t][0] for t in pending
+                     if senders[t][0] is not None] if mode == "tcp" else []
             remaining = min(0.2, max(0.0, deadline - time.perf_counter()))
             try:
                 r, w, x = select.select([cap], wlist, wlist, remaining)
@@ -394,7 +405,7 @@ def probe_path(
                     # sees every host's ICMP, and other monitors may share a port.
                     if proto != _PROTO[mode] or odst != dest_ip:
                         continue
-                    ttl = key_ttl.get(sp if mode == "tcp" else dp)
+                    ttl = key_ttl.get(sp) if dp == port else None
                     if ttl is None or ttl not in pending:
                         continue
                     responder = socket.inet_ntoa(data[12:16])

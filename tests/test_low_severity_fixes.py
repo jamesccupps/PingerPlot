@@ -13,14 +13,13 @@ from pingerplot import geoip, tcpudp
 from mock_router import MockCapture
 
 
-# --- F7: the UDP port walk must not wrap to zero ---------------------------
+# --- F7: every UDP probe goes to a real port ---------------------------------
 #
-# probe_path needs a per-TTL correlation key and, for UDP, uses a distinct
-# destination port per hop -- textbook UDP traceroute and the right technique
-# for a parallel round. But (port + ttl) & 0xFFFF wraps: with port=65535 the
-# first hop computes 0, sendto(..., 0) raises EINVAL, and that error is caught
-# and discarded -- so the hop vanished from the round with nothing to show for
-# it.
+# probe_path once gave each hop its own destination port, port+N-1, and the
+# walk wrapped: with port=65535 the first hop computed 0, sendto(..., 0) raised
+# EINVAL, and the hop vanished from the round. Since 2026-11 every hop goes to
+# the port that was set (each from its own socket, matched on its source port),
+# so there is no walk left to wrap; these pin that.
 
 class _PortSpy:
     """Record every destination port a UDP round sends to."""
@@ -46,6 +45,9 @@ class _PortSpy:
                 spy.ports.append(addr[1])
                 return 1
 
+            def getsockname(self):
+                return ("0.0.0.0", 40000 + len(spy.ports))
+
             def close(self):
                 pass
 
@@ -55,31 +57,14 @@ class _PortSpy:
         return self
 
 
-def test_udp_rounds_walk_the_port_upward(capture_fixture, monkeypatch):
+@pytest.mark.parametrize("port", [1, 1024, 33434, 65000, 65534, 65535])
+def test_every_udp_probe_goes_to_the_port_set(capture_fixture, monkeypatch, port):
+    """65535 is accepted by the Engine dialog's spinbox (from_=1, to=65535),
+    so the old walk's wrap was reachable from the UI."""
     spy = _PortSpy().install(monkeypatch)
-    tcpudp.probe_path("203.0.113.9", [1, 2, 3], timeout_ms=100, mode="udp",
-                      port=33434, local_ip="0.0.0.0")
-    assert spy.ports == [33435, 33436, 33437]
-
-
-def test_the_walk_never_produces_port_zero(capture_fixture, monkeypatch):
-    """port=65535 is accepted by the Engine dialog's spinbox (from_=1,
-    to=65535), so this is reachable from the UI, not a theoretical input."""
-    spy = _PortSpy().install(monkeypatch)
-    tcpudp.probe_path("203.0.113.9", [1, 2, 3], timeout_ms=100, mode="udp",
-                      port=65535, local_ip="0.0.0.0")
-    assert 0 not in spy.ports, "sendto(..., 0) raises EINVAL and loses the hop"
-    assert all(1 <= p <= 65535 for p in spy.ports), spy.ports
-    assert len(set(spy.ports)) == 3, "each hop still needs a distinct key"
-
-
-def test_the_walk_stays_in_range_from_every_starting_port(capture_fixture, monkeypatch):
-    for start in (1, 1024, 33434, 65000, 65534, 65535):
-        spy = _PortSpy().install(monkeypatch)
-        tcpudp.probe_path("203.0.113.9", range(1, 33), timeout_ms=50, mode="udp",
-                          port=start, local_ip="0.0.0.0")
-        assert all(1 <= p <= 65535 for p in spy.ports), (start, spy.ports)
-        assert len(set(spy.ports)) == 32, (start, spy.ports)
+    tcpudp.probe_path("203.0.113.9", range(1, 33), timeout_ms=50, mode="udp",
+                      port=port, local_ip="0.0.0.0")
+    assert spy.ports == [port] * 32
 
 
 # --- F10: the Windows-only ioctl must not escape as AttributeError ---------
