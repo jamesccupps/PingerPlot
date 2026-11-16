@@ -201,7 +201,9 @@ site-packages enabled; `py -3.12` matches the release build). Linux needs
 - `verify` (read-only): `test_portable.ps1`, `test_installer.ps1` (both with `-Publisher 'CN=James Cupps, O=James
   Cupps'`: every exe, the installed uninstaller too, signed and timestamped) and `test_update.ps1`, on the signed files.
 - `sign`: holds `UPDATE_SIGNING_KEY`, installs nothing, signs `latest.json` with the runner's `python3 -I` and verifies
-  it against the app's public key.
+  it against the app's public key. It runs in the `update-signing` environment (v* tags only), whose secret the key
+  is; there's no repository-level copy (moved 2026-11-16). Not the `release` environment: only `authenticode` may
+  hold Azure's trust.
 - `publish` (the only one with `contents: write`, running only SHA-pinned actions and `gh`): creates the release from
   `release-notes/<tag>.md` and uploads the files, `latest.json` last.
 
