@@ -714,6 +714,9 @@ class Reader:
             # no writer has left its -shm file behind. query_only refuses writes.
             db = sqlite3.connect(self.path, timeout=10, check_same_thread=False)
             db.execute("PRAGMA query_only = ON")
+            # As the writer: the file is data, and no function its schema
+            # defines (a view's, a trigger's) may run on our behalf.
+            db.execute("PRAGMA trusted_schema = OFF")
             # A recorder that has only just created the file may not have made
             # its tables yet (a first run: the History page opens while the
             # writer is still starting). Read that as empty and look again

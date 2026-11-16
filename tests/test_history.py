@@ -443,3 +443,11 @@ def test_the_queue_is_bounded_and_says_so(tmp_path, monkeypatch):
         rec._q.get_nowait()
     rec.probe(1, T0 + 30, 30, 1, ROUTER, 5.0, 0)
     assert rec.problem_kind == "info" and "caught up" in rec.problem
+
+
+def test_the_reader_doesnt_trust_the_files_schema(tmp_path):
+    rec = _rec(tmp_path)
+    rec.close()
+    r = Reader(tmp_path)
+    assert r._conn().execute("PRAGMA trusted_schema").fetchone()[0] == 0
+    r.close()
