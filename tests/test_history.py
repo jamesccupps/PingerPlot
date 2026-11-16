@@ -367,3 +367,79 @@ def test_a_file_whose_tables_arent_made_yet_reads_as_empty(tmp_path):
     rec.close()
     assert [e["text"] for e in r.events()] == ["now there are tables"]
     r.close()
+
+
+# --- the writer must not stop without a word (2026-11 review) ------------------
+
+def test_a_schema_that_isnt_a_number_is_treated_as_damage(tmp_path):
+    rec = _rec(tmp_path)
+    rec.close()
+    db = sqlite3.connect(tmp_path / history.DB_NAME, isolation_level=None)
+    db.execute("UPDATE meta SET value='one' WHERE key='schema'")
+    db.close()
+    rec = _rec(tmp_path)
+    run = rec.begin_run("t", "icmp", None, {})
+    rec.event(run, T0, "info", "still recording")
+    assert rec.flush()
+    rec.close()
+    assert "damaged" in rec.problem
+    assert [e["text"] for e in Reader(tmp_path).events()] == ["still recording"]
+
+
+def test_a_route_for_a_run_whose_row_is_gone_is_skipped(tmp_path):
+    rec = _rec(tmp_path)
+    run = rec.begin_run("t", "icmp", None, {})
+    assert rec.flush()
+    db = sqlite3.connect(tmp_path / history.DB_NAME, isolation_level=None)
+    db.execute("DELETE FROM runs")
+    db.close()
+    rec.route(run, T0, [[ROUTER], [DEST]])
+    rec.event(None, T0 + 1, "info", "after it")
+    assert rec.flush()
+    rec.close()
+    assert rec.problem == ""
+    assert [e["text"] for e in Reader(tmp_path).events()] == ["after it"]
+
+
+def test_an_unexpected_error_is_reported_and_recording_carries_on(tmp_path, monkeypatch):
+    import json as real_json
+    calls = []
+
+    class Flaky:
+        loads = staticmethod(real_json.loads)
+
+        @staticmethod
+        def dumps(*a, **k):
+            calls.append(1)
+            if len(calls) == 1:
+                raise RecursionError("one bad run")
+            return real_json.dumps(*a, **k)
+    monkeypatch.setattr(history, "json", Flaky)
+    said = []
+    real_report = Recorder._report
+    monkeypatch.setattr(Recorder, "_report",
+                        lambda self, text, kind="warn": (said.append(text), real_report(self, text, kind)))
+    rec = _rec(tmp_path)
+    rec.begin_run("t", "icmp", None, {})
+    assert rec.flush(), "the writer thread is still there"
+    run = rec.begin_run("t", "icmp", None, {})
+    rec.event(run, T0, "info", "next one")
+    assert rec.flush()
+    rec.close()
+    assert len(said) == 2 and "RecursionError" in said[0] and "recovered" in said[1]
+    assert [e["text"] for e in Reader(tmp_path).events()] == ["next one"]
+
+
+def test_the_queue_is_bounded_and_says_so(tmp_path, monkeypatch):
+    monkeypatch.setattr(history, "MAX_QUEUED", 10)
+    rec = Recorder(tmp_path, clock=Clock())          # not started: nothing drains it
+    for i in range(25):
+        rec.probe(1, T0 + i, i, 1, ROUTER, 5.0, 0)
+    assert rec._q.qsize() == 10
+    assert "falling behind" in rec.problem and rec.problem_seq == 1
+    rec.set_target_ip(1, DEST)
+    assert rec._q.qsize() == 11, "a run's own facts are never dropped"
+    for _ in range(8):
+        rec._q.get_nowait()
+    rec.probe(1, T0 + 30, 30, 1, ROUTER, 5.0, 0)
+    assert rec.problem_kind == "info" and "caught up" in rec.problem

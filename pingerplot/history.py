@@ -62,6 +62,15 @@ _LIMITS = {"probe_days": (1, 365), "summary_days": (1, 3650), "event_days": (1, 
 _BATCH = 2000             # items per transaction at most
 _MAINTAIN_EVERY_S = 3600  # retention and the size cap, hourly (and at open)
 NO_REPLY = 0              # addrs id for a probe nobody answered
+MAX_QUEUED = 100_000      # probes/events waiting for the writer (~4 h of one 15-hop target)
+
+
+def _schema(value) -> int:
+    """The file's schema number; anything else is a damaged file."""
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise sqlite3.DatabaseError(f"its schema version reads {value!r}") from exc
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -222,6 +231,7 @@ class Recorder:
         self.problem_kind = "warn"  # its event kind ("info" for a recovery)
         self.problem_seq = 0       # bumped with each new problem
         self._closed = False
+        self._dropping = False     # probes are being dropped (see _put_bulk)
         # A run's handle is issued here, not by the database: waiting for a
         # row id would block the monitor whenever the writer is busy (an
         # hourly clean-up of a large file), and a run that gave up waiting
@@ -281,11 +291,28 @@ class Recorder:
     def probe(self, run: Optional[int], t: float, round_no: int, ttl: int,
               addr: Optional[str], rtt: Optional[float], status: int) -> None:
         if run is not None:
-            self._q.put(("probe", run, t, round_no, ttl, addr, rtt, status))
+            self._put_bulk(("probe", run, t, round_no, ttl, addr, rtt, status))
 
     def event(self, run: Optional[int], t: float, kind: str, text: str) -> None:
         if self.options["events"] and not self._closed:
-            self._q.put(("event", run, t, kind, text))
+            self._put_bulk(("event", run, t, kind, text))
+
+    def _put_bulk(self, item: tuple) -> None:
+        """Queue a probe or an event, unless MAX_QUEUED are already waiting:
+        then the writer has stopped or can't keep up, and an unbounded queue
+        would only grow (about half a million probes a day per target) until
+        memory ran out. Runs, routes and names are never dropped."""
+        waiting = self._q.qsize()
+        if waiting >= MAX_QUEUED:
+            if not self._dropping:
+                self._dropping = True
+                self._report("History recording is falling behind: some probes and events "
+                             "aren't being recorded.")
+            return
+        if self._dropping and waiting < MAX_QUEUED // 2:
+            self._dropping = False
+            self._report("History recording has caught up.", kind="info")
+        self._q.put(item)
 
     def route(self, run: Optional[int], t: float, hops: List[List[str]]) -> None:
         """The run is on this route from ``t`` (each hop's known routers)."""
@@ -344,7 +371,7 @@ class Recorder:
                 version = db.execute("SELECT value FROM meta WHERE key='schema'").fetchone()
                 if version is None:
                     db.execute("INSERT INTO meta VALUES('schema', ?)", (str(SCHEMA_VERSION),))
-                elif int(version[0]) > SCHEMA_VERSION:
+                elif _schema(version[0]) > SCHEMA_VERSION:
                     db.close()
                     self._report(f"History recording is off: {self.path} was written by a newer "
                                  f"PingerPlot (schema {version[0]})")
@@ -383,6 +410,14 @@ class Recorder:
         return aside
 
     def _writer(self) -> None:
+        try:
+            self._write_loop()
+        except Exception as exc:
+            self._report(f"History recording stopped ({type(exc).__name__}: {exc}); "
+                         f"restart PingerPlot to record again.")
+            raise
+
+    def _write_loop(self) -> None:
         db = self._open()
         addr_ids: Dict[str, int] = {"": NO_REPLY}
         run_ids: Dict[int, int] = {}      # handle -> runs.id
@@ -461,8 +496,10 @@ class Recorder:
                 db.execute("INSERT INTO events VALUES(?,?,?,?)", (run, t, kind, text))
             elif op == "route":
                 _, _, t, hops = item
-                target, dest = db.execute("SELECT target, target_ip FROM runs WHERE id=?",
-                                          (run,)).fetchone()
+                row = db.execute("SELECT target, target_ip FROM runs WHERE id=?", (run,)).fetchone()
+                if row is None:
+                    return   # its run row is gone (an edited file): nothing to attach it to
+                target, dest = row
                 route_id = None
                 for rid, stored in db.execute(
                         "SELECT id, hops FROM routes WHERE target=? AND dest IS ? ORDER BY id",
@@ -554,7 +591,7 @@ class Recorder:
                 if write_failing:
                     write_failing = False
                     self._report("History recording has recovered.", kind="info")
-            except sqlite3.Error as exc:
+            except Exception as exc:  # any other type ended this thread, and all recording, unseen
                 try:
                     db.execute("ROLLBACK")
                 except sqlite3.Error:
@@ -590,7 +627,8 @@ class Recorder:
                     continue
                 if not write_failing:
                     write_failing = True
-                    self._report(f"History recording failed ({exc}); what was measured in "
+                    why = exc if isinstance(exc, sqlite3.Error) else f"{type(exc).__name__}: {exc}"
+                    self._report(f"History recording failed ({why}); what was measured in "
                                  f"the meantime isn't recorded. Retrying.")
             for done in waiting:
                 done.set()
