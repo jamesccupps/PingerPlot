@@ -47,7 +47,7 @@ except ImportError:  # pragma: no cover - non-Windows
 from . import __version__, history, icmp, tcpudp
 from .routes import RouteTracker
 from .model import (DEFAULT_HISTORY, Event, Hop, HopView, Sample, hop_from_session, mos,
-                    mos_label, opt_str)
+                    mos_label, opt_str, plausible_time)
 
 GROW_PROBE_SPAN = 8       # extra TTLs to probe when looking for a longer route
 UNREACHED_BEFORE_GROW = 3  # consecutive dest-miss rounds before probing deeper
@@ -603,9 +603,11 @@ class Monitor:
         events: List[Event] = []
         for ev in (raw_events if isinstance(raw_events, list) else []):
             try:
-                events.append(Event(int(ev[0]), float(ev[1]), str(ev[2]), str(ev[3])))
+                event = Event(int(ev[0]), float(ev[1]), str(ev[2]), str(ev[3]))
             except (IndexError, KeyError, ValueError, TypeError, OverflowError):
                 continue
+            if plausible_time(event.t):
+                events.append(event)
         target = data.get("target_input")
 
         self.stop()

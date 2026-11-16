@@ -7,6 +7,7 @@ GUI renders without touching the live (monitor-owned, lock-protected) Hop.
 """
 from __future__ import annotations
 
+import math
 import time
 from collections import deque
 from itertools import islice
@@ -14,6 +15,20 @@ from dataclasses import dataclass
 from typing import Deque, List, Optional
 
 DEFAULT_HISTORY = 600  # samples kept per hop (~25 min at a 2.5 s interval)
+
+# What a saved time or round trip can plausibly be. JSON as Python reads it
+# allows NaN, Infinity and 1e300; a session file is someone else's, and a time
+# like that made time.localtime() raise on every refresh of the tab showing it.
+MAX_FILE_TIME = 4e9          # seconds since 1970: the year 2096
+MAX_FILE_RTT_MS = 1e7
+
+
+def plausible_time(t: float) -> bool:
+    return math.isfinite(t) and 0 <= t < MAX_FILE_TIME
+
+
+def plausible_rtt(rtt: Optional[float]) -> bool:
+    return rtt is None or (math.isfinite(rtt) and 0 <= rtt < MAX_FILE_RTT_MS)
 
 
 @dataclass(frozen=True)
@@ -243,8 +258,9 @@ def hop_from_session(hd, max_history: Optional[int] = None) -> Optional[Hop]:
         status = hd.get("last_status")
         hop.last_status = status if isinstance(status, int) else None
         for pair in samples[-history:]:
-            rtt = pair[1]
-            hop.samples.append(Sample(float(pair[0]), None if rtt is None else float(rtt)))
+            t, rtt = float(pair[0]), (None if pair[1] is None else float(pair[1]))
+            if plausible_time(t) and plausible_rtt(rtt):
+                hop.samples.append(Sample(t, rtt))
         # A session records no per-sample responder, so all of it is
         # attributed to the address the file names.
         hop.since_change = len(hop.samples)

@@ -16,6 +16,7 @@ And the GUI registered the "(loaded)" row before calling load_dict, so a
 failed load left an empty row behind.
 """
 import json
+import time
 
 import pytest
 
@@ -33,6 +34,11 @@ MALFORMED = {
     "config value not a number": {"hops": [GOOD_HOP], "config": {"interval": "fast"}},
     "address not a string": {"hops": [dict(GOOD_HOP, address=["a"], hostname={"b": 1})]},
     "target_input not a string": {"hops": [GOOD_HOP], "target_input": 42, "target_ip": [1]},
+    # Python's json reads NaN, Infinity and 1e300 (2026-11 review).
+    "values out of range": json.loads(
+        '{"target_input":"x","hops":[{"ttl":1,"address":"192.0.2.1",'
+        '"samples":[[1700000000, NaN],[1700000001, Infinity],[1e300, 5],[-1, 5],[1700000002, -3]]}],'
+        '"events":[[0, 1e300, "info", "hello"],[1, NaN, "info", "x"]]}'),
 }
 
 
@@ -54,6 +60,23 @@ def test_stats_from_session_survives(name):
     stats = compare.stats_from_session(MALFORMED[name])
     for s in stats:
         assert s.address is None or isinstance(s.address, str)
+
+
+def test_impossible_times_and_round_trips_are_dropped():
+    """A time of 1e300 made time.localtime() raise in the Events view on
+    every refresh; NaN and Infinity reached the averages and the drawing."""
+    m = Monitor()
+    data = json.loads(json.dumps(MALFORMED["values out of range"]))
+    data["hops"][0]["samples"].append([1700000003, 7.5])
+    data["events"].append([2, 1700000003, "info", "kept"])
+    m.load_dict(data)
+    (view,) = m.snapshot()[0]
+    assert view.sent == 1 and view.avg == 7.5
+    events, _seq = m.events_after(-1)
+    assert [e.text for e in events] == ["kept"]
+    for s in m.samples_for(1):
+        time.localtime(s.t)
+    m.shutdown()
 
 
 def test_a_bad_config_value_keeps_the_rest_of_the_session():
