@@ -694,9 +694,15 @@ class Reader:
             self._db.close()
             self._db = None
 
-    def _rows(self, sql: str, args=()) -> List[sqlite3.Row]:
+    def _rows(self, sql: str, args=(), lazy: bool = False):
+        """The rows as a list, or with ``lazy`` the cursor itself, read as
+        it's iterated: an export of a week of every probe is millions of rows
+        and must not have to fit in memory."""
         db = self._conn()
-        return [] if db is None else db.execute(sql, args).fetchall()
+        if db is None:
+            return iter(()) if lazy else []
+        cur = db.execute(sql, args)
+        return cur if lazy else cur.fetchall()
 
     def targets(self) -> List[sqlite3.Row]:
         """Every target ever recorded, most recently monitored first."""
@@ -711,7 +717,8 @@ class Reader:
 
     def events(self, since: float = 0.0, until: float = float("inf"),
                target: Optional[str] = None, kinds: Optional[Iterable[str]] = None,
-               text: str = "", limit: int = 100_000) -> List[sqlite3.Row]:
+               text: str = "", limit: Optional[int] = 100_000,
+               lazy: bool = False) -> Iterable[sqlite3.Row]:
         sql = ("SELECT e.t, e.kind, e.text, r.target FROM events e LEFT JOIN runs r ON r.id = e.run "
                "WHERE e.t >= ? AND e.t <= ?")
         args: list = [since, until if until != float("inf") else 1e18]
@@ -725,16 +732,19 @@ class Reader:
         if text:
             sql += " AND e.text LIKE ? ESCAPE '\\'"
             args.append("%" + text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%")
-        sql += " ORDER BY e.t LIMIT ?"
-        args.append(limit)
-        return self._rows(sql, args)
+        sql += " ORDER BY e.t"
+        if limit is not None:
+            sql += " LIMIT ?"
+            args.append(limit)
+        return self._rows(sql, args, lazy)
 
-    def probes(self, target: str, since: float, until: float) -> List[sqlite3.Row]:
+    def probes(self, target: str, since: float, until: float,
+               lazy: bool = False) -> Iterable[sqlite3.Row]:
         return self._rows(
             "SELECT p.t, p.round, p.ttl, a.addr, p.rtt, p.status FROM probes p "
             "JOIN runs r ON r.id = p.run JOIN addrs a ON a.id = p.addr "
             "WHERE p.t >= ? AND p.t <= ? AND r.target = ? ORDER BY p.t, p.ttl",
-            (since, until, target))
+            (since, until, target), lazy)
 
     def routes(self, target: str) -> List[sqlite3.Row]:
         """Every route recorded to ``target`` (``hops`` is JSON: each hop's
@@ -762,10 +772,11 @@ class Reader:
                 out[row["addr"]] = row["name"]
         return out
 
-    def minutes(self, target: str, since: float, until: float) -> List[sqlite3.Row]:
+    def minutes(self, target: str, since: float, until: float,
+                lazy: bool = False) -> Iterable[sqlite3.Row]:
         return self._rows(
             "SELECT m.minute, m.ttl, a.addr, m.sent, m.recv, m.rtt_sum, m.rtt_min, m.rtt_max, "
             "m.jit_sum, m.jit_n FROM minutes m JOIN runs r ON r.id = m.run "
             "JOIN addrs a ON a.id = m.addr "
             "WHERE m.minute >= ? AND m.minute <= ? AND r.target = ? ORDER BY m.minute, m.ttl",
-            (int(since // 60), int(until // 60), target))
+            (int(since // 60), int(until // 60), target), lazy)

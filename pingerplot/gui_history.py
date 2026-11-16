@@ -19,6 +19,7 @@ results come back through the app's UI queue. Everything can be exported.
 from __future__ import annotations
 
 import csv
+import os
 import threading
 import time
 import tkinter as tk
@@ -192,7 +193,8 @@ class HistoryPage(ttk.Frame):
         self.later_btn = ttk.Button(bar, text="Later ▶", command=lambda: self._step(1))
         self.later_btn.pack(side="left", padx=(S(4), 0))
         ttk.Button(bar, text="Now", command=lambda: self._set_until(None)).pack(side="left", padx=(S(4), 0))
-        ttk.Button(bar, text="Export…", command=self._export_menu).pack(side="right")
+        self.export_btn = ttk.Button(bar, text="Export…", command=self._export_menu)
+        self.export_btn.pack(side="right")
 
         self.summary = ttk.Label(self, text="", style="Strong.TLabel")
         self.summary.pack(side="top", anchor="w", pady=(S(10), 0))
@@ -568,50 +570,104 @@ class HistoryPage(ttk.Frame):
             filetypes=[("CSV files", "*.csv"), ("All files", "*.*")])
         if not path:
             return
+        # A week of every probe is millions of rows: on the window's thread
+        # that froze it for many seconds (2026-11 review).
+        self.export_btn.state(["disabled"])
+        self.export_btn.configure(text="Exporting…")
+        post = self.app._post
+
+        def work() -> None:
+            try:
+                n = export(what, d["target"], d["since"], d["until"], path,
+                           progress=lambda k: post(lambda: self._export_progress(k)))
+            except Exception as exc:  # shown to the user; the button must come back either way
+                why = str(exc) or type(exc).__name__
+                post(lambda: self._exported(path, None, why))
+                return
+            post(lambda: self._exported(path, n, ""))
+        threading.Thread(target=work, name="history-export", daemon=True).start()
+
+    def _export_progress(self, n: int) -> None:
         try:
-            n = export(what, d["target"], d["since"], d["until"], path)
-        except (OSError, ValueError) as exc:
-            messagebox.showerror("Export failed", str(exc), parent=self)
+            self.export_btn.configure(text=f"Exporting… {n:,} rows")
+        except tk.TclError:
+            pass
+
+    def _exported(self, path: str, n: Optional[int], why: str) -> None:
+        try:
+            if not self.winfo_exists():
+                return
+        except tk.TclError:
             return
-        messagebox.showinfo("Exported", f"{n:,} rows written to\n{path}", parent=self)
+        self.export_btn.configure(text="Export…")
+        self.export_btn.state(["!disabled"])
+        if n is None:
+            messagebox.showerror("Export failed", why, parent=self)
+        else:
+            messagebox.showinfo("Exported", f"{n:,} rows written to\n{path}", parent=self)
+
+
+EXPORT_PROGRESS_EVERY = 50_000
 
 
 def export(what: str, target: str, since: float, until: float, path: str,
-           folder=None) -> int:
+           folder=None, progress=None) -> int:
     """Write one kind of history for ``target`` over the range as CSV.
     Returns the number of rows. Text that a spreadsheet would run as a
-    formula is defanged."""
+    formula is defanged. Rows are written as they're read, so memory stays
+    flat however many there are; ``progress(n)`` hears every
+    EXPORT_PROGRESS_EVERY rows. The file only takes ``path``'s name once it's
+    whole: a failed export leaves no half file behind."""
+    if what == "events":
+        header = ["time", "iso_time", "kind", "text"]
+    elif what == "minutes":
+        header = ["minute_start", "iso_time", "hop", "router", "sent", "received", "loss_pct",
+                  "avg_ms", "min_ms", "max_ms", "jitter_ms"]
+    elif what == "probes":
+        header = ["time", "iso_time", "round", "hop", "router", "rtt_ms", "status"]
+    else:
+        raise ValueError(f"nothing called {what!r} to export")
     reader = history.Reader(folder)
+    part = path + ".part"
+    n = 0
     try:
-        if what == "events":
-            header = ["time", "iso_time", "kind", "text"]
-            rows = [(f"{e['t']:.3f}", _iso(e["t"]), e["kind"], csv_safe(e["text"]))
-                    for e in reader.events(since, until, target=target)]
-        elif what == "minutes":
-            header = ["minute_start", "iso_time", "hop", "router", "sent", "received", "loss_pct",
-                      "avg_ms", "min_ms", "max_ms", "jitter_ms"]
-            rows = []
-            for m in reader.minutes(target, since, until):
-                t = m["minute"] * 60.0
-                loss = 100.0 * (m["sent"] - m["recv"]) / m["sent"] if m["sent"] else 0.0
-                rows.append((f"{t:.0f}", _iso(t), m["ttl"], csv_safe(m["addr"]), m["sent"], m["recv"],
-                             f"{loss:.1f}", _num(m["rtt_sum"] / m["recv"] if m["recv"] else None),
-                             _num(m["rtt_min"]), _num(m["rtt_max"]),
-                             _num(m["jit_sum"] / m["jit_n"] if m["jit_n"] else None)))
-        elif what == "probes":
-            header = ["time", "iso_time", "round", "hop", "router", "rtt_ms", "status"]
-            rows = [(f"{p['t']:.3f}", _iso(p["t"]), p["round"], p["ttl"], csv_safe(p["addr"]),
-                     _num(p["rtt"]), p["status"]) for p in reader.probes(target, since, until)]
-        else:
-            raise ValueError(f"nothing called {what!r} to export")
+        with open(part, "w", encoding="utf-8", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow(["# PingerPlot history", csv_safe(target), _iso(since), _iso(until)])
+            w.writerow(header)
+            for row in _export_rows(reader, what, target, since, until):
+                w.writerow(row)
+                n += 1
+                if progress is not None and n % EXPORT_PROGRESS_EVERY == 0:
+                    progress(n)
+        os.replace(part, path)
+    except BaseException:
+        try:
+            os.remove(part)
+        except OSError:
+            pass
+        raise
     finally:
         reader.close()
-    with open(path, "w", encoding="utf-8", newline="") as fh:
-        w = csv.writer(fh)
-        w.writerow(["# PingerPlot history", csv_safe(target), _iso(since), _iso(until)])
-        w.writerow(header)
-        w.writerows(rows)
-    return len(rows)
+    return n
+
+
+def _export_rows(reader: history.Reader, what: str, target: str, since: float, until: float):
+    if what == "events":
+        for e in reader.events(since, until, target=target, limit=None, lazy=True):
+            yield (f"{e['t']:.3f}", _iso(e["t"]), e["kind"], csv_safe(e["text"]))
+    elif what == "minutes":
+        for m in reader.minutes(target, since, until, lazy=True):
+            t = m["minute"] * 60.0
+            loss = 100.0 * (m["sent"] - m["recv"]) / m["sent"] if m["sent"] else 0.0
+            yield (f"{t:.0f}", _iso(t), m["ttl"], csv_safe(m["addr"]), m["sent"], m["recv"],
+                   f"{loss:.1f}", _num(m["rtt_sum"] / m["recv"] if m["recv"] else None),
+                   _num(m["rtt_min"]), _num(m["rtt_max"]),
+                   _num(m["jit_sum"] / m["jit_n"] if m["jit_n"] else None))
+    else:
+        for p in reader.probes(target, since, until, lazy=True):
+            yield (f"{p['t']:.3f}", _iso(p["t"]), p["round"], p["ttl"], csv_safe(p["addr"]),
+                   _num(p["rtt"]), p["status"])
 
 
 def _iso(t: float) -> str:

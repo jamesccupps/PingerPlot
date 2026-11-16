@@ -140,6 +140,47 @@ def test_export_writes_each_kind_and_defangs_formulas(tmp_path):
         export("everything", "svc.example.com", t0, now, str(tmp_path / "x.csv"), folder=folder)
 
 
+def test_export_runs_off_the_window_thread(page, app, tmp_path, monkeypatch):
+    """A week of every probe is millions of rows: the window must not wait
+    for them (2026-11 review: 18 s frozen, 2 GB)."""
+    out = tmp_path / "probes.csv"
+    shown = []
+    monkeypatch.setattr(gui_history.filedialog, "asksaveasfilename", lambda **_k: str(out))
+    monkeypatch.setattr(gui_history.messagebox, "showinfo", lambda *a, **_k: shown.append(a[1]))
+    monkeypatch.setattr(gui_history, "EXPORT_PROGRESS_EVERY", 100)
+    page._export("probes")
+    assert page.export_btn.instate(["disabled"]), "one export at a time"
+    deadline = time.monotonic() + 10
+    while not shown and time.monotonic() < deadline:
+        while not app._ui_jobs.empty():
+            app._ui_jobs.get()()
+        time.sleep(0.02)
+    assert shown and shown[0].startswith("1,200 rows")
+    assert not page.export_btn.instate(["disabled"]) and page.export_btn.cget("text") == "Export…"
+    assert len(list(csv.reader(out.open(encoding="utf-8")))) == 1202
+
+
+def test_export_streams_and_a_failed_one_leaves_no_file(tmp_path, monkeypatch):
+    folder = tmp_path / "h"
+    now = time.time()
+    t0 = _record(now, folder)
+    reader = history.Reader(folder)
+    assert not isinstance(reader.probes("svc.example.com", t0, now, lazy=True), list)
+    reader.close()
+    real = history.Reader.probes
+
+    def breaks_halfway(self, *a, **k):
+        for i, row in enumerate(real(self, *a, **k)):
+            if i == 10:
+                raise history.sqlite3.OperationalError("disk I/O error")
+            yield row
+    monkeypatch.setattr(history.Reader, "probes", breaks_halfway)
+    out = tmp_path / "p.csv"
+    with pytest.raises(history.sqlite3.OperationalError):
+        export("probes", "svc.example.com", t0, now, str(out), folder=folder)
+    assert list(tmp_path.glob("p.csv*")) == []
+
+
 @pytest.mark.parametrize("v, top", [(7, 8), (11, 12), (62, 80), (100, 100), (101, 120), (249, 250)])
 def test_the_axis_top_is_a_round_number(v, top):
     assert nice_max(v) == pytest.approx(top)
