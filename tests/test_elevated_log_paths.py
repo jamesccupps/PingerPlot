@@ -2,7 +2,6 @@
 settings.json: that file is writable by anything running as you unelevated,
 and a path in it made the elevated app create, append to and rename a file
 wherever that program chose (the 2026-11-05 review, M1)."""
-import pytest
 
 
 def _build(tk_root, isolated_settings, monkeypatch, elevated):

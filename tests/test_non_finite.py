@@ -1,6 +1,5 @@
 """Infinity, 1e999 and NaN (which json reads and writes) can't stop the app
 opening or make a button silently do nothing."""
-import json
 import math
 
 import pytest

@@ -113,7 +113,7 @@ def test_kernel_timestamps_are_available_on_this_linux():
     """Otherwise the next test proves nothing: it would pass or fail on the
     user-space clock."""
     assert icmp_posix._SO_TIMESTAMPNS is not None, \
-        f"no SO_TIMESTAMPNS mapping for this architecture"
+        "no SO_TIMESTAMPNS mapping for this architecture"
 
 
 @LIVE

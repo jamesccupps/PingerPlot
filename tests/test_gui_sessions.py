@@ -16,10 +16,6 @@ sits in the first thing the user sees and it never goes away on its own.
 
 These are the first tests to drive the real gui.App. See tests/gui_harness.py.
 """
-from pathlib import Path
-
-import pytest
-
 from gui_harness import write_session
 
 

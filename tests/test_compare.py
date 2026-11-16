@@ -14,7 +14,7 @@ import pytest
 
 from pingerplot import compare
 from pingerplot.compare import (
-    BETTER, GONE, NEW, REROUTED, SAME, WORSE, HopStats, Comparison,
+    BETTER, GONE, NEW, REROUTED, SAME, WORSE, HopStats,
 )
 from pingerplot.model import Hop
 from pingerplot.monitor import Monitor

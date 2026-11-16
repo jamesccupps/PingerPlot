@@ -1,7 +1,6 @@
 """The mouse wheel scrolls on every platform: Windows touchpads (small
 deltas that used to round to no movement) and Linux (Button-4/5, which Tk
 8.6 on X11 sends instead of <MouseWheel>)."""
-import sys
 from types import SimpleNamespace
 
 import pytest

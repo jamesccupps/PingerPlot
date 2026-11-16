@@ -233,7 +233,6 @@ def test_report_rejects_a_nonsense_round_count(tmp_path, capsys):
 
 
 def test_the_flags_are_parsed():
-    import argparse
     with pytest.raises(SystemExit):
         headless.main(["--help"])
 

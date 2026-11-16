@@ -5,11 +5,9 @@ The App's side is tested against a fake tray, so nothing here touches the real
 notification area; the real TrayIcon gets one Windows-only lifecycle test that
 never shows a notification.
 """
-import sys
-
 import pytest
 
-from pingerplot import appicon, tray, winplatform
+from pingerplot import appicon, tray
 from pingerplot.model import Event
 
 

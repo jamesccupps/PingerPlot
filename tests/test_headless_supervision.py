@@ -14,8 +14,6 @@ nobody finds out until they go looking for the data.
 
 No sockets or threads here — a stand-in Monitor drives the supervisor directly.
 """
-import pytest
-
 from pingerplot import headless
 
 
