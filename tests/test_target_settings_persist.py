@@ -75,11 +75,17 @@ def test_a_corrupt_saved_entry_falls_back_instead_of_killing_startup(app, isolat
         "target_options": {
             "192.0.2.1": {"interval": "not a number", "bogus_key": 1},
             "192.0.2.2": ["not", "a", "dict"],
+            # .strip() on these raised AttributeError, which wasn't caught:
+            # the window never opened (2026-11 review).
+            "192.0.2.3": {"source_ip": 5},
+            "192.0.2.4": {"webhook_url": ["x"]},
+            "192.0.2.5": {"log_path": {"a": 1}},
         },
     })
     app._settings = isolated_settings.load()
+    app._settings["targets"] = ["192.0.2.1", "192.0.2.2", "192.0.2.3", "192.0.2.4", "192.0.2.5"]
     app.resume_var.set(True)
     app._restore_targets()
-    assert set(app._monitors) == {"192.0.2.1", "192.0.2.2"}
+    assert set(app._monitors) == {"192.0.2.1", "192.0.2.2", "192.0.2.3", "192.0.2.4", "192.0.2.5"}
     for m in app._monitors.values():
         assert m.interval == float(app.interval_var.get())
