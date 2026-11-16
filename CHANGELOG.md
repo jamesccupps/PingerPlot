@@ -4,6 +4,61 @@ All notable changes to PingerPlot are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+Fixes from an outside review of 1.5.1.
+
+### Changed
+
+- **UDP: every probe goes to the port you set.** The first trace did, but
+  every round after it sent hop N to the port plus N−1, so a firewall that
+  passes only that port let the trace through and then dropped the rounds.
+  Each hop's probe now leaves from its own socket and its reply is matched on
+  that socket's source port, as in TCP mode, which also makes a forged reply
+  much harder to pass off.
+- **Running as administrator, PingerPlot doesn't install updates in place.**
+  It still says a new version is out, and asks you to start PingerPlot
+  normally to install it: the download waits in your own temp folder, where
+  any program running as you could swap it before it ran elevated.
+  SECURITY.md now says what an elevated copy trusts.
+
+### Fixed
+
+- **Exporting every probe froze the window**, for many seconds with a week of
+  history, and used gigabytes of memory. The export now runs in the
+  background and writes as it reads, counting rows on the button; a failed
+  one leaves no half-written file. Events exports are no longer cut off at
+  100,000 rows.
+- **Opening Details could hold the window for up to 2 seconds** while the
+  history writer was busy.
+- **A hand-edited settings.json with a number where text belongs** (a source
+  address, webhook or log path) stopped the window opening at all. That
+  target now falls back to the defaults, and a non-text log path no longer
+  becomes a file name.
+- **A session file with impossible times or round trips** (NaN, Infinity,
+  a time like 1e300) broke the Events view of its tab on every refresh. Such
+  samples and events are dropped on load, and a session's settings are held
+  to the same limits as the app's own.
+- **The history writer could stop without saying so**, after an edited or
+  damaged file, while every probe still queued in memory. Any error is now
+  reported and recording carries on; a writer that falls far behind drops
+  probes with a warning instead of growing without end.
+- **A busy network could stretch a TCP/UDP round past its timeout** while
+  the capture socket was read dry.
+- **On Linux and macOS, another host's echo reply could count as the target
+  answering.** Only the target's own reply does now.
+- **Lookups with odd types** from ipwho.is or a damaged `lookups.json` (a
+  number or a list where a city belongs) raised inside the refresh. They're
+  cleaned on the way in.
+- **Router names with control characters** (from a PTR record or a session
+  file) reached the console, CSVs and sessions as they were; they're stripped.
+- **Headless: `"final_hop_only": "false"` switched it on**, and a
+  `status_interval` that isn't a number ended the runner with a traceback.
+  Both are now refused with the reason.
+- **The privacy text said only routers' addresses go to ipwho.is**; the
+  destination's own address does too, and the README, the project page and
+  Settings now say so.
+
 ## [1.5.1] — 2026-11-13
 
 Restart as administrator from inside PingerPlot, for full TCP and UDP traceroute.
