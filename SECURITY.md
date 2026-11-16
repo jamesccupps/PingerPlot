@@ -29,4 +29,22 @@ Once it's fixed, the release notes say what was fixed (and who found it, if you'
   to, found unelevated, with `-E -s`, and an elevated copy takes no log path from `settings.json`. The elevated
   logon task older versions could install is retired (1.4.3); `launch.ps1 -UninstallAutostart` removes one.
 
+## Running as administrator: what it trusts
+
+Full TCP and UDP traceroute needs PingerPlot to run as administrator (**Restart as administrator**, or
+`launch.ps1 -Elevated` from source). A copy running that way trusts its own folder and every program running as
+you:
+
+- The installer puts PingerPlot in `%LOCALAPPDATA%\Programs\PingerPlot`, a folder you can write; a portable copy is
+  wherever you unzipped it; from source it's your checkout. A program running as you, not elevated, can change
+  files there, and the next elevated start runs them. Windows asks first and names the publisher from
+  `PingerPlot.exe`'s signature, but nothing checks the files beside it (`_internal`: the Python runtime, the
+  program's code, Tk) when it starts.
+- Windows doesn't treat the line between you and your own elevated programs as a security boundary either.
+
+What PingerPlot does control, it keeps closed: an elevated copy takes no log path from `settings.json`, won't write
+its history through a link or junction, and doesn't install updates in place (start it normally to update). If
+you need the boundary to hold, run the elevated copy only from a folder only administrators can write, or use ICMP,
+or TCP with **Destination only**: neither needs administrator rights.
+
 Only the latest release gets fixes.
