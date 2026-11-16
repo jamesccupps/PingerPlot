@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import math
 import os
 import queue
 import threading
@@ -71,6 +72,30 @@ class GeoInfo:
 
     def place(self) -> str:
         return ", ".join(x for x in (self.city, self.region, self.country) if x)
+
+
+def _geo_text(value) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def make_info(lat, lon, city=None, region=None, country=None, isp=None, asn=None,
+              org=None) -> GeoInfo:
+    """A GeoInfo from values nobody checked: ipwho.is's answer, or
+    lookups.json. A number or a list where text belongs reached
+    ``", ".join`` in place() and the string code in the hop table, and
+    raised inside the refresh (2026-11 review): text fields keep only text,
+    the ASN only a real one. Raises ValueError for a position that isn't."""
+    lat, lon = float(lat), float(lon)
+    if not (math.isfinite(lat) and math.isfinite(lon) and -90 <= lat <= 90 and -180 <= lon <= 180):
+        raise ValueError(f"not a position: {lat}, {lon}")
+    try:
+        asn = int(asn) if isinstance(asn, (int, str)) and asn != "" else None
+    except ValueError:
+        asn = None
+    if asn is not None and not 0 < asn < 2 ** 32:
+        asn = None
+    return GeoInfo(lat, lon, _geo_text(city), _geo_text(region), _geo_text(country),
+                   _geo_text(isp), asn, _geo_text(org))
 
 
 def _is_public(ip: str) -> bool:
@@ -130,9 +155,9 @@ class GeoResolver:
             try:
                 when = float(entry["t"])
                 raw = entry.get("info")
-                info = None if raw is None else GeoInfo(**{
+                info = None if raw is None else make_info(**{
                     k: raw[k] for k in GeoInfo.__dataclass_fields__ if k in raw})
-            except (KeyError, TypeError, ValueError, AttributeError):
+            except (KeyError, TypeError, ValueError, AttributeError, OverflowError):
                 continue
             if not isinstance(ip, str) or now - when > _KEEP_S:
                 continue                 # too old: asked again when next seen
@@ -302,19 +327,9 @@ class GeoResolver:
             conn = data.get("connection") or {}
             if not isinstance(conn, dict):
                 conn = {}
-            try:
-                asn = int(conn.get("asn")) if conn.get("asn") not in (None, "") else None
-            except (TypeError, ValueError):
-                asn = None
-            return GeoInfo(
-                lat=float(data["latitude"]),
-                lon=float(data["longitude"]),
-                city=data.get("city") or "",
-                region=data.get("region") or "",
-                country=data.get("country") or "",
-                isp=conn.get("isp") or conn.get("org") or "",
-                asn=asn,
-                org=str(conn.get("org") or ""),
-            )
-        except (KeyError, TypeError, ValueError):
+            return make_info(data["latitude"], data["longitude"], data.get("city"),
+                             data.get("region"), data.get("country"),
+                             _geo_text(conn.get("isp")) or conn.get("org"),
+                             conn.get("asn"), conn.get("org"))
+        except (KeyError, TypeError, ValueError, OverflowError):
             return None

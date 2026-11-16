@@ -42,6 +42,38 @@ def test_a_missing_or_odd_asn_is_just_absent(monkeypatch):
     assert info.asn is None and info.network() == "Some ISP"
 
 
+def test_an_answer_with_the_wrong_types_is_cleaned(monkeypatch):
+    """A number or a list where text belongs raised inside the refresh."""
+    _reply(monkeypatch, {"success": True, "latitude": "41.9", "longitude": -87.6, "city": 5,
+                         "region": ["IL"], "country": {"x": 1},
+                         "connection": {"asn": [1], "org": 7, "isp": None}})
+    info = GeoResolver()._lookup(PUBLIC)
+    assert (info.city, info.region, info.country, info.isp, info.org, info.asn) == \
+        ("", "", "", "", "", None)
+    assert info.lat == 41.9 and info.place() == "" and info.network() == ""
+
+
+@pytest.mark.parametrize("lat, lon", [(91, 0), (0, 181), (float("nan"), 0), (1e400, 0), ("x", 0)])
+def test_an_answer_with_no_real_position_is_no_answer(monkeypatch, lat, lon):
+    _reply(monkeypatch, {"success": True, "latitude": lat, "longitude": lon})
+    assert GeoResolver()._lookup(PUBLIC) is None
+
+
+def test_a_cache_entry_with_the_wrong_types_is_cleaned_or_dropped(tmp_path):
+    path = tmp_path / geoip.CACHE_NAME
+    now = 1_700_000_000.0
+    path.write_text(json.dumps({"hosts": {
+        PUBLIC: {"t": now, "info": {"lat": 1, "lon": 2, "city": ["x"], "region": 3,
+                                    "country": "US", "isp": None, "asn": "64500", "org": 9}},
+        "1.1.1.1": {"t": now, "info": {"lat": 999, "lon": 2}},
+        "9.9.9.9": {"t": now, "info": ["not", "an", "object"]},
+    }}), encoding="utf-8")
+    r = GeoResolver(path, clock=lambda: now)
+    info = r.get(PUBLIC)
+    assert info.place() == "US" and info.asn == 64500 and info.network() == "AS64500"
+    assert "1.1.1.1" not in r.cache and "9.9.9.9" not in r.cache
+
+
 def test_answers_survive_a_restart_and_age_out(tmp_path):
     path = tmp_path / geoip.CACHE_NAME
     now = [1_700_000_000.0]
