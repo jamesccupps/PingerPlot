@@ -119,8 +119,10 @@ class HopDetails(tk.Toplevel):
 
     @staticmethod
     def _recent_routers(app, target: str, ttl: int) -> list:
-        if app.recorder is not None:
-            app.recorder.flush(timeout=2)
+        # No recorder.flush() first: this runs on the window's thread, and a
+        # busy writer kept Details from opening for up to 2 s (2026-11
+        # review). It reads minute summaries, which reach the file only once
+        # their minute is over, so a flush added at most a few seconds' worth.
         reader = history.Reader()
         try:
             now = time.time()
