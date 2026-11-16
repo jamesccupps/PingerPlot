@@ -308,7 +308,9 @@ replies. It talks to three other places:
   checkout; turn it off in **Settings → Updates**). Nothing is downloaded until you click **Install**; a pipx copy
   is only told to run `pipx reinstall pingerplot`. An installed copy then runs the new installer
   silently and restarts; a portable copy swaps its program files in place and restarts, and puts everything back
-  if that fails. Your targets resume either way.
+  if that fails. Your targets resume either way. Running as administrator, it says a new version is out but
+  doesn't install it: start PingerPlot normally to install (the download waits in your own temp folder, where
+  any program running as you could swap it before it ran elevated).
 
 Plus the webhook address, if you set one. The history stays on this computer. It sends nothing about you or your
 PC anywhere. **⋯ → Report a

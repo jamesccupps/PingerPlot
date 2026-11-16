@@ -169,6 +169,26 @@ def test_the_settings_section_follows_along(found):
     assert gui_updates.KINDS["source"] in _texts(u._row)
 
 
+def test_an_elevated_copy_says_to_start_normally_and_doesnt_install(found, monkeypatch):
+    """The download sits in your own temp folder and would run elevated:
+    anything running as you could swap it first (2026-11 review)."""
+    from pingerplot import tray
+    found._elevated = True
+    u = found.updates
+    u.refresh()
+    shown = _texts(u._bar_holder)
+    assert any("not as administrator" in t for t in shown) and "Install and restart" not in shown
+    assert u.tray_items(tray.MenuItem) == []
+    calls = []
+    monkeypatch.setattr(updater, "download", lambda *a, **k: calls.append(a))
+    u.install()
+    time.sleep(0.1)
+    assert calls == [] and not u.busy
+    found._show_page("settings")
+    assert u._install_btn.winfo_manager() == ""
+    assert "not as administrator" in u._status_lbl.cget("text")
+
+
 def test_install_downloads_applies_and_quits(found, monkeypatch, tmp_path):
     calls, quit_ = [], []
     monkeypatch.setattr(updater, "download", lambda u, progress=None: (progress(1, 1), tmp_path)[1])

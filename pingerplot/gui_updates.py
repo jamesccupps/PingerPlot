@@ -31,6 +31,7 @@ KINDS = {"installed": "Installed for this Windows user.",
 
 # How a copy that can't install updates itself gets one.
 UPDATE_BY = {"pip": "pipx reinstall pingerplot", "source": "git pull"}
+ELEVATED_NOTE = "Start PingerPlot normally (not as administrator) to install it."
 
 
 class Updates:
@@ -108,9 +109,18 @@ class Updates:
         self.available = u
         self.refresh()
 
+    def installable(self, u: Optional[updater.Update]) -> bool:
+        """Whether ``u`` installs from here. Not while running as
+        administrator: the download is staged in your own temp folder and the
+        installer (or the staged copy) runs with this copy's elevation, so any
+        program running as you could swap it in between, the one thing an
+        elevated copy must not let it do (2026-11 review). Started normally,
+        PingerPlot installs it as usual."""
+        return bool(u and u.can_install and not getattr(self.app, "_elevated", False))
+
     def install(self) -> None:
         u = self.available
-        if not u or not u.can_install or self.busy:
+        if not self.installable(u) or self.busy:
             return
         self.busy = True
         self.status = f"Downloading {u.version}…"
@@ -153,7 +163,7 @@ class Updates:
         """The tray menu's Install item, when there's something to install.
         Runs on the tray thread: reads state only."""
         u = self.available
-        if u and u.can_install and not self.busy:
+        if self.installable(u) and not self.busy:
             return [M(), M(f"Install version {u.version}", lambda: self.app._post(self.install))]
         return []
 
@@ -214,9 +224,12 @@ class Updates:
         except tk.TclError:
             return
         u = self.available
-        self._status_lbl.configure(text=self.status)
+        status = self.status
+        if u and u.can_install and not self.installable(u):
+            status = f"{status} {ELEVATED_NOTE}".strip()
+        self._status_lbl.configure(text=status)
         self._check_btn.configure(state="disabled" if self.busy else "normal")
-        if u and u.can_install:
+        if self.installable(u):
             self._install_btn.configure(text=f"Install {u.version} and restart",
                                         state="disabled" if self.busy else "normal")
             self._install_btn.pack(side="right", padx=(0, self.app.look.S(8)))
@@ -238,7 +251,8 @@ class Updates:
         bar = ttk.Frame(holder, style="Tile.TFrame", padding=(S(14), S(8)))
         bar.pack(fill="x")
         text = (self.status if self.busy else
-                f"PingerPlot {u.version} is available." if u.can_install else
+                f"PingerPlot {u.version} is available." if self.installable(u) else
+                f"PingerPlot {u.version} is available. {ELEVATED_NOTE}" if u.can_install else
                 f"PingerPlot {u.version} is out: update with "
                 f"{UPDATE_BY.get(u.kind, 'git pull')}.")
         ttk.Label(bar, text=text, style="Card.Strong.TLabel").pack(side="left")
@@ -246,7 +260,7 @@ class Updates:
                    command=self.dismiss, takefocus=False).pack(side="right")
         ttk.Button(bar, text="What's new", style="Card.Subtle.TButton", command=self.whats_new,
                    takefocus=False).pack(side="right", padx=(S(8), S(4)))
-        if u.can_install:
+        if self.installable(u):
             ttk.Button(bar, text="Install and restart", style="Card.Accent.TButton",
                        command=self.install, takefocus=False,
                        state="disabled" if self.busy else "normal").pack(side="right")
