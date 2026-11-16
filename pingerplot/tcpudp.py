@@ -392,7 +392,10 @@ def probe_path(
             # first would resolve that TTL as a bare timeout and the `not in
             # pending` guard below would then discard the router's identity.
             if cap in r:
-                while True:
+                # Bounded by the round's deadline too: the capture socket sees
+                # every IP packet on the interface, and on a busy one it may
+                # never run dry (2026-11 review).
+                while time.perf_counter() < deadline:
                     try:
                         data, _ = cap.recvfrom(2048)
                     except (BlockingIOError, OSError):

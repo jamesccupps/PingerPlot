@@ -139,6 +139,27 @@ def test_round_ends_early_once_every_hop_has_answered(capture, monkeypatch):
     assert elapsed < 1.5, f"waited {elapsed:.2f}s for a round that was already done"
 
 
+def test_a_capture_socket_that_never_runs_dry_still_ends_the_round(monkeypatch):
+    """The capture socket sees every packet on the interface; on a busy one
+    draining it could outlast the reply timeout. Here it never empties."""
+    import time
+    junk = router_reply("10.0.0.9", ICMP_TTL_EXCEEDED, socket.IPPROTO_UDP, 1, 2,
+                        dst_ip="198.51.100.7")
+
+    class Flood:
+        def recvfrom(self, _n):
+            return junk, ("10.0.0.9", 0)
+    flood = Flood()
+    monkeypatch.setattr(tcpudp, "_open_capture", lambda _ip: flood)
+    monkeypatch.setattr(tcpudp, "_close_capture", lambda _s: None)
+    monkeypatch.setattr(tcpudp.select, "select", lambda r, w, x, t=None: ([flood], [], []))
+    t0 = time.perf_counter()
+    res = tcpudp.probe_path(DEST, [1, 2], timeout_ms=300, mode="udp",
+                            port=UDP_BASE, local_ip="0.0.0.0")
+    assert time.perf_counter() - t0 < 2.0
+    assert all(r.status == icmp.IP_REQ_TIMED_OUT for r in res.values())
+
+
 # --- probe_path: TCP, against a real listener ------------------------------
 
 def test_tcp_round_detects_an_open_port(monkeypatch):
