@@ -4,6 +4,16 @@ All notable changes to PingerPlot are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **Router names it couldn't read** left the IP database to place them, which
+  often puts a carrier's routers at its registered address. Names that write
+  the whole CLLI code (`ae1-chcgilcpj91`: Chicago) and the metro codes YMQ
+  (Montreal), YQB (Quebec City), YTO (Toronto), DSM (Des Moines) and CYS
+  (Cheyenne) are now read.
+
 ## [1.5.2] — 2026-11-16
 
 Fixes from an outside review of 1.5.1.

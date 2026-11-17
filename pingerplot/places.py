@@ -64,7 +64,9 @@ CODES = {
     "sfo": ("San Francisco", "US"), "sjc": ("San Jose", "US"), "slc": ("Salt Lake City", "US"),
     "stl": ("St. Louis", "US"), "tpa": ("Tampa", "US"), "was": ("Washington", "US"),
     "yul": ("Montreal", "CA"), "yvr": ("Vancouver", "CA"), "yyz": ("Toronto", "CA"),
-    "yyc": ("Calgary", "CA"), "yow": ("Ottawa", "CA"), "mex": ("Mexico City", "MX"),
+    "yyc": ("Calgary", "CA"), "yow": ("Ottawa", "CA"), "ymq": ("Montreal", "CA"),
+    "yqb": ("Quebec City", "CA"), "yto": ("Toronto", "CA"), "dsm": ("Des Moines", "US"),
+    "cys": ("Cheyenne", "US"), "mex": ("Mexico City", "MX"),
     "qro": ("Queretaro", "MX"),
     # Europe
     "ams": ("Amsterdam", "NL"), "arn": ("Stockholm", "SE"), "sto": ("Stockholm", "SE"),
@@ -125,6 +127,9 @@ NAMES = {
 }
 
 _TOKEN = re.compile(r"^([a-z]+)\d*[a-z]?$")   # "lax1", "dfw01", "chcgil09", "dallas1", "ord2a"
+# A full CLLI code: six letters of place, then building/equipment characters
+# ("chcgilcpj91", "nycmnyzrjp1", "chrlncm1j41"), as some carriers write it whole.
+_CLLI_FULL = re.compile(r"^([a-z]{6})[a-z0-9]{2}[a-z0-9]{0,3}$")
 
 
 @dataclass(frozen=True)
@@ -157,6 +162,10 @@ def from_name(hostname: Optional[str]) -> Optional[Place]:
             city, cc = NAMES[m.group(1)]
             return Place(city, cc, label)
         for part in re.split(r"[-_]", label):
+            full = _CLLI_FULL.match(part)
+            if full and full.group(1) in CLLI:
+                city, cc = CLLI[full.group(1)]
+                return Place(city, cc, part)
             m = _TOKEN.match(part)
             if not m:
                 continue
@@ -196,7 +205,8 @@ COORDS = {
     "Milwaukee": (43.04, -87.91), "Las Vegas": (36.17, -115.14), "Indianapolis": (39.77, -86.16),
     "Sacramento": (38.58, -121.49), "Buffalo": (42.89, -78.88),
     "Montreal": (45.50, -73.57), "Vancouver": (49.28, -123.12), "Toronto": (43.65, -79.38),
-    "Calgary": (51.05, -114.07), "Ottawa": (45.42, -75.70), "Mexico City": (19.43, -99.13),
+    "Calgary": (51.05, -114.07), "Ottawa": (45.42, -75.70), "Quebec City": (46.81, -71.21),
+    "Des Moines": (41.59, -93.62), "Cheyenne": (41.14, -104.82), "Mexico City": (19.43, -99.13),
     "Queretaro": (20.59, -100.39),
     "Amsterdam": (52.37, 4.90), "Stockholm": (59.33, 18.07), "Athens": (37.98, 23.73),
     "Barcelona": (41.39, 2.17), "Brussels": (50.85, 4.35), "Budapest": (47.50, 19.04),

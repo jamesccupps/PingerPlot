@@ -16,6 +16,13 @@ from pingerplot import places
     ("et-3-1-0.cr2.ptldme.example.net", "Portland, Maine"),
     ("100ge1-1.core1.ash1.example.net", "Ashburn"),
     ("ae0.cr1.ams2.example.net", "Amsterdam"),
+    ("ae1-chcgilcpj91.example.net", "Chicago"),                 # full CLLI, building + equipment
+    ("ae0-chrlncm1j41.example.net", "Charlotte"),
+    ("be3.owr01.yqb21.ntwk.example.net", "Quebec City"),        # metro codes
+    ("be2.owr01.ymq33.ntwk.example.net", "Montreal"),
+    ("be3.owr01.yto25.ntwk.example.net", "Toronto"),
+    ("be3.owr01.dsm10.ntwk.example.net", "Des Moines"),
+    ("po1012.rwa03.cys13.ntwk.example.net", "Cheyenne"),
 ])
 def test_carrier_naming_patterns(name, city):
     place = places.from_name(name)
@@ -30,6 +37,8 @@ def test_carrier_naming_patterns(name, city):
     "edge.los-gatos.example.net",         # "los" alone is never Lagos
     "gw.lax.com",                         # a code in the domain itself doesn't count
     "laxity.example.net",                 # a code inside a longer word doesn't count
+    "ae10-bstpmallj93.example.net",       # a CLLI-shaped token whose place isn't known
+    "gw.chcgilxxxxxxx.example.net",       # too long to be a CLLI code
 ])
 def test_no_place_rather_than_a_wrong_one(name):
     assert places.from_name(name) is None
