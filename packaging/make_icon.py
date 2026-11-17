@@ -6,9 +6,9 @@ generates one at build time from the same code that draws the title-bar icon,
 which keeps the two from drifting apart.
 
 Why bother: an executable wearing the generic Python icon looks like something
-assembled in a hurry, and this is an unsigned network tool that people are
-already going to be asked to trust past a SmartScreen warning. Looking like
-itself is worth twenty lines.
+assembled in a hurry, and this is a network tool that people may still be
+asked to trust past a SmartScreen warning (a new release has no reputation
+yet, signed or not). Looking like itself is worth twenty lines.
 
 ICO structure (an ICONDIR, then one ICONDIRENTRY per image, then the images).
 Vista and later accept PNG-compressed entries, which is what appicon already
