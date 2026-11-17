@@ -37,6 +37,10 @@ All notable changes to PingerPlot are recorded here. The format follows
   4 ms got "+15 ms in Boston". Delay now counts only as far as it carries,
   the way loss already did, so the places' delays add up to the
   destination's.
+- **"Loss reaching the destination starts in…" for a destination that never
+  answers**: the loss came from the last router that did, which was only
+  rate-limiting its replies. No loss is placed then, and the verdict says the
+  destination doesn't answer.
 
 ## [1.5.2] — 2026-11-16
 

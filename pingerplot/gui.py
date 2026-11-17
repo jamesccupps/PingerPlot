@@ -1659,7 +1659,8 @@ class App:
         where = where or self._locator(views=views)
         rows = trouble.rank(views, lambda v: where.view(v).text)
         self.trouble_label.configure(
-            text=trouble.verdict(rows) or "Where the trouble is shows once hops have answered "
+            text=trouble.verdict(rows, trouble.destination_silent(views))
+            or "Where the trouble is shows once hops have answered "
                                           "and been placed.")
         for r in rows[:8]:
             hops = ", ".join(str(t) for t in r.ttls)

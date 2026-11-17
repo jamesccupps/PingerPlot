@@ -29,6 +29,18 @@ def test_loss_that_reaches_the_destination_is_pinned_where_it_starts():
     assert trouble.verdict(rows).startswith("Loss reaching the destination starts in Denver (hop 3, 15%)")
 
 
+def test_no_loss_is_placed_when_the_destination_never_answers():
+    # A relay that drops pings: the last router that answers is rate-limiting
+    # its replies, which isn't loss reaching anything.
+    hops = [hop(1, "Boston", 4), hop(11, "Ashburn", 16, loss=20), hop(12, "Washington", 21, loss=53),
+            hop(13, None, None, loss=100), hop(14, None, None, loss=100)]
+    rows = _rank(hops)
+    assert all(r.loss_starts == 0 for r in rows)
+    assert trouble.destination_silent(hops)
+    assert trouble.verdict(rows, True) == ("The destination doesn't answer, so where loss starts can't be "
+                                           "told; the most delay is added in Ashburn (+12 ms).")
+
+
 def test_delay_is_credited_to_the_place_it_was_added():
     rows = _rank([hop(1, "Portland", 2), hop(2, "Boston", 9), hop(3, "Chicago", 38),
                   hop(4, "Chicago", 39), hop(5, "Denver", 52)])

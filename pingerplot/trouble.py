@@ -13,6 +13,10 @@ hop adds is the step from the hop before; the steps add up to the last
 answering hop's latency, so nothing is blamed for delay that never reaches
 the destination.
 
+A destination that never answers (one that drops pings, or a trace that
+never reaches it) has no loss to carry, so none is placed: the last router
+that answers is usually just rate-limiting its replies.
+
 Hops are grouped by place (from the router's name or the IP database), so
 "loss starts entering Denver, +31 ms in Chicago" reads straight off the
 result. No Tk: the map draws it, the tests check it, a report can print it.
@@ -50,14 +54,22 @@ def carried(values: Sequence[float]) -> List[float]:
 carried_loss = carried
 
 
+def destination_silent(hops: Sequence) -> bool:
+    """Whether the last hop (the destination, or the last one probed) never
+    answered."""
+    return bool(hops) and hops[-1].avg is None
+
+
 def rank(hops: Sequence, locate: Callable[[object], Optional[str]]) -> List[PlaceRow]:
     """``hops`` in path order, each with ``ttl``, ``loss_pct``, ``avg`` (None
     for a hop that never answered) and whatever ``locate`` needs. Returns one
     row per place, worst first; hops with no place are left out (they still
-    count for the hops around them)."""
+    count for the hops around them). With the destination silent, no place
+    gets any loss."""
     answered = [h for h in hops if h.avg is not None]
     if not answered:
         return []
+    silent = destination_silent(hops)
     ttls = [h.ttl for h in answered]
     loss = dict(zip(ttls, carried([h.loss_pct for h in answered])))
     delay = dict(zip(ttls, carried([max(0.0, h.avg) for h in answered])))
@@ -69,18 +81,21 @@ def rank(hops: Sequence, locate: Callable[[object], Optional[str]]) -> List[Plac
             row = rows.setdefault(place, PlaceRow(place))
             row.ttls.append(h.ttl)
             row.delay_added += delay[h.ttl] - prev_delay
-            row.loss_starts += max(0.0, loss[h.ttl] - prev_loss)
+            row.loss_starts += 0.0 if silent else max(0.0, loss[h.ttl] - prev_loss)
         prev_delay, prev_loss = delay[h.ttl], loss[h.ttl]
     return sorted(rows.values(), key=lambda r: -r.score)
 
 
-def verdict(rows: Sequence[PlaceRow]) -> str:
-    """One line for the top of the list, or "" when nothing stands out."""
+def verdict(rows: Sequence[PlaceRow], silent: bool = False) -> str:
+    """One line for the top of the list, or "" when there's nothing to rank.
+    ``silent``: the destination never answered (destination_silent)."""
     if not rows:
         return ""
     lossy = max(rows, key=lambda r: r.loss_starts)
     slow = max(rows, key=lambda r: r.delay_added)
     parts = []
+    if silent:
+        parts.append("the destination doesn't answer, so where loss starts can't be told")
     if lossy.loss_starts >= 1.0:
         parts.append(f"loss reaching the destination starts in {lossy.place} "
                      f"(hop {lossy.ttls[0]}, {lossy.loss_starts:.0f}%)")
