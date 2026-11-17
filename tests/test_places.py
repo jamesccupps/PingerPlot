@@ -65,3 +65,11 @@ def test_coords_of_a_place():
     assert places.coords(places.from_name("ae0.cr1.ams2.example.net")) == (52.37, 4.90)
     assert places.coords(places.from_name("ae1.portland.example.net")) is None
     assert places.coords(None) is None
+
+
+def test_every_country_the_tables_use_has_the_databases_name_for_it():
+    """A place reads the same from a router's name and from the IP database
+    ("Boston, US" both times), or one city is two rows in "where the trouble is"."""
+    used = {cc for table in (places.CLLI, places.CODES, places.NAMES) for _city, cc in table.values() if cc}
+    assert used <= set(places.COUNTRY_CODES.values())
+    assert places.country_code("United States") == "US" and places.country_code("Nigeria") == "Nigeria"

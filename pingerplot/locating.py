@@ -155,7 +155,7 @@ class Where:
             return ""
         info = self.info
         if info.city and info.country:
-            return f"{info.city}, {info.country}"
+            return f"{info.city}, {places.country_code(info.country)}"
         return info.city or info.country
 
     @property

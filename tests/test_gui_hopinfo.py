@@ -25,7 +25,7 @@ def test_the_name_beats_the_ip_database_in_a_table():
     g = _geo(**{PUBLIC: DENVER})
     where = Locator(g)
     assert where.where(PUBLIC, CHICAGO_NAME).text == "Chicago, US"
-    assert where.where(PUBLIC, "dns.example.net").text == "Denver, United States"
+    assert where.where(PUBLIC, "dns.example.net").text == "Denver, US", "written as a name's place is"
     assert gui_hopinfo.network(PUBLIC, g) == "AS64500 Example ISP"
     assert where.where("10.0.0.1", None).text == "" and gui_hopinfo.network(None, g) == ""
 

@@ -109,7 +109,7 @@ def test_the_name_comes_first_then_the_database():
     w = loc.where(DOC, "ae2.cr2.chcgil09.example.net", 10.0)
     assert (w.text, w.label, w.source, w.why) == ("Chicago, US", "Chicago", "name", "")
     w = loc.where(DOC, "svc.example.com", 40.0)
-    assert (w.text, w.label, w.source, w.point) == ("Denver, United States", "Denver", "ip", DENVER)
+    assert (w.text, w.label, w.source, w.point) == ("Denver, US", "Denver", "ip", DENVER)
 
 
 def test_an_impossible_database_answer_is_left_out_and_explained():

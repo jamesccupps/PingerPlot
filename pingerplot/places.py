@@ -230,6 +230,30 @@ COORDS = {
 }
 
 
+# The tables' country codes by the names the IP database gives (ipwho.is
+# spells them out, in a few variants), so a place reads the same whichever
+# witness placed it: "Boston, US" both times, not "Boston, United States"
+# from the database in the row under a router's name's "Boston, US".
+COUNTRY_CODES = {
+    "United States": "US", "United States of America": "US", "Canada": "CA", "Mexico": "MX",
+    "Netherlands": "NL", "The Netherlands": "NL", "Sweden": "SE", "Greece": "GR", "Spain": "ES",
+    "Belgium": "BE", "Hungary": "HU", "France": "FR", "Denmark": "DK", "Ireland": "IE",
+    "Germany": "DE", "Italy": "IT", "Finland": "FI", "Turkey": "TR", "Türkiye": "TR",
+    "United Kingdom": "GB", "Portugal": "PT", "Norway": "NO", "Romania": "RO", "Czechia": "CZ",
+    "Czech Republic": "CZ", "Bulgaria": "BG", "Austria": "AT", "Poland": "PL", "Switzerland": "CH",
+    "New Zealand": "NZ", "Thailand": "TH", "India": "IN", "Indonesia": "ID",
+    "United Arab Emirates": "AE", "Hong Kong": "HK", "South Korea": "KR", "Korea, Republic of": "KR",
+    "Republic of Korea": "KR", "South Africa": "ZA", "Japan": "JP", "Malaysia": "MY",
+    "Philippines": "PH", "Singapore": "SG", "Australia": "AU", "Taiwan": "TW", "Brazil": "BR",
+    "Argentina": "AR", "Chile": "CL", "Colombia": "CO", "Peru": "PE", "Kenya": "KE", "Qatar": "QA",
+}
+
+
+def country_code(name: str) -> str:
+    """The code for a country the tables use, or the name as given."""
+    return COUNTRY_CODES.get(name, name)
+
+
 def coords(place: Optional[Place]) -> Optional[tuple]:
     """(lat, lon) for a place read from a name, or None."""
     return COORDS.get(place.city) if place is not None else None
