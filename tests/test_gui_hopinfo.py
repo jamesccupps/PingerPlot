@@ -51,6 +51,16 @@ def test_details_say_why_the_databases_answer_is_left_out():
     assert why.endswith("The tables and the map leave it out.")
 
 
+def test_one_metro_under_two_names_is_no_disagreement():
+    def rows(name, info):
+        return dict(gui_hopinfo.facts(PUBLIC, name, Locator(_geo(**{PUBLIC: info})).where(PUBLIC, name)))
+    nyc = GeoInfo(40.71, -74.0, "New York City", "New York", "United States", "Example ISP")
+    washington = GeoInfo(38.9, -77.04, "Washington", "District of Columbia", "United States", "Example ISP")
+    assert "" not in rows("ae1.cr1.nyc1.example.net", nyc)
+    assert "" not in rows("be9.owr02.iad11.example.net", washington), "Ashburn: 42 km"
+    assert "disagree" in rows("ae1.cr1.bos1.example.net", washington)[""]
+
+
 def test_details_for_a_router_not_yet_looked_up():
     rows = dict(gui_hopinfo.facts(PUBLIC, None, Locator(_geo()).where(PUBLIC, None)))
     assert rows["Name"] == "looking it up…"

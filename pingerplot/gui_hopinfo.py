@@ -15,9 +15,20 @@ import tkinter as tk
 from tkinter import ttk
 from typing import List, Optional, Tuple
 
-from . import history, investigate
+from . import history, investigate, locating, places
 from .gui_charts import fmt_ms
 from .locating import Where
+
+
+def _disagree(hint, info) -> bool:
+    """Whether the name's city and the database's are different places: by
+    distance, as one metro has many names (New York City for New York,
+    Washington for Ashburn); by name where the name's city has no
+    coordinates."""
+    point = places.coords(hint)
+    if point is not None:
+        return locating.distance_km(point, (info.lat, info.lon)) > locating.SLACK_KM
+    return bool(info.city) and info.city.lower() not in hint.city.lower()
 
 
 def network(address: Optional[str], geo) -> str:
@@ -37,7 +48,7 @@ def facts(address: Optional[str], hostname: Optional[str], where: Where) -> List
         rows.append(("Where, from the IP database", info.place() or "not known"))
         if where.why:
             rows.append(("", f"{where.why} The tables and the map leave it out."))
-        if hint is not None and info.city and info.city.lower() not in hint.city.lower():
+        if hint is not None and _disagree(hint, info):
             rows.append(("", "The two disagree: for a carrier's router, the name is usually right."))
         rows.append(("Network", info.network() or "not known"))
         if info.org and info.org != info.isp:

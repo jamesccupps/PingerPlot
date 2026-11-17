@@ -51,6 +51,9 @@ All notable changes to PingerPlot are recorded here. The format follows
   delay and loss across two rows. Both now read "Boston, US". And one
   metro named two ways ("New York" from a router's name, "New York City"
   from the database, Newark across the river) is one row there.
+- **Details said the name and the database "disagree" for one metro**: New
+  York and New York City, Ashburn and Washington. They're now compared by
+  distance (more than 150 km apart).
 
 ## [1.5.2] — 2026-11-16
 
