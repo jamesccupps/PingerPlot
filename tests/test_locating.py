@@ -194,3 +194,51 @@ def test_nothing_reads_the_ip_database_for_a_place_but_the_locator():
         if path.name not in ("locating.py", "geoip.py"):
             Scan(path.name).visit(ast.parse(path.read_text(encoding="utf-8")))
     assert not found, f"the IP database read outside locating.Locator: {found}"
+
+
+# --- the neighbor judgement ---------------------------------------------------------
+
+QUEBEC = "be3.owr01.yqb21.example.net"
+ATLANTA = "be9.owr02.atl11.example.net"
+
+
+def _path_locator(path, quickest):
+    """A path of (ttl, address, hostname, best), anchors from ``quickest``
+    (hostname, best) pairs, and the database putting 198.51.100.7 in Washington."""
+    g = _geo(**{DOC: _info(*WASHINGTON, "Washington")})
+    return Locator(g, locating.anchors(quickest), path)
+
+
+def test_a_hop_beside_a_named_one_at_the_same_round_trip_but_far_from_it_is_doubtful():
+    # Between Boston and Quebec City at 16 ms: physics allows Washington (any
+    # reply over about 2 ms could come from there), but it's a link from Quebec City.
+    loc = _path_locator([(7, "198.51.100.1", "be20.owr02.bos01.example.net", 16.0), (8, DOC, None, 16.0),
+                         (9, "198.51.100.9", QUEBEC, 17.0)],
+                        [("po26.ear02.bos01.example.net", 3.0), (QUEBEC, 15.0)])
+    w = loc.where(DOC, None, ttl=8)
+    assert (w.text, w.point) == ("", None)
+    assert w.why.startswith(f"Doubtful: it answers within 2 ms of hop 9, {QUEBEC} (Quebec City")
+
+
+def test_a_named_hop_slower_than_its_citys_quickest_router_says_nothing():
+    # Inside an MPLS tunnel every router reports the far end's round trip:
+    # Atlanta at 55 ms, when an Atlanta router elsewhere answers in 41.
+    loc = _path_locator([(13, "198.51.100.1", ATLANTA, 55.0), (14, DOC, None, 54.0)],
+                        [("po26.ear02.bos01.example.net", 3.0), ("ae2.cr2.atl10.example.net", 41.0)])
+    assert loc.where(DOC, None, ttl=14).why == ""
+
+
+def test_a_hop_a_later_hop_beats_says_nothing():
+    loc = _path_locator([(8, DOC, None, 16.0), (9, "198.51.100.9", QUEBEC, 17.0),
+                         (10, "198.51.100.10", None, 9.0)],
+                        [(QUEBEC, 15.0)])
+    assert loc.where(DOC, None, ttl=8).why == ""
+
+
+def test_the_neighbor_must_be_close_in_hops_and_round_trip_and_the_answer_far():
+    quick = [(QUEBEC, 15.0)]
+    near = (9, "198.51.100.9", QUEBEC, 17.0)
+    assert _path_locator([(5, DOC, None, 16.0), near], quick).where(DOC, None, ttl=5).why == "", "4 hops away"
+    assert _path_locator([(8, DOC, None, 12.0), near], quick).where(DOC, None, ttl=8).why == "", "5 ms apart"
+    g = _geo(**{DOC: _info(46.0, -71.5, "Thetford Mines", "Canada")})          # 100 km from Quebec City
+    assert Locator(g, locating.anchors(quick), [(8, DOC, None, 16.0), near]).where(DOC, None, ttl=8).why == ""

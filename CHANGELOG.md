@@ -23,6 +23,14 @@ All notable changes to PingerPlot are recorded here. The format follows
   "where the trouble is", and Details says why. It's never replaced by a
   guess. Each hop's own router's best round trip is used, not the best of
   every router that has answered there.
+- **The database's "Washington" for routers that plainly aren't there**: a
+  hop between Boston and Quebec City at 16 ms, a root server one link past
+  London at the same round trip. Near this computer physics can't rule much
+  out, so a router that answers within 2 ms of a hop at most two links away,
+  placed by its name, yet is put more than 500 km from it is left out too.
+  Not inside MPLS tunnels, where every router reports the far end's round
+  trip: the named hop must be about the quickest seen for its city, and no
+  later hop may answer faster.
 
 ## [1.5.2] — 2026-11-16
 
