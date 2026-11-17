@@ -5,10 +5,13 @@ The rule is the one mtr users learn the hard way. Loss at a router in the
 middle of the path is usually that router declining to answer pings it's
 busy forwarding past, not lost traffic: if it were, every hop after it would
 show it too. So a hop's loss only counts as far as it carries: the least
-loss of that hop and every hop after it, destination included. Delay is the
-same idea in a gentler form: a hop's latency minus the latency of the hop
-before it that answered is what that hop's link added (a negative step is
-the earlier hop answering slowly, and counts as nothing).
+loss of that hop and every hop after it, destination included. Delay is
+counted the same way, for the same reason: a router slow to answer its own
+pings shows delay that the hops after it don't have. So a hop's latency
+counts as the least average of that hop and every hop after it, and what a
+hop adds is the step from the hop before; the steps add up to the last
+answering hop's latency, so nothing is blamed for delay that never reaches
+the destination.
 
 Hops are grouped by place (from the router's name or the IP database), so
 "loss starts entering Denver, +31 ms in Chicago" reads straight off the
@@ -33,15 +36,18 @@ class PlaceRow:
         return self.loss_starts * 10 + self.delay_added
 
 
-def carried_loss(losses: Sequence[float]) -> List[float]:
-    """Each hop's loss, counted only as far as it reaches: the least loss of
-    that hop and all after it."""
+def carried(values: Sequence[float]) -> List[float]:
+    """Each hop's loss or latency, counted only as far as it reaches: the
+    least of that hop's and every later hop's."""
     out: List[float] = []
     floor = float("inf")
-    for loss in reversed(losses):
-        floor = min(floor, loss)
+    for value in reversed(values):
+        floor = min(floor, value)
         out.append(floor)
     return list(reversed(out))
+
+
+carried_loss = carried
 
 
 def rank(hops: Sequence, locate: Callable[[object], Optional[str]]) -> List[PlaceRow]:
@@ -52,21 +58,19 @@ def rank(hops: Sequence, locate: Callable[[object], Optional[str]]) -> List[Plac
     answered = [h for h in hops if h.avg is not None]
     if not answered:
         return []
-    carried = dict(zip((h.ttl for h in answered),
-                       carried_loss([h.loss_pct for h in answered])))
+    ttls = [h.ttl for h in answered]
+    loss = dict(zip(ttls, carried([h.loss_pct for h in answered])))
+    delay = dict(zip(ttls, carried([max(0.0, h.avg) for h in answered])))
     rows: dict = {}
-    prev_avg: Optional[float] = None
-    prev_carried = 0.0
+    prev_delay = prev_loss = 0.0
     for h in answered:
-        step = max(0.0, h.avg - prev_avg) if prev_avg is not None else max(0.0, h.avg)
-        starts = max(0.0, carried[h.ttl] - prev_carried)
         place = locate(h)
         if place:
             row = rows.setdefault(place, PlaceRow(place))
             row.ttls.append(h.ttl)
-            row.delay_added += step
-            row.loss_starts += starts
-        prev_avg, prev_carried = h.avg, carried[h.ttl]
+            row.delay_added += delay[h.ttl] - prev_delay
+            row.loss_starts += max(0.0, loss[h.ttl] - prev_loss)
+        prev_delay, prev_loss = delay[h.ttl], loss[h.ttl]
     return sorted(rows.values(), key=lambda r: -r.score)
 
 

@@ -38,9 +38,22 @@ def test_delay_is_credited_to_the_place_it_was_added():
     assert trouble.verdict(rows) == "The most delay is added in Chicago (+30 ms)."
 
 
-def test_a_slow_answering_router_adds_no_negative_delay():
+def test_a_slow_answering_router_is_credited_only_with_delay_that_carries():
+    # B answers its own pings slowly: 80 ms, though C behind it is at 20. Only
+    # the 15 ms that reaches C counts, and nothing goes negative.
     rows = _rank([hop(1, "A", 5), hop(2, "B", 80), hop(3, "C", 20)])
-    assert {r.place: r.delay_added for r in rows} == {"A": 5, "B": 75, "C": 0}
+    assert {r.place: r.delay_added for r in rows} == {"A": 5, "B": 15, "C": 0}
+
+
+def test_delay_never_adds_up_to_more_than_the_destinations():
+    # A real path: a router 2 ms from home whose few answers average 102 ms,
+    # and a slow-pathed router midway at 130 ms; the destination is at 61.
+    rows = _rank([hop(1, "Gateway", 102), hop(2, "Boston", 4), hop(8, "Montreal", 62),
+                  hop(12, "Des Moines", 130), hop(14, "Cheyenne", 61)])
+    by = {r.place: r.delay_added for r in rows}
+    assert by["Gateway"] == 4 and by["Des Moines"] == 0 and by["Cheyenne"] == 0
+    assert sum(by.values()) == 61
+    assert trouble.verdict(rows) == "The most delay is added in Montreal (+57 ms)."
 
 
 def test_silent_and_unplaced_hops_still_count_for_their_neighbours():

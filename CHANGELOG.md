@@ -31,6 +31,12 @@ All notable changes to PingerPlot are recorded here. The format follows
   Not inside MPLS tunnels, where every router reports the far end's round
   trip: the named hop must be about the quickest seen for its city, and no
   later hop may answer faster.
+- **"The most delay is added in…" blamed delay that never reached the
+  destination**: a router slow to answer its own pings (over 120 ms, with 62 on
+  either side) was credited with the difference, and 1.1.1.1 answering in
+  4 ms got "+15 ms in Boston". Delay now counts only as far as it carries,
+  the way loss already did, so the places' delays add up to the
+  destination's.
 
 ## [1.5.2] — 2026-11-16
 
