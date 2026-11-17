@@ -4,7 +4,12 @@ All notable changes to PingerPlot are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.6.0] — 2026-11-17
+
+Where routers are, and where the trouble is, checked against real paths: the
+IP database's impossible answers are left out, and the "where the trouble
+is" verdicts no longer blame places for delay or loss that never reach the
+destination.
 
 ### Fixed
 
@@ -843,6 +848,7 @@ have relied on — see **Changed** before comparing old exports with new ones.
 
 - Initial public release.
 
+[1.6.0]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.6.0
 [1.5.2]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.5.2
 [1.5.1]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.5.1
 [1.5.0]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.5.0
