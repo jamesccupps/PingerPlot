@@ -473,6 +473,12 @@ class Monitor:
         with self._lock:
             return [h.address for h in self._hops if h.address]
 
+    def routers(self) -> List[Tuple[Optional[str], Optional[float]]]:
+        """Each hop's current router as (name, its own best round trip), for
+        checking locations (locating.anchors). Cheap: no samples are read."""
+        with self._lock:
+            return [(h.hostname, h.best_by_addr.get(h.address)) for h in self._hops if h.address]
+
     def samples_for(self, ttl: int) -> List[Sample]:
         with self._lock:
             for h in self._hops:

@@ -47,6 +47,9 @@ class FakeMonitor:
     def hop_addresses(self):
         return []
 
+    def routers(self):
+        return []
+
     def all_samples(self):
         return {}
 

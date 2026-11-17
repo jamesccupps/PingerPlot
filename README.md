@@ -140,8 +140,10 @@ CI starts the app on Ubuntu on every push: the window's self-test, a probe of lo
      database (each says which), whose network it's on, and every router seen at that hop in the last day.
    - **Timeline**: every hop stacked on one time axis.
    - **Map**: the path on a map, zoomed to fit, each router placed by its name when that names a city and by
-     the IP database otherwise (see [privacy](#updates-and-privacy)); the target's other routes from the last
-     day are dashed underneath. Below it, **where the trouble is**: each place on the path, the delay it adds
+     the IP database otherwise (see [privacy](#updates-and-privacy)), unless its round trip shows the database
+     is wrong: a reply can't come from farther away than light in fiber travels in the time, so 1.1.1.1
+     answering in 3 ms isn't in Brisbane. Such a router is left off, and Details says why. The target's other
+     routes from the last day are dashed underneath. Below it, **where the trouble is**: each place on the path, the delay it adds
      and the loss that starts there and carries to the destination (loss that stops at a router is that router
      ignoring pings, and isn't counted), with a one-line verdict.
    - **Events**: route changes, alerts raised and cleared, warnings.

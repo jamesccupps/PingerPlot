@@ -25,7 +25,7 @@ from typing import Dict, List, Optional
 
 from . import __version__, appicon, compare as cmpmod, geoip, history, icmp, settings
 from . import theme as themes, tkthreads, tray as traymod, updater, winplatform, xdg
-from . import gui_hopinfo, gui_recording, investigate, trouble
+from . import gui_hopinfo, gui_recording, investigate, locating, trouble
 from .gui_charts import BAD_MS, WARN_MS, Ink, draw_graph, draw_map, draw_timeline, fmt_ms, row_tag
 from .gui_history import HistoryPage
 from .gui_settings import REPO_URL, EditTargetDialog, OptionVars, SettingsPage
@@ -94,6 +94,7 @@ class App:
         self.geo = geoip.GeoResolver(settings.config_dir() / geoip.CACHE_NAME)
         self._geo_started = False
         self._geo_fed = 0.0
+        self._anchors_at, self._anchors = -1e9, []    # see _locator
         # Earlier routes for the map, per target: (loaded at, [[(addr, name), ...], ...]).
         self._past_routes: Dict[str, tuple] = {}
         self._past_loading: set = set()
@@ -1116,6 +1117,28 @@ class App:
                 for addr in mon.hop_addresses():
                     self.geo.request(addr)
 
+    ANCHORS_EVERY = 10.0      # seconds between rebuilding the live anchors
+
+    def _locator(self, name: Optional[str] = None, views=None) -> locating.Locator:
+        """Where the routers of target ``name`` (the active one by default)
+        are, checked against every live target's routers placed by name: the
+        check needs round trips from this computer at about the same time, so
+        a saved session is checked only against its own routers."""
+        name = self._active if name is None else name
+        if views is None:
+            mon = self._monitors.get(name) if name else None
+            views = mon.snapshot()[0] if mon is not None else []
+        if name in self._loaded:
+            found = locating.anchors((v.hostname, v.best_here) for v in views)
+        else:
+            now = time.monotonic()
+            if now - self._anchors_at >= self.ANCHORS_EVERY:
+                self._anchors = locating.anchors(
+                    r for n, m in self._monitors.items() if n not in self._loaded for r in m.routers())
+                self._anchors_at = now
+            found = self._anchors
+        return locating.Locator(self.geo, found, locating.path_of(views))
+
     def _hop_details(self, ttl: int, address: str, hostname: str) -> None:
         name = self._active
         if name is None:
@@ -1196,6 +1219,7 @@ class App:
                             "current_ms", "avg_ms", "min_ms", "max_ms", "jitter_ms", "status", "mos",
                             "location", "network"])
                 last_ttl = views[-1].ttl
+                where = self._locator(views=views)
                 for v in views:
                     m = mos(v.avg, v.jitter, v.loss_pct) if v.ttl == last_ttl else None
                     w.writerow([
@@ -1205,7 +1229,7 @@ class App:
                         _csv_num(v.best), _csv_num(v.worst), _csv_num(v.jitter),
                         icmp.status_text(v.last_status) if v.last_status is not None else "",
                         f"{m:.2f}" if m is not None else "",
-                        csv_safe(gui_hopinfo.location(v.address, v.hostname, self.geo)),
+                        csv_safe(where.view(v).text),
                         csv_safe(gui_hopinfo.network(v.address, self.geo)),
                     ])
         except OSError as exc:
@@ -1555,11 +1579,12 @@ class App:
             if iid not in desired:
                 self.tree.delete(iid)
         last_ttl = views[-1].ttl if views else None
+        where = self._locator(views=views)
         for v in views:
             iid = str(v.ttl)
             hostname = v.hostname if v.hostname else ("(resolving…)" if v.address and v.hostname is None else "")
             values = (v.ttl, v.address or "*", hostname,
-                      gui_hopinfo.location(v.address, v.hostname, self.geo),
+                      where.view(v).text,
                       gui_hopinfo.network(v.address, self.geo), f"{v.loss_pct:.0f}%", v.sent,
                       _ms(v.current), _ms(v.avg), _ms(v.best), _ms(v.worst), _ms(v.jitter))
             tag = row_tag(v, is_dest=(v.ttl == last_ttl))
@@ -1619,18 +1644,20 @@ class App:
             self.geo.start()           # the Map view is open
             self._geo_started = True
         views, _s, _ip, _in = self.monitor.snapshot()
+        where = self._locator(views=views)
         caption = draw_map(self.map_canvas, self._ink(), views, self.geo,
-                           locate=gui_hopinfo.locate, past=self._past_route_points())
+                           locator=where, past=self._past_route_points(where))
         if caption:
             self.map_header.configure(text=caption)
-        self._fill_trouble(views)
+        self._fill_trouble(views, where)
 
-    def _fill_trouble(self, views) -> None:
+    def _fill_trouble(self, views, where: Optional[locating.Locator] = None) -> None:
         """Rank the places on the path: the delay each adds, and where loss
         that reaches the destination begins."""
         tree = self.trouble_tree
         tree.delete(*tree.get_children())
-        rows = trouble.rank(views, lambda v: gui_hopinfo.location(v.address, v.hostname, self.geo))
+        where = where or self._locator(views=views)
+        rows = trouble.rank(views, lambda v: where.view(v).text)
         self.trouble_label.configure(
             text=trouble.verdict(rows) or "Where the trouble is shows once hops have answered "
                                           "and been placed.")
@@ -1642,11 +1669,11 @@ class App:
                 f"{r.loss_starts:.0f}%" if r.loss_starts >= 0.5 else ""))
 
     # --- earlier routes, for the map --------------------------------------------
-    def _past_route_points(self) -> list:
+    def _past_route_points(self, where: Optional[locating.Locator] = None) -> list:
         """The active target's other routes from the last day, as points to
-        draw faded: located by name or the IP database at draw time, so a
-        lookup that lands later moves them too. Loaded off the window's
-        thread, at most once a minute."""
+        draw faded: located like the current route's routers (``where`` gives
+        the anchors), at draw time, so a lookup that lands later moves them
+        too. Loaded off the window's thread, at most once a minute."""
         name = self._active
         if not name or name in self._loaded:
             return []
@@ -1655,16 +1682,18 @@ class App:
             self._past_loading.add(name)
             threading.Thread(target=self._load_past_routes, args=(name,), name="past-routes",
                              daemon=True).start()
+        found = (where or self._locator()).anchors
         out = []
         for route in (entry[1] if entry else []):
             pts = []
-            for addr, host in route:
+            loc = locating.Locator(self.geo, found, route)
+            for ttl, addr, host, best in route:
                 # Routers only an earlier route used were never in the hop
                 # table, so nothing asked about them; the map needs them too.
                 self.geo.request(addr)
-                where = gui_hopinfo.locate(addr, host, self.geo)
-                if where is not None:
-                    pts.append((where[0], where[1]))
+                point = loc.where(addr, host, best, ttl).point
+                if point is not None:
+                    pts.append(point)
             if len(pts) >= 2:
                 out.append(pts)
         return out
@@ -1680,8 +1709,11 @@ class App:
                 others = sorted((r for r in rows if r is not current),
                                 key=lambda r: -max(b for _a, b in r.spans))[:3]
                 names = reader.names(a for r in others for hop in r.hops for a in hop)
+                best = {r.addr: r.rtt_min for hop in investigate.hops(reader, name, now - 86400, now)
+                        for r in hop.routers}
                 for r in others:
-                    routes.append([(hop[0], names.get(hop[0])) for hop in r.hops if hop])
+                    routes.append([(ttl, hop[0], names.get(hop[0]), best.get(hop[0]))
+                                   for ttl, hop in enumerate(r.hops, 1) if hop])
         except Exception:
             routes = []          # a locked or damaged history: no earlier routes, no fuss
         finally:

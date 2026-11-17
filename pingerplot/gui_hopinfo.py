@@ -4,7 +4,8 @@ which routers have answered at that hop lately.
 Two witnesses for "where": the router's DNS name (places.py), which for the
 backbone is usually right, and the IP database (geoip.py), which is usually
 right for the edges and often wrong for the backbone. The tables show the
-name's answer when there is one; the Details window shows both, each with its
+name's answer when there is one, else the database's unless the round trips
+rule it out (locating.py); the Details window shows both, each with its
 source, so a disagreement is visible rather than hidden.
 """
 from __future__ import annotations
@@ -14,35 +15,9 @@ import tkinter as tk
 from tkinter import ttk
 from typing import List, Optional, Tuple
 
-from . import history, investigate, places
+from . import history, investigate
 from .gui_charts import fmt_ms
-
-
-def location(address: Optional[str], hostname: Optional[str], geo) -> str:
-    """The best short answer to "where is it?" for a table cell."""
-    hint = places.from_name(hostname)
-    if hint is not None:
-        return str(hint)
-    info = geo.get(address) if address else None
-    if info is None:
-        return ""
-    if info.city and info.country:
-        return f"{info.city}, {info.country}"
-    return info.city or info.country
-
-
-def locate(address: Optional[str], hostname: Optional[str], geo):
-    """Where to draw a router: ``(lat, lon, label, source)``, from its name
-    when that names a known city, else from the IP database, else None.
-    ``source`` is "name" or "ip"."""
-    hint = places.from_name(hostname)
-    point = places.coords(hint)
-    if point is not None:
-        return point[0], point[1], hint.city, "name"
-    info = geo.get(address) if address else None
-    if info is not None:
-        return info.lat, info.lon, info.city or info.country, "ip"
-    return None
+from .locating import Where
 
 
 def network(address: Optional[str], geo) -> str:
@@ -50,17 +25,18 @@ def network(address: Optional[str], geo) -> str:
     return info.network() if info is not None else ""
 
 
-def facts(address: Optional[str], hostname: Optional[str], geo) -> List[Tuple[str, str]]:
-    """Every known fact about the router, as (label, value) rows."""
+def facts(address: Optional[str], hostname: Optional[str], where: Where) -> List[Tuple[str, str]]:
+    """Every known fact about the router, as (label, value) rows. ``where``
+    is its location (locating.Locator.where)."""
     rows: List[Tuple[str, str]] = [("Address", address or "no reply")]
     rows.append(("Name", hostname or ("looking it up…" if hostname is None and address else "none")))
-    hint = places.from_name(hostname)
-    info = geo.get(address) if address else None
+    hint, info = where.place, where.info
     if hint is not None:
         rows.append(("Where, from its name", f"{hint}  (the \"{hint.clue}\" in its name)"))
     if info is not None:
-        where = info.place()
-        rows.append(("Where, from the IP database", where or "not known"))
+        rows.append(("Where, from the IP database", info.place() or "not known"))
+        if where.why:
+            rows.append(("", f"{where.why} The tables and the map leave it out."))
         if hint is not None and info.city and info.city.lower() not in hint.city.lower():
             rows.append(("", "The two disagree: for a carrier's router, the name is usually right."))
         rows.append(("Network", info.network() or "not known"))
@@ -90,7 +66,9 @@ class HopDetails(tk.Toplevel):
         grid = ttk.Frame(body)
         grid.pack(fill="x", pady=(S(8), 0))
         grid.columnconfigure(1, weight=1)
-        for i, (label, value) in enumerate(facts(address, hostname, app.geo)):
+        locator = app._locator(target)
+        for i, (label, value) in enumerate(facts(address, hostname,
+                                                 locator.where(address, hostname, ttl=ttl))):
             ttk.Label(grid, text=label, style="Muted.TLabel").grid(row=i, column=0, sticky="nw",
                                                                    padx=(0, S(12)), pady=S(2))
             ttk.Label(grid, text=value, wraplength=S(430), justify="left").grid(
@@ -111,7 +89,7 @@ class HopDetails(tk.Toplevel):
         total = sum(r.recv for r in seen) or 1
         for r in seen:
             app.geo.request(r.addr)
-            tree.insert("", "end", values=(r.addr, location(r.addr, None, app.geo),
+            tree.insert("", "end", values=(r.addr, locator.where(r.addr, r.name, r.rtt_min).text,
                                            f"{r.recv / total * 100:.0f}%", fmt_ms(r.avg),
                                            fmt_ms(r.rtt_max)))
         ttk.Button(body, text="Close", command=self.destroy).pack(anchor="e", pady=(S(12), 0))

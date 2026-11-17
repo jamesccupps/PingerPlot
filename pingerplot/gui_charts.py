@@ -11,7 +11,7 @@ import math
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional
 
-from . import geoip, worldmap
+from . import geoip, locating, worldmap
 from .model import HopView, Sample
 
 WARN_MS = 120.0   # a hop goes amber at/above this average latency
@@ -325,33 +325,33 @@ def map_view(points, w: float, h: float, margin: float = 0.0):
     return lambda lon, lat: (w / 2.0 + (lon * k - cx) * scale, h / 2.0 - (lat - cy) * scale)
 
 
-def draw_map(c, ink: Ink, views: List[HopView], geo, locate=None, past=None) -> str:
+def draw_map(c, ink: Ink, views: List[HopView], geo, locator=None, past=None) -> str:
     """Located public hops on the coastline backdrop, joined in path order,
     zoomed to the path (map_view). Asks ``geo`` for any it hasn't looked up.
-    ``locate(address, hostname, geo)`` gives ``(lat, lon, label, source)``
-    (a router's name first, then the IP database); ``past`` is earlier
-    routes, each a list of ``(lat, lon)``, drawn faded underneath. Returns
-    the header caption."""
+    ``locator`` (locating.Locator) places each router: its name first, then
+    the IP database unless the round trips rule that out. ``past`` is
+    earlier routes, each a list of ``(lat, lon)``, drawn faded underneath.
+    Returns the header caption."""
     S = ink.s
     c.delete("all")
     w, h = c.winfo_width(), c.winfo_height()
     if w < 80 or h < 80:
         return ""
 
+    if locator is None:
+        locator = locating.Locator(geo)
     public = 0
     found = []
-    by_name = 0
+    by_name = left_out = 0
     for v in views:
         if v.address and geoip._is_public(v.address):
             public += 1
             geo.request(v.address)
-        where = locate(v.address, v.hostname, geo) if locate is not None else None
-        if where is None and v.address:
-            g = geo.get(v.address)
-            where = (g.lat, g.lon, g.city or g.country, "ip") if g else None
-        if where is not None:
-            found.append((v, _Spot(where[0], where[1], where[2])))
-            by_name += where[3] == "name"
+        where = locator.view(v)
+        if where.point is not None:
+            found.append((v, _Spot(where.point[0], where.point[1], where.label)))
+            by_name += where.source == "name"
+        left_out += bool(where.why)
     past = [r for r in (past or []) if len(r) >= 2]
     proj = map_view([(g.lon, g.lat) for _v, g in found] +
                     [(lon, lat) for route in past for lat, lon in route], w, h, margin=S(24))
@@ -394,9 +394,11 @@ def draw_map(c, ink: Ink, views: List[HopView], geo, locate=None, past=None) -> 
     note = f"  ·  {geo.failures} lookup error(s), retrying" if geo.failures else ""
     paused = f"  ·  lookups paused: {geo.paused}" if getattr(geo, "paused", "") else ""
     earlier = f"  ·  {len(past)} earlier route(s) dashed" if past else ""
+    doubted = (f"  ·  {left_out} left off: ipwho.is's answer doesn't fit the round trip (see Details)"
+               if left_out else "")
     return (f"{len(located)} of {public} public hops located: {by_name} by the router's name, "
             f"{len(located) - by_name} by ipwho.is (private and LAN hops have no location)"
-            f"{earlier}{note}{paused}")
+            f"{doubted}{earlier}{note}{paused}")
 
 
 class _Spot:

@@ -12,9 +12,10 @@ import time
 from collections import deque
 from itertools import islice
 from dataclasses import dataclass
-from typing import Deque, List, Optional
+from typing import Deque, Dict, List, Optional
 
 DEFAULT_HISTORY = 600  # samples kept per hop (~25 min at a 2.5 s interval)
+MAX_ROUTERS_PER_HOP = 64   # routers whose best round trip a hop remembers (ECMP, reroutes)
 
 # What a saved time or round trip can plausibly be. JSON as Python reads it
 # allows NaN, Infinity and 1e300; a session file is someone else's, and a time
@@ -63,6 +64,10 @@ class Hop:
         # held this TTL before a reroute -- its rate-limited TTL-exceeded
         # replies read as the destination's packet loss.
         self.since_change = 0
+        # Each router's own best round trip. The window's best spans every
+        # router that held this TTL; a location check needs the router's own
+        # (locating.py), or one quick router vouches for a slow one.
+        self.best_by_addr: Dict[str, float] = {}
 
     def record(self, rtt: Optional[float], address: Optional[str], status: int) -> None:
         self.last_status = status
@@ -72,6 +77,12 @@ class Hop:
             self.address = address
             self.hostname = None
             self.since_change = 0
+        if address and rtt is not None:
+            known = self.best_by_addr.get(address)
+            if known is None or rtt < known:
+                if known is None and len(self.best_by_addr) >= MAX_ROUTERS_PER_HOP:
+                    del self.best_by_addr[next(iter(self.best_by_addr))]
+                self.best_by_addr[address] = rtt
         self.samples.append(Sample(time.time(), rtt))
         self.since_change += 1
 
@@ -278,6 +289,9 @@ def hop_from_session(hd, max_history: Optional[int] = None) -> Optional[Hop]:
         # A session records no per-sample responder, so all of it is
         # attributed to the address the file names.
         hop.since_change = len(hop.samples)
+        rtts = [s.rtt for s in hop.samples if s.rtt is not None]
+        if hop.address and rtts:
+            hop.best_by_addr[hop.address] = min(rtts)
         return hop
     except (KeyError, ValueError, TypeError, IndexError, OverflowError):
         return None
@@ -299,6 +313,7 @@ class HopView:
     best: Optional[float]
     worst: Optional[float]
     jitter: Optional[float]
+    best_here: Optional[float] = None   # the current router's own best (best spans them all)
 
     @classmethod
     def of(cls, hop: Hop) -> "HopView":
@@ -316,6 +331,7 @@ class HopView:
             best=best,
             worst=worst,
             jitter=jitter,
+            best_here=hop.best_by_addr.get(hop.address) if hop.address else None,
         )
 
 

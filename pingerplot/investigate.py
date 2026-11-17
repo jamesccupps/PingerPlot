@@ -143,6 +143,25 @@ def hops(reader: Reader, target: str, since: float, until: float) -> List[HopRow
     return [out[t] for t in sorted(out)]
 
 
+ANCHOR_WINDOW = 3600.0      # seconds, at the end of a range: see named_routers
+
+
+def named_routers(reader: Reader, since: float, until: float) -> List[tuple]:
+    """Every target's routers that had a name, as ``(name, best round
+    trip)``, over the last hour of the range: what locating.anchors checks
+    the IP database's answers against. An hour, because a week of every
+    target's minutes is millions of rows, and the anchors that matter are
+    the quick ones near this computer, seen in any hour."""
+    db = reader._conn()
+    if db is None:
+        return []
+    lo = int(max(since, until - ANCHOR_WINDOW) // 60)
+    return [tuple(r) for r in db.execute(
+        "SELECT max(a.name), min(m.rtt_min) FROM minutes m JOIN addrs a ON a.id = m.addr "
+        "WHERE m.minute BETWEEN ? AND ? AND m.rtt_min IS NOT NULL AND a.name IS NOT NULL "
+        "AND a.name != '' GROUP BY m.addr", (lo, int(until // 60)))]
+
+
 def routes(reader: Reader, target: str, since: float, until: float,
            now: Optional[float] = None) -> List[RouteRow]:
     """Each route the target was on within the range: how long, what share,

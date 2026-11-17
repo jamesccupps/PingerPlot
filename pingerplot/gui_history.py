@@ -26,7 +26,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from typing import Dict, List, Optional
 
-from . import gui_hopinfo, history, investigate
+from . import gui_hopinfo, history, investigate, locating
 from .gui_charts import fmt_ms, nice_max
 from .gui_widgets import Nav, fit_columns, side_scroll
 from .model import csv_safe
@@ -392,6 +392,9 @@ class HistoryPage(ttk.Frame):
                 data["dest"] = whole[0] if whole else None
                 data["series"] = investigate.series(reader, target, since, until, buckets=600, ttl=hop)
                 data["hops"] = investigate.hops(reader, target, since, until)
+                data["anchors"] = locating.anchors(
+                    investigate.named_routers(reader, since, until)
+                    + [(r.name, r.rtt_min) for h in data["hops"] for r in h.routers])
                 data["routes"] = investigate.routes(reader, target, since, until)
                 data["route_index"] = {r["id"]: i for i, r in enumerate(reader.routes(target))}
                 data["events"] = [dict(e) for e in reader.events(since, until, target=target)]
@@ -480,6 +483,9 @@ class HistoryPage(ttk.Frame):
             for hop in self.data["hops"]:
                 for r in hop.routers:
                     geo.request(r.addr)
+        where = locating.Locator(geo, self.data.get("anchors", ()), [
+            (hop.ttl, hop.routers[0].addr, hop.routers[0].name, hop.routers[0].rtt_min)
+            for hop in self.data["hops"] if len(hop.routers) == 1])
         for hop in self.data["hops"]:
             routers = hop.routers
             first = routers[0] if routers else None
@@ -487,7 +493,7 @@ class HistoryPage(ttk.Frame):
             one = len(routers) == 1
             parent = tree.insert("", "end", text=f"Hop {hop.ttl}", open=len(routers) > 1, values=(
                 label, (first.name or "") if one else "",
-                gui_hopinfo.location(first.addr, first.name, geo) if one else "",
+                where.where(first.addr, first.name, first.rtt_min, hop.ttl).text if one else "",
                 gui_hopinfo.network(first.addr, geo) if one else "",
                 f"{hop.recv:,}", f"{hop.loss_pct:.1f}%",
                 fmt_ms(first.avg) if len(routers) == 1 else "",
@@ -498,7 +504,7 @@ class HistoryPage(ttk.Frame):
                 total = sum(r.recv for r in routers) or 1
                 for r in routers:
                     tree.insert(parent, "end", text="", values=(
-                        r.addr, r.name or "", gui_hopinfo.location(r.addr, r.name, geo),
+                        r.addr, r.name or "", where.where(r.addr, r.name, r.rtt_min).text,
                         gui_hopinfo.network(r.addr, geo),
                         f"{r.recv / total * 100:.0f}%", "", fmt_ms(r.avg),
                         fmt_ms(r.rtt_min), fmt_ms(r.rtt_max), fmt_ms(r.jitter)))

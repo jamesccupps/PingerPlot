@@ -97,3 +97,29 @@ def test_a_range_before_anything_was_recorded_is_empty(reader):
 def test_describe_route():
     assert investigate.describe_route([[R1a, R1b], [], [DEST]], {DEST: "svc"}) == \
         f"{R1a} / {R1b}  >  *  >  svc"
+
+
+def test_named_routers_come_from_every_target_in_the_last_hour_of_the_range(tmp_path):
+    clock = Clock()
+    rec = Recorder(tmp_path, clock=clock).start()
+    a = rec.begin_run("a.example.com", "icmp", None, {})
+    b = rec.begin_run("b.example.com", "icmp", None, {})
+    rec.name(R1a, "ae1.cr1.bos1.example.net")
+    rec.name(R2, "ae2.cr1.nyc1.example.net")
+    rec.name(R3, "ae3.cr1.chi1.example.net")
+    for i in range(0, 3 * 3600, 30):
+        clock.t = T0 + i
+        rec.probe(a, clock.t, i, 1, R1a, 4.0 + (i % 60) / 30, 0)    # 4 and 5 ms
+        rec.probe(b, clock.t, i, 2, R2, 9.0, 0)
+        rec.probe(b, clock.t, i, 3, DEST, 12.0, 0)                    # no name: not an anchor
+        if i < 3600:
+            rec.probe(a, clock.t, i, 2, R3, 30.0, 0)                  # only in the first hour
+    rec.end_run(a)
+    rec.end_run(b)
+    rec.close()
+    r = Reader(tmp_path)
+    try:
+        got = sorted(investigate.named_routers(r, T0, T0 + 3 * 3600))
+    finally:
+        r.close()
+    assert got == [("ae1.cr1.bos1.example.net", 4.0), ("ae2.cr1.nyc1.example.net", 9.0)]

@@ -4,6 +4,7 @@ import json
 import time
 
 from pingerplot import gui_hopinfo, history
+from pingerplot.locating import Locator
 from pingerplot.geoip import GeoInfo, GeoResolver
 
 PUBLIC = "8.8.8.8"
@@ -22,14 +23,16 @@ DENVER = GeoInfo(39.7, -105.0, "Denver", "Colorado", "United States", "Example I
 
 def test_the_name_beats_the_ip_database_in_a_table():
     g = _geo(**{PUBLIC: DENVER})
-    assert gui_hopinfo.location(PUBLIC, CHICAGO_NAME, g) == "Chicago, US"
-    assert gui_hopinfo.location(PUBLIC, "dns.example.net", g) == "Denver, United States"
+    where = Locator(g)
+    assert where.where(PUBLIC, CHICAGO_NAME).text == "Chicago, US"
+    assert where.where(PUBLIC, "dns.example.net").text == "Denver, United States"
     assert gui_hopinfo.network(PUBLIC, g) == "AS64500 Example Transit"
-    assert gui_hopinfo.location("10.0.0.1", None, g) == "" and gui_hopinfo.network(None, g) == ""
+    assert where.where("10.0.0.1", None).text == "" and gui_hopinfo.network(None, g) == ""
 
 
 def test_details_show_both_witnesses_and_their_disagreement():
-    rows = dict(gui_hopinfo.facts(PUBLIC, CHICAGO_NAME, _geo(**{PUBLIC: DENVER})))
+    rows = dict(gui_hopinfo.facts(PUBLIC, CHICAGO_NAME,
+                                  Locator(_geo(**{PUBLIC: DENVER})).where(PUBLIC, CHICAGO_NAME)))
     assert rows["Where, from its name"].startswith("Chicago, US")
     assert "chcgil09" in rows["Where, from its name"]
     assert rows["Where, from the IP database"] == "Denver, Colorado, United States"
@@ -37,8 +40,18 @@ def test_details_show_both_witnesses_and_their_disagreement():
     assert rows["Network"] == "AS64500 Example Transit"
 
 
+def test_details_say_why_the_databases_answer_is_left_out():
+    from pingerplot.locating import Anchor
+    new_york = Anchor(40.71, -74.01, 9.0, "New York", "cr1.nyc1.example.net")
+    where = Locator(_geo(**{PUBLIC: DENVER}), [new_york]).where(PUBLIC, "dns.example.net", 10.0)
+    rows = gui_hopinfo.facts(PUBLIC, "dns.example.net", where)
+    assert ("Where, from the IP database", "Denver, Colorado, United States") in rows
+    (why,) = [v for k, v in rows if v.startswith("Not possible")]
+    assert why.endswith("The tables and the map leave it out.")
+
+
 def test_details_for_a_router_not_yet_looked_up():
-    rows = dict(gui_hopinfo.facts(PUBLIC, None, _geo()))
+    rows = dict(gui_hopinfo.facts(PUBLIC, None, Locator(_geo()).where(PUBLIC, None)))
     assert rows["Name"] == "looking it up…"
     assert "not looked up" in rows["Where, from the IP database"]
 
@@ -53,6 +66,9 @@ class _Mon:
 
     def hop_addresses(self):
         return list(self._addrs)
+
+    def routers(self):
+        return []
 
 
 def test_lookups_are_on_by_default_and_saved(app, tmp_path):

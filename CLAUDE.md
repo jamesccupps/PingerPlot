@@ -73,6 +73,10 @@ site-packages enabled; `py -3.12` matches the release build). Linux needs
   `print_status()`, `run_report()`/`format_report()`, `print_comparison()`, `shutdown_all()`.
 - `pingerplot/compare.py`: baseline diff (per TTL; a changed address is *rerouted*, never a latency delta).
 - `pingerplot/geoip.py`: the Map tab's ipwho.is lookups (opt-in, rate-limited, private addresses never sent).
+  `places.py` reads a router's city from its name; `locating.py` decides what's shown: the name first, then the
+  database unless round trips rule it out. Every location on screen comes from a `locating.Locator` (a test scans
+  for `geo.get` anywhere else). Anchors (routers placed by name) come from every live target: the check is only
+  valid for round trips measured from the same place at about the same time.
 - `pingerplot/settings.py`, `appicon.py` (the icon, drawn), `worldmap.py` (Natural Earth coastlines as data),
   `selftest.py`.
 - `launch.ps1` (+ `Setup.cmd`, `PingerPlot.vbs`): launch, elevate, shortcuts, the elevated logon task.

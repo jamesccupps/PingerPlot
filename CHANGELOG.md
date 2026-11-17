@@ -13,6 +13,16 @@ All notable changes to PingerPlot are recorded here. The format follows
   the whole CLLI code (`ae1-chcgilcpj91`: Chicago) and the metro codes YMQ
   (Montreal), YQB (Quebec City), YTO (Toronto), DSM (Des Moines) and CYS
   (Cheyenne) are now read.
+- **The IP database's impossible answers were shown as fact**: an anycast
+  1.1.1.1 answering in 3 ms "in Brisbane", a public resolver in San Jose and
+  a Microsoft front end in Redmond (their registered addresses), a carrier
+  router in Denver one hop after New York at the same round trip. A reply
+  can't come from farther away than light in fiber travels in half its round
+  trip, so an answer farther from a router placed by its name than the two
+  round trips allow is now left out of the hop table, the map, the CSV and
+  "where the trouble is", and Details says why. It's never replaced by a
+  guess. Each hop's own router's best round trip is used, not the best of
+  every router that has answered there.
 
 ## [1.5.2] — 2026-11-16
 
