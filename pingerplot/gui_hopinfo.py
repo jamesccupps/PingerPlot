@@ -40,8 +40,8 @@ def facts(address: Optional[str], hostname: Optional[str], where: Where) -> List
         if hint is not None and info.city and info.city.lower() not in hint.city.lower():
             rows.append(("", "The two disagree: for a carrier's router, the name is usually right."))
         rows.append(("Network", info.network() or "not known"))
-        if info.isp and info.isp != (info.org or ""):
-            rows.append(("Internet provider", info.isp))
+        if info.org and info.org != info.isp:
+            rows.append(("Block assigned to", info.org))
     elif address:
         rows.append(("Where, from the IP database",
                      "not looked up (a private address, or lookups are off or pending)"))

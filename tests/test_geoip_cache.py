@@ -31,7 +31,7 @@ def test_the_network_owner_comes_with_the_place(monkeypatch):
                          "connection": {"asn": 64500, "org": "Example Transit", "isp": "Example ISP"}})
     info = GeoResolver()._lookup(PUBLIC)
     assert info.asn == 64500 and info.org == "Example Transit"
-    assert info.network() == "AS64500 Example Transit"
+    assert info.network() == "AS64500 Example ISP", "who runs it, not whom the block is assigned to"
     assert info.place() == "Chicago, Illinois, United States"
 
 

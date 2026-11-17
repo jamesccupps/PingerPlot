@@ -61,11 +61,13 @@ class GeoInfo:
     country: str
     isp: str
     asn: Optional[int] = None    # the network's autonomous system number
-    org: str = ""                # who that network belongs to
+    org: str = ""                # who the address block is assigned to
 
     def network(self) -> str:
-        """"AS8075 Example Corp", or what's known of it."""
-        name = self.org or self.isp
+        """"AS8075 Example Corp", or what's known of it: the network that
+        runs the address (ipwho.is's isp), not whoever the block is assigned
+        to (its org), which for a carrier's router is often a customer."""
+        name = self.isp or self.org
         if self.asn:
             return f"AS{self.asn} {name}".strip()
         return name

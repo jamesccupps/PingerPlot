@@ -26,7 +26,7 @@ def test_the_name_beats_the_ip_database_in_a_table():
     where = Locator(g)
     assert where.where(PUBLIC, CHICAGO_NAME).text == "Chicago, US"
     assert where.where(PUBLIC, "dns.example.net").text == "Denver, United States"
-    assert gui_hopinfo.network(PUBLIC, g) == "AS64500 Example Transit"
+    assert gui_hopinfo.network(PUBLIC, g) == "AS64500 Example ISP"
     assert where.where("10.0.0.1", None).text == "" and gui_hopinfo.network(None, g) == ""
 
 
@@ -37,7 +37,8 @@ def test_details_show_both_witnesses_and_their_disagreement():
     assert "chcgil09" in rows["Where, from its name"]
     assert rows["Where, from the IP database"] == "Denver, Colorado, United States"
     assert "disagree" in rows[""]
-    assert rows["Network"] == "AS64500 Example Transit"
+    assert rows["Network"] == "AS64500 Example ISP"
+    assert rows["Block assigned to"] == "Example Transit"
 
 
 def test_details_say_why_the_databases_answer_is_left_out():

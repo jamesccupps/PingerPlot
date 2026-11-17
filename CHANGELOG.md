@@ -41,6 +41,10 @@ All notable changes to PingerPlot are recorded here. The format follows
   answers**: the loss came from the last router that did, which was only
   rate-limiting its replies. No loss is placed then, and the verdict says the
   destination doesn't answer.
+- **The Network column named the address block's customer, not the network**:
+  a carrier's routers read as the foundation or trading firm the carrier
+  had assigned that block to. It now shows the network that runs the
+  address; Details adds "Block assigned to" when that's someone else.
 
 ## [1.5.2] — 2026-11-16
 

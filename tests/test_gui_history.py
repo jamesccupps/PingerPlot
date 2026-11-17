@@ -217,4 +217,4 @@ def test_hops_show_each_routers_name_place_and_network(app):
     values = tree.item(tree.get_children()[0], "values")
     assert values[0] == R1 and values[1].startswith("be3036")
     assert values[2] == "Dallas, US", "the name's answer, not the database's"
-    assert values[3] == "AS64500 Example Transit"
+    assert values[3] == "AS64500 ISP"
