@@ -1657,7 +1657,11 @@ class App:
         tree = self.trouble_tree
         tree.delete(*tree.get_children())
         where = where or self._locator(views=views)
-        rows = trouble.rank(views, lambda v: where.view(v).text)
+        def place(v):
+            w = where.view(v)
+            return w.text, w.point
+
+        rows = trouble.rank(views, place)
         self.trouble_label.configure(
             text=trouble.verdict(rows, trouble.destination_silent(views))
             or "Where the trouble is shows once hops have answered "

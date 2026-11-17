@@ -73,6 +73,17 @@ def test_silent_and_unplaced_hops_still_count_for_their_neighbours():
     assert {r.place: r.delay_added for r in rows} == {"A": 5, "D": 2}
 
 
+def test_one_metro_named_two_ways_is_one_row():
+    # "New York" from a router's name, "New York City" from the database, and
+    # Newark across the river: one row. Washington, 42 km from Ashburn, isn't.
+    places = {1: ("New York, US", (40.71, -74.01)), 2: ("New York City, US", (40.71, -74.0)),
+              3: ("Newark, US", (40.74, -74.17)), 4: ("Ashburn, US", (39.04, -77.49)),
+              5: ("Washington, US", (38.91, -77.04))}
+    rows = trouble.rank([hop(t, None, 10 * t) for t in places], lambda h: places[h.ttl])
+    assert [(r.place, r.ttls) for r in sorted(rows, key=lambda r: r.ttls)] == [
+        ("New York, US", [1, 2, 3]), ("Ashburn, US", [4]), ("Washington, US", [5])]
+
+
 def test_nothing_to_say():
     assert trouble.rank([], lambda h: "x") == []
     assert trouble.verdict([]) == ""

@@ -48,7 +48,9 @@ All notable changes to PingerPlot are recorded here. The format follows
 - **One city under two labels**: a router placed by its name read "Boston,
   US" and one placed by the IP database "Boston, United States", so the
   table looked inconsistent and "where the trouble is" split one city's
-  delay and loss across two rows. Both now read "Boston, US".
+  delay and loss across two rows. Both now read "Boston, US". And one
+  metro named two ways ("New York" from a router's name, "New York City"
+  from the database, Newark across the river) is one row there.
 
 ## [1.5.2] — 2026-11-16
 
