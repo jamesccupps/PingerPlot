@@ -1,0 +1,9 @@
+# The tools .github/workflows/pypi.yml builds the PyPI package with. The build
+# runs without an isolated environment (python -m build --no-isolation), so
+# these, pinned by version and hash in requirements-pypi.txt, are exactly what
+# it uses. Dependabot (pip ecosystem, /packaging) proposes updates; to
+# regenerate by hand, from this folder:
+#   pip-compile --generate-hashes --allow-unsafe --no-emit-index-url --strip-extras -o requirements-pypi.txt requirements-pypi.in
+build
+setuptools
+wheel

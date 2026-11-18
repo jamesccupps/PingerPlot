@@ -734,8 +734,26 @@ def test_only_the_authenticode_job_can_sign_in_to_azure():
     for wf in WORKFLOWS:
         if wf.name != "release.yml":
             text = wf.read_text(encoding="utf-8")
-            assert "id-token: write" not in text or wf.name == "pages.yml", wf.name
+            assert "id-token: write" not in text or wf.name in ("pages.yml", "pypi.yml"), wf.name
+            assert "environment: release" not in text and "name: release" not in text, wf.name
             assert "azure/login" not in text, wf.name
+
+
+def test_the_pypi_token_stays_in_the_publish_job():
+    """pypi.yml's OIDC token is what PyPI's Trusted Publishing trusts, from the
+    `pypi` environment only (Azure trusts the release environment's, so it can't
+    sign in with this one). The job holding it runs no script and nothing but
+    the artifact download and the publish action: the build, which installs
+    and runs the build tools, happens in a job with no identity."""
+    import re
+    jobs = _jobs((REPO / ".github" / "workflows" / "pypi.yml").read_text(encoding="utf-8"))
+    assert set(jobs) == {"build", "publish"}
+    assert "id-token" not in jobs["build"] and "environment:" not in jobs["build"]
+    publish = jobs["publish"]
+    assert "id-token: write" in publish and "name: pypi" in publish
+    assert "run:" not in publish
+    uses = [u.split("@")[0] for u in re.findall(r"uses:\s*(\S+)", publish)]
+    assert uses == ["actions/download-artifact", "pypa/gh-action-pypi-publish"]
 
 
 def test_only_a_job_that_runs_no_third_party_code_can_write():

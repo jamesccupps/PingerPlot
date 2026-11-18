@@ -4,6 +4,15 @@ All notable changes to PingerPlot are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Releases go to PyPI as `pingerplot` (`pipx install pingerplot`), published by
+  `.github/workflows/pypi.yml` through Trusted Publishing. `pyproject.toml` now
+  gives the license as an SPDX expression (`MIT`), the form setuptools requires
+  from February 2027.
+
 ## [1.6.0] — 2026-11-17
 
 Where routers are, and where the trouble is, checked against real paths: the

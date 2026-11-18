@@ -4,8 +4,9 @@
 # and updates both the SHA and the comment together.
 #
 # The app itself is deliberately dependency-free. The pip entry covers only
-# the release job's build tooling, which is pinned by version and hash in
-# packaging/requirements-build.txt and would otherwise go stale silently too.
+# build tooling, pinned by version and hash, which would otherwise go stale
+# silently too: the release job's (packaging/requirements-build.txt) and the
+# PyPI package's (packaging/requirements-pypi.txt, from requirements-pypi.in).
 version: 2
 updates:
   - package-ecosystem: "github-actions"

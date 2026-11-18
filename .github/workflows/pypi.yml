@@ -1,0 +1,137 @@
+name: PyPI
+
+# Publishes the package to PyPI (https://pypi.org/project/pingerplot/) for a release
+# tag, so `pip install pingerplot` (or pipx) gets the same version as
+# the release's downloads.
+#
+# Runs on a tag push, and can be dispatched by hand with a release tag that
+# already exists (for a release that came out before this workflow did). A
+# -signtest tag publishes nothing. PyPI never takes the same version twice: a
+# bad upload is fixed with a new version, like a bad release file.
+#
+# PyPI trusts this workflow through Trusted Publishing: the project's settings
+# on pypi.org name this repository, this file and the `pypi` environment, and
+# the publish job signs in with GitHub's OIDC token. There is no PyPI password
+# or API token anywhere.
+#
+# Hardening, the same rules as the release workflow:
+#
+#   1. No ${{ }} interpolation inside a `run:` script. Values reach the shell
+#      through `env:`, where bash reads them as data.
+#   2. Actions are pinned by commit SHA, not by tag.
+#   3. The job that can publish runs nothing but the publish action (which
+#      checks the files' metadata, then uploads them with PyPI's attestations
+#      of where they were built). The build job, which installs and runs the
+#      build tools, is read-only and holds no identity.
+#   4. The build tools are pinned by version and hash
+#      (packaging/requirements-pypi.txt), and the build runs without an
+#      isolated environment, so those are exactly what it uses.
+#   5. The checkout steps don't leave the job token in .git/config.
+#
+# README.md's relative links (the screenshots, CHANGELOG.md) would be broken
+# on PyPI's page; packaging/pypi_readme.py makes them absolute, at the tag, in
+# the build's copy only.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to publish (e.g. v1.6.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: ${{ !contains(github.ref_name, '-signtest') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Work out which tag we are publishing
+        id: tag
+        env:
+          TAG_INPUT: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          TAG="${TAG_INPUT:-$REF_NAME}"
+          # The character check first: it keeps a newline (or anything else
+          # odd) out of $GITHUB_OUTPUT and out of every quoting question.
+          case "$TAG" in
+            *[!A-Za-z0-9.]*)
+              echo "::error::refusing to publish '$TAG': expected a release tag like v1.6.0"
+              exit 1 ;;
+          esac
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::refusing to publish '$TAG': expected a release tag like v1.6.0"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      # The workflow's own tools (this file's commit), apart from the release's
+      # source: a release tagged before these files existed can still be
+      # published by hand.
+      - name: Check out the build tools
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          path: tools
+          sparse-checkout: packaging
+          persist-credentials: false
+
+      - name: Check out the release
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: refs/tags/${{ steps.tag.outputs.tag }}
+          path: src
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: The tag is the version in pyproject.toml
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          version=$(python -c 'import tomllib; print(tomllib.load(open("src/pyproject.toml", "rb"))["project"]["version"])')
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::$TAG is not v$version, the version in pyproject.toml"
+            exit 1
+          fi
+
+      - name: Install the build tools (hash-pinned)
+        run: |
+          python -m pip install --require-hashes --only-binary=:all: -r tools/packaging/requirements-pypi.txt
+
+      - name: Make README.md's links absolute for PyPI's page
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: python tools/packaging/pypi_readme.py src/README.md "$REPO" "$TAG"
+
+      - name: Build the sdist and the wheel
+        run: python -m build --no-isolation --outdir dist src
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/pingerplot/
+    permissions:
+      id-token: write   # Trusted Publishing's sign-in to PyPI, and the attestations
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086  # v1.14.3

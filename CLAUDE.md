@@ -172,7 +172,8 @@ site-packages enabled; `py -3.12` matches the release build). Linux needs
   CI Linux jobs if the live POSIX tests would skip, so a green run means they ran against a real kernel.
 - `test_packaging.py` enforces the workflow rules: no `${{ }}` inside `run:`, actions pinned by SHA with a version
   comment, only the publish job can write, only the sign job reads the release key (and installs nothing), only the
-  authenticode job can sign in to Azure (and runs nothing from PyPI, never the program), the downloads are tested
+  authenticode job can sign in to Azure (and runs nothing from PyPI, never the program), only `pypi.yml`'s publish job
+  holds PyPI's token (and runs nothing but the publish action), the downloads are tested
   after they're signed, a `-signtest` tag publishes nothing, checkouts without credentials, the build lock hashed,
   the updater and the build agree on asset names.
 - GUI tests that need worker threads drain `app._ui_jobs` themselves (`tests/test_gui_updates.py`).
@@ -214,6 +215,10 @@ site-packages enabled; `py -3.12` matches the release build). Linux needs
 A tag `vX.Y.Z-signtest.N` (X.Y.Z = the version in the source) runs the first three and publishes nothing: for trying
 a signing change. Delete the tag afterwards (`git push origin :refs/tags/<tag>`). The signature check's results are
 annotations (`::notice title=Signature::`), readable without signing in through the check-runs API.
+`pypi.yml` publishes the package to PyPI as `pingerplot` for the same tag (not a `-signtest` one): Trusted Publishing
+from the `pypi` environment, no token stored, the build tools hash-pinned in `packaging/requirements-pypi.txt`. It
+refuses a tag that isn't the version in `pyproject.toml`. PyPI never takes the same version twice, so a bad upload is
+fixed with a new version. Dispatching it by hand with a tag publishes that release.
 Dependabot proposes newer action pins and lock entries monthly; check each lock hash against PyPI's published
 digests before taking it.
 
