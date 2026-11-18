@@ -99,10 +99,11 @@ or newer and Tk, which most distributions package separately:
 | openSUSE | `sudo zypper install python3-tk` |
 
 Then, with [pipx](https://pipx.pypa.io/) (`sudo apt install pipx` on Debian and Ubuntu, `sudo dnf install pipx` on
-Fedora, `sudo pacman -S python-pipx` on Arch), install it for your user and start it:
+Fedora, `sudo pacman -S python-pipx` on Arch), install it from [PyPI](https://pypi.org/project/pingerplot/) for your
+user and start it:
 
 ```bash
-pipx install git+https://github.com/jamesccupps/PingerPlot
+pipx install pingerplot
 pingerplot
 ```
 
