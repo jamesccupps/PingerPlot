@@ -147,7 +147,8 @@ CI starts the app on Ubuntu on every push: the window's self-test, a probe of lo
      but put hundreds of kilometers from it is doubted too. Such a router is left off, and Details says why. The target's other
      routes from the last day are dashed underneath. Below it, **where the trouble is**: each place on the path, the delay it adds
      and the loss that starts there and carries to the destination (loss that stops at a router is that router
-     ignoring pings, and isn't counted), with a one-line verdict.
+     ignoring pings, and isn't counted), with a one-line verdict. When other targets' loss starts at the same
+     router, the verdict says so: the trouble is that router or something before it, often your own side.
    - **Events**: route changes, alerts raised and cleared, warnings.
 3. **Pause**, **Stop** and **Edit settings** are at the top right. Editing a target's settings restarts it with
    them.

@@ -27,7 +27,7 @@ map draws it, the tests check it, a report can print it.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional, Sequence, Tuple, Union
+from typing import Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 from .locating import distance_km
 
@@ -102,6 +102,37 @@ def rank(hops: Sequence, locate: Callable[[object], Place]) -> List[PlaceRow]:
             row.loss_starts += 0.0 if silent else max(0.0, loss[h.ttl] - prev_loss)
         prev_delay, prev_loss = delay[h.ttl], loss[h.ttl]
     return sorted(rows.values(), key=lambda r: -r.score)
+
+
+@dataclass
+class Shared:
+    """A router where loss reaching the destination starts on several
+    targets' paths at once."""
+    ttl: int
+    address: str
+    targets: List[str]
+
+    def says(self, total: int) -> str:
+        return (f"The same router (hop {self.ttl}, {self.address}) is where loss starts for "
+                f"{len(self.targets)} of your {total} targets: it's that router or something "
+                f"before it, not the destinations.")
+
+
+def shared(paths: Dict[str, Sequence]) -> List[Shared]:
+    """Routers where loss that reaches the destination starts on two or more
+    of ``paths`` (target -> hops, as for rank), most targets first. When every
+    path loses packets from the same router at once, it's that router or
+    something before it (often your own side), not the destinations. Loss
+    only: several paths picking up delay at one router is usually distance
+    (an ocean), not a fault."""
+    found: Dict[str, Shared] = {}
+    for target, hops in paths.items():
+        for row in rank(hops, lambda h: h.address):
+            if row.loss_starts >= 1.0:
+                s = found.setdefault(row.place, Shared(row.ttls[0], row.place, []))
+                s.targets.append(target)
+    return sorted((s for s in found.values() if len(s.targets) >= 2),
+                  key=lambda s: (-len(s.targets), s.ttl))
 
 
 def _place(found: Place) -> Tuple[Optional[str], Optional[Tuple[float, float]]]:

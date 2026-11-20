@@ -24,7 +24,6 @@ routers are and whose, the map's "where the trouble is") are done; see the [CHAN
   PPPoE links.
 - **A metrics endpoint for headless mode** (Prometheus format, localhost only by default) for Grafana or Home
   Assistant.
-- **Shared hops across targets**: when every target degrades at the same hop at once, it's your side of the path.
 - **A multi-hop network-namespace lab in CI**, so traces and reroutes are tested on every push, not just loopback
   and the first hop.
 - **macOS** testing on real hardware (the backend is written for it but has never run on a Mac).

@@ -25,6 +25,12 @@ All notable changes to PingerPlot are recorded here. The format follows
   Chicago, US (hop 7, 12%)"), and the webhook payload has the places as data
   in a new `where` list. Routers are placed by name, so the headless runner
   says it too.
+- **Trouble several targets share.** When loss reaching the destination
+  starts at the same router on more than one target's path, the Map's
+  verdict says so ("The same router (hop 2, …) is where loss starts for 3 of
+  your 8 targets"): it's that router or something before it, often your own
+  side, not the destinations. Loss only; several paths gaining delay at one
+  router is usually an ocean.
 
 ### Changed
 

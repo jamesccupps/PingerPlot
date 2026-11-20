@@ -129,3 +129,38 @@ def test_the_window_checks_each_target_against_every_live_targets_routers(app):
         del app._monitors["other.example.com"]
         app.geo.cache.pop("203.0.113.53", None)
         app._anchors_at = -1e9
+
+
+class _Running:
+    running = True
+
+    def __init__(self, views):
+        self._views = views
+
+    def snapshot(self):
+        return self._views, "", None, ""
+
+    def routers(self):
+        return []
+
+    def hop_addresses(self):
+        return []
+
+
+def test_the_map_says_when_other_targets_lose_packets_at_the_same_router(app):
+    def path(dest):
+        return [V(ttl=1, address="192.168.1.1", hostname="gw.lan", loss_pct=0.0, avg=1.0),
+                V(ttl=2, address="198.51.100.2", hostname="ae1.cr1.bos1.example.net", loss_pct=8.0, avg=8.0),
+                V(ttl=3, address=dest, hostname="", loss_pct=8.0, avg=20.0)]
+    app._monitors["a.example.com"] = _Running(path("203.0.113.10"))
+    app._monitors["b.example.com"] = _Running(path("203.0.113.20"))
+    app._active, app._shared_at = "a.example.com", -1e9
+    try:
+        app._fill_trouble(path("203.0.113.10"))
+        text = app.trouble_label.cget("text")
+        assert text.startswith("Loss reaching the destination starts in Boston, US (hop 2, 8%).")
+        assert "The same router (hop 2, 198.51.100.2) is where loss starts for 2 of your 2 targets" in text
+    finally:
+        for n in ("a.example.com", "b.example.com"):
+            del app._monitors[n]
+        app._shared_at = -1e9

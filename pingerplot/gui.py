@@ -95,6 +95,7 @@ class App:
         self._geo_started = False
         self._geo_fed = 0.0
         self._anchors_at, self._anchors = -1e9, []    # see _locator
+        self._shared_at, self._shared = -1e9, ([], 0)  # see _shared_trouble
         # Earlier routes for the map, per target: (loaded at, [[(addr, name), ...], ...]).
         self._past_routes: Dict[str, tuple] = {}
         self._past_loading: set = set()
@@ -1664,8 +1665,13 @@ class App:
             return w.text, w.point
 
         rows = trouble.rank(views, place)
+        verdict = trouble.verdict(rows, trouble.destination_silent(views))
+        found, total = self._shared_trouble()
+        mine = next((s for s in found if self._active in s.targets), None)
+        if verdict and mine is not None:
+            verdict = f"{verdict} {mine.says(total)}"
         self.trouble_label.configure(
-            text=trouble.verdict(rows, trouble.destination_silent(views))
+            text=verdict
             or "Where the trouble is shows once hops have answered "
                                           "and been placed.")
         for r in rows[:8]:
@@ -1674,6 +1680,19 @@ class App:
                 r.place, f"hop{'s' if len(r.ttls) > 1 else ''} {hops}",
                 f"+{r.delay_added:.0f} ms" if r.delay_added >= 0.5 else "",
                 f"{r.loss_starts:.0f}%" if r.loss_starts >= 0.5 else ""))
+
+    SHARED_EVERY = 10.0       # seconds between comparing every target's path
+
+    def _shared_trouble(self):
+        """Routers where loss starts on several live targets' paths
+        (trouble.shared) and how many live targets there are; worked out at
+        most every SHARED_EVERY seconds, as it reads every target."""
+        now = time.monotonic()
+        if now - self._shared_at >= self.SHARED_EVERY:
+            live = {n: m for n, m in self._monitors.items() if n not in self._loaded and m.running}
+            self._shared = (trouble.shared({n: m.snapshot()[0] for n, m in live.items()}), len(live))
+            self._shared_at = now
+        return self._shared
 
     # --- earlier routes, for the map --------------------------------------------
     def _past_route_points(self, where: Optional[locating.Locator] = None) -> list:

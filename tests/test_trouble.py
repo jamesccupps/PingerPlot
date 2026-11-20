@@ -94,3 +94,35 @@ def test_nothing_to_say():
 def test_carried_loss():
     assert trouble.carried_loss([0, 50, 0, 10]) == [0, 0, 0, 10]
     assert trouble.carried_loss([5, 20, 12, 15]) == [5, 12, 12, 15]
+
+
+def _path(*hops):
+    """(ttl, address, avg, loss) tuples, as rank reads them."""
+    return [H(ttl=t, address=a, avg=avg, loss_pct=loss) for t, a, avg, loss in hops]
+
+
+def test_loss_starting_at_one_router_on_several_paths_is_shared():
+    gw, isp = "192.0.2.1", "198.51.100.2"
+    paths = {
+        "a.example.com": _path((1, gw, 1, 0), (2, isp, 5, 8), (3, "203.0.113.10", 20, 8)),
+        "b.example.com": _path((1, gw, 1, 0), (2, isp, 5, 9), (3, "203.0.113.20", 30, 9)),
+        "c.example.com": _path((1, gw, 1, 0), (2, isp, 5, 0), (3, "203.0.113.30", 12, 0)),
+    }
+    (s,) = trouble.shared(paths)
+    assert (s.ttl, s.address, s.targets) == (2, isp, ["a.example.com", "b.example.com"])
+    assert s.says(3) == ("The same router (hop 2, 198.51.100.2) is where loss starts for 2 of your 3 "
+                         "targets: it's that router or something before it, not the destinations.")
+
+
+def test_one_path_alone_or_rate_limiting_or_delay_isnt_shared():
+    isp = "198.51.100.2"
+    paths = {
+        # Loss only at the router (rate limiting): it doesn't reach the destination.
+        "a.example.com": _path((1, isp, 5, 40), (2, "203.0.113.10", 20, 0)),
+        # Real loss, but this path alone.
+        "b.example.com": _path((1, "198.51.100.9", 5, 10), (2, "203.0.113.20", 20, 10)),
+        # The same router adding delay on two paths: distance, not trouble.
+        "c.example.com": _path((1, isp, 70, 0), (2, "203.0.113.30", 71, 0)),
+        "d.example.com": _path((1, isp, 70, 0), (2, "203.0.113.40", 72, 0)),
+    }
+    assert trouble.shared(paths) == []
