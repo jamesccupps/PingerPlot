@@ -47,6 +47,12 @@ All notable changes to PingerPlot are recorded here. The format follows
   copies wrote the same settings. Linux and macOS now hold a lock in the
   settings folder, as Windows always has, and a second launch shows the
   first copy's window and quits.
+- **An update while the headless runner ran from PingerPlot's folder** (a
+  Task Scheduler task) couldn't replace its files, which Windows locks while
+  a program runs: the installer failed after the window had already quit,
+  and nothing was left running. The window now checks first and, if a
+  PingerPlot program is running from its folder, whatever account or
+  elevation it runs with, says to stop it and keeps running.
 - **Light corners on disabled buttons** (Pause, Stop and Edit settings with
   no target selected), and on any button hovered or pressed: the theme
   showed clam's grey behind the buttons' rounded corners in those states.

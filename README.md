@@ -493,7 +493,7 @@ session if you want the probes logged.
 | The window is gone | It's in the notification area: click the tray icon. Starting PingerPlot again also brings it back, on Linux too (one copy runs at a time). |
 | "Windows protected your PC" | **More info** should show the publisher, James Cupps, then **Run anyway**. |
 | "The probe log couldn't roll over" in Events | The CSV is open in another program, usually Excel. It keeps appending and tries again a minute later. |
-| The update didn't install | Details are in `update.log` in the settings folder. The previous version keeps running; the release page always has the full installer. |
+| The update didn't install | Details are in `update.log` in the settings folder. The previous version keeps running; the release page always has the full installer. If the headless runner runs from PingerPlot's folder (a Task Scheduler task), stop it first: Windows won't replace a program that's running, and PingerPlot says so rather than start an update that can't finish. |
 | "ICMP backend unavailable" on Linux | `sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"` (see [Platform](#platform)). |
 
 ## Uninstalling

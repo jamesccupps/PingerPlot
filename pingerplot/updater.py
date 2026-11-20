@@ -59,6 +59,7 @@ MANIFEST_NAME = "latest.json"
 INSTALLER_NAME = "PingerPlot-Setup.exe"
 PORTABLE_NAME = "PingerPlot-win64.zip"
 GUI_EXE = "PingerPlot.exe"
+HEADLESS_EXE = "pingerplot-headless.exe"
 DEFAULT_SOURCE = f"https://github.com/{REPO}/releases/latest/download/{MANIFEST_NAME}"
 RELEASES_URL = f"https://github.com/{REPO}/releases"
 LOG_NAME = "update.log"
@@ -87,7 +88,7 @@ class RollbackIncomplete(UpdateError):
 # build_windows.py): the only names a swap renames to <name>.old, and so the
 # only .old names cleanup may remove. A portable folder also holds the
 # user's own files.
-PROGRAM_FILES = (GUI_EXE, "pingerplot-headless.exe", "_internal", "portable.txt",
+PROGRAM_FILES = (GUI_EXE, HEADLESS_EXE, "_internal", "portable.txt",
                  "LICENSE", "THIRD-PARTY-NOTICES.md")
 SPARE_BYTES = 50 * 1024 * 1024
 
@@ -330,8 +331,41 @@ def stage(path: Path) -> Path:
     raise UpdateError(f"{path.name} has no {GUI_EXE}")
 
 
+def running_from(folder: Path) -> list:
+    """The PingerPlot programs in ``folder`` that are running, other than this
+    one (Windows; elsewhere nothing). Windows won't let a running program be
+    opened for writing, whoever runs it, so this sees a headless runner
+    started as administrator or by Task Scheduler as SYSTEM, which asking
+    each process for its path can't (an ordinary process may not ask an
+    elevated one). Nothing is written."""
+    if sys.platform != "win32":
+        return []
+    me = os.path.normcase(os.path.abspath(sys.executable))
+    busy = []
+    for name in (GUI_EXE, HEADLESS_EXE):
+        exe = Path(folder) / name
+        if not exe.is_file() or os.path.normcase(os.path.abspath(exe)) == me:
+            continue
+        try:
+            with open(exe, "r+b"):
+                pass
+        except PermissionError:
+            busy.append(name)
+        except OSError:
+            pass
+    return busy
+
+
 def apply(update: Update, path: Path) -> None:
     """Start installing ``path``. The caller must exit straight away after."""
+    # Windows won't let a program or DLL that's running be replaced: with the
+    # headless runner started from this folder (Task Scheduler), the silent
+    # installer failed after this copy had quit, and nothing restarted it.
+    busy = running_from(program_dir())
+    if busy:
+        raise UpdateError(f"{', '.join(busy)} is running from {program_dir()}, and Windows won't "
+                          "let it be replaced while it runs. Stop it (the headless runner: its "
+                          "Task Scheduler task, or Ctrl+C), then install again.")
     if update.kind == "installed":
         log.info("starting the %s installer", update.version)
         _spawn([path, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/relaunch=1"], cwd=path.parent)
