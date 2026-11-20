@@ -42,6 +42,11 @@ All notable changes to PingerPlot are recorded here. The format follows
 
 ### Fixed
 
+- **On Linux, a second launch started a second PingerPlot**: started at
+  sign-in and then from the menu, it probed every target twice and both
+  copies wrote the same settings. Linux and macOS now hold a lock in the
+  settings folder, as Windows always has, and a second launch shows the
+  first copy's window and quits.
 - **Light corners on disabled buttons** (Pause, Stop and Edit settings with
   no target selected), and on any button hovered or pressed: the theme
   showed clam's grey behind the buttons' rounded corners in those states.

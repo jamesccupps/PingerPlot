@@ -1808,7 +1808,11 @@ def main() -> None:
     # Restarted as administrator: the copy that started this one is closing,
     # so wait for its lock rather than show it and leave.
     instance = winplatform.wait_for_instance() if restarted else winplatform.SingleInstance()
-    if instance.already_running and instance.signal_existing():
+    if instance.already_running and (instance.signal_existing() or not winplatform.IS_WINDOWS):
+        # Off Windows the lock is only held by a live copy (an flock dies with
+        # its process), so one that can't be reached still mustn't be joined.
+        if not winplatform.IS_WINDOWS and sys.stderr is not None:
+            print("PingerPlot is already running.", file=sys.stderr)
         return
     updated, failed = "--updated" in argv, "--update-failed" in argv
     errorlog.install("gui")
@@ -1825,6 +1829,7 @@ def main() -> None:
     root.report_callback_exception = errorlog.tk_callback
     app = App(root, use_tray=True, start_minimized="--minimized" in argv,
               resume=updated or failed or restarted)
+    instance.serve(lambda: app._post(app._show_window))
     if updated:
         app._note(f"Updated to {__version__}", seconds=30)
     if failed:

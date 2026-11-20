@@ -7,14 +7,18 @@ Adapted from UniFi Stock Watcher, a sibling project with the same conventions.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
+import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 log = logging.getLogger("pingerplot.win")
 
@@ -262,19 +266,32 @@ def refresh_autostart() -> None:
 
 # --- Single instance ---------------------------------------------------------
 
+LOCK_NAME = "pingerplot.lock"
+
+
 class SingleInstance:
-    """A named mutex held for the life of the process.
+    """One copy at a time, held for the life of the process.
 
     ``already_running`` is True when another copy holds it; that copy can
-    then be asked to show its window (its tray window handles
-    WM_SHOW_WINDOW). Two copies would each restore and save the same target
-    list and settings file, and probe every target twice.
+    then be asked to show its window. Two copies would each restore and save
+    the same target list and settings file, and probe every target twice.
+
+    Windows: a named mutex, and the other copy's tray window handles
+    WM_SHOW_WINDOW. Elsewhere: an flock on a file in the settings folder
+    (gone with the process, so a crash can't leave it held) and a Unix socket,
+    in $XDG_RUNTIME_DIR when there is one, that the first copy listens on
+    (``serve``) for a second launch's "show" (review M11: autostart plus a
+    menu launch probed everything twice).
     """
 
-    def __init__(self, name: str = MUTEX_NAME) -> None:
+    def __init__(self, name: str = MUTEX_NAME, folder: Optional[Path] = None) -> None:
         self.handle = None
         self.already_running = False
+        self._lock_fd: Optional[int] = None
+        self._server: Optional[socket.socket] = None
+        self._folder = folder
         if not IS_WINDOWS:
+            self._take_lock()
             return
         k32 = ctypes.windll.kernel32
         k32.CreateMutexW.restype = wintypes.HANDLE
@@ -287,9 +304,92 @@ class SingleInstance:
         # (review M3).
         self.already_running = err == 183 or (not self.handle and err == 5)
 
+    # --- elsewhere: a lock file and a socket ----------------------------------
+    def _dir(self) -> Path:
+        if self._folder is not None:
+            return Path(self._folder)
+        from . import settings
+        return settings.config_dir()
+
+    def _socket_path(self) -> Path:
+        # Named for the settings folder: a copy run with its own
+        # (PINGERPLOT_DATA_DIR) is a separate PingerPlot, and mustn't replace
+        # this one's socket.
+        name = f"pingerplot-{hashlib.sha256(str(self._dir()).encode()).hexdigest()[:12]}.sock"
+        runtime = os.environ.get("XDG_RUNTIME_DIR")
+        if runtime and os.path.isdir(runtime):
+            return Path(runtime) / name
+        return self._dir() / name
+
+    def _take_lock(self) -> None:
+        try:
+            import fcntl
+        except ImportError:
+            return
+        try:
+            self._dir().mkdir(parents=True, exist_ok=True)
+            fd = os.open(self._dir() / LOCK_NAME, os.O_RDWR | os.O_CREAT, 0o600)
+        except OSError as exc:
+            log.warning("no single-instance lock (%s); a second copy could start", exc)
+            return
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            self.already_running = True
+            return
+        self._lock_fd = fd
+
+    def serve(self, on_show: Callable[[], None]) -> None:
+        """Listen for a second launch asking this copy to show its window,
+        and call ``on_show`` (from another thread) when one does. Windows
+        needs nothing: the tray window gets the message."""
+        if IS_WINDOWS or self._lock_fd is None or not hasattr(socket, "AF_UNIX"):
+            return
+        path = self._socket_path()
+        srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            if path.exists() or path.is_symlink():
+                path.unlink()               # a crashed copy's: this one holds the lock
+            srv.bind(str(path))
+            os.chmod(path, 0o600)
+            srv.listen(4)
+        except OSError as exc:
+            srv.close()
+            log.warning("a second launch can't show this window (%s)", exc)
+            return
+        self._server = srv
+        threading.Thread(target=self._accept, args=(srv, on_show), daemon=True,
+                         name="single-instance").start()
+
+    @staticmethod
+    def _accept(srv: socket.socket, on_show: Callable[[], None]) -> None:
+        while True:
+            try:
+                conn, _ = srv.accept()
+            except OSError:
+                return                      # closed by release()
+            with conn:
+                conn.settimeout(2.0)
+                try:
+                    asked = conn.recv(16).startswith(b"show")
+                except OSError:
+                    asked = False
+            if asked:
+                on_show()
+
     def signal_existing(self) -> bool:
         if not IS_WINDOWS:
-            return False
+            if not hasattr(socket, "AF_UNIX"):
+                return False
+            try:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                    s.settimeout(2.0)
+                    s.connect(str(self._socket_path()))
+                    s.sendall(b"show\n")
+                return True
+            except OSError:
+                return False
         u32 = ctypes.windll.user32
         u32.FindWindowW.restype = wintypes.HWND
         hwnd = u32.FindWindowW(TRAY_CLASS, None)
@@ -302,6 +402,16 @@ class SingleInstance:
         if self.handle:
             ctypes.windll.kernel32.CloseHandle(self.handle)
             self.handle = None
+        if self._server is not None:
+            self._server.close()
+            self._server = None
+            try:
+                self._socket_path().unlink()
+            except OSError:
+                pass
+        if self._lock_fd is not None:
+            os.close(self._lock_fd)         # and with it the flock
+            self._lock_fd = None
 
 
 def wait_for_instance(timeout: float = 20.0, poll: float = 0.25) -> "SingleInstance":

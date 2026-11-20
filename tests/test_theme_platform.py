@@ -132,9 +132,6 @@ def test_every_windows_call_is_a_no_op_elsewhere(monkeypatch):
     winplatform.enable_dpi_awareness()
     winplatform.set_app_id()
     winplatform.set_menu_theme(True)
-    s = winplatform.SingleInstance()
-    assert not s.already_running and not s.signal_existing()
-    s.release()
 
 
 def test_the_autostart_command_starts_minimized():

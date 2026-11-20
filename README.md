@@ -490,7 +490,7 @@ session if you want the probes logged.
 | "PingerPlot's window needs Tk" (Linux) | Install the package it names for your distribution (see [Linux](#linux)). |
 | A target shows "Cannot resolve" | DNS for that name failed. The window doesn't retry by itself: **⋯ → Start** on its card once the network is up. (The headless runner retries.) |
 | No notification for an alert | **Settings → Show a notification for alerts**, then Windows' *Settings → System → Notifications* for PingerPlot, and Do not disturb. |
-| The window is gone | It's in the notification area: click the tray icon. Starting PingerPlot again also brings it back. |
+| The window is gone | It's in the notification area: click the tray icon. Starting PingerPlot again also brings it back, on Linux too (one copy runs at a time). |
 | "Windows protected your PC" | **More info** should show the publisher, James Cupps, then **Run anyway**. |
 | "The probe log couldn't roll over" in Events | The CSV is open in another program, usually Excel. It keeps appending and tries again a minute later. |
 | The update didn't install | Details are in `update.log` in the settings folder. The previous version keeps running; the release page always has the full installer. |
