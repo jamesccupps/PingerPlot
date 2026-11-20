@@ -31,6 +31,14 @@ All notable changes to PingerPlot are recorded here. The format follows
   your 8 targets"): it's that router or something before it, often your own
   side, not the destinations. Loss only; several paths gaining delay at one
   router is usually an ocean.
+- **The keyboard reaches everything.** The tabs (Targets, History, Settings;
+  Hops, Timeline, Map, Events; and the History page's) take the focus, Return
+  or Space chooses one, and Left and Right move along. The target list works
+  like a list box: Tab reaches the selected target, Up and Down change it, and
+  the Menu key opens its menu. Ctrl+1 to Ctrl+4 open the four views and
+  Ctrl+, opens Settings. Buttons, checkboxes, switches and tabs show a focus
+  ring (the custom layouts had dropped it), and the update bar's buttons are
+  reachable.
 
 ### Changed
 

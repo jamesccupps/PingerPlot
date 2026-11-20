@@ -257,12 +257,12 @@ class Updates:
                 f"{UPDATE_BY.get(u.kind, 'git pull')}.")
         ttk.Label(bar, text=text, style="Card.Strong.TLabel").pack(side="left")
         ttk.Button(bar, text=self.app.look.icon("close"), style="Card.Icon.Subtle.TButton",
-                   command=self.dismiss, takefocus=False).pack(side="right")
-        ttk.Button(bar, text="What's new", style="Card.Subtle.TButton", command=self.whats_new,
-                   takefocus=False).pack(side="right", padx=(S(8), S(4)))
+                   command=self.dismiss).pack(side="right")
+        ttk.Button(bar, text="What's new", style="Card.Subtle.TButton",
+                   command=self.whats_new).pack(side="right", padx=(S(8), S(4)))
         if self.installable(u):
             ttk.Button(bar, text="Install and restart", style="Card.Accent.TButton",
-                       command=self.install, takefocus=False,
+                       command=self.install,
                        state="disabled" if self.busy else "normal").pack(side="right")
 
     def dismiss(self) -> None:

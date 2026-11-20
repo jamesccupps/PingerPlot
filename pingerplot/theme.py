@@ -396,10 +396,13 @@ class Theme:
                           width=S(12), height=2 * S(8))
         st.element_create("Pp.hthumb", "image", I("hthumb"), border=(S(8), S(6)), sticky="nsew")
 
+        # Every control the keyboard can reach keeps clam's focus element: the
+        # custom layouts once left it out, and Tab moved invisibly.
         def button(el):
             return [(el, {"sticky": "nsew", "children": [
-                ("Button.padding", {"sticky": "nsew", "children": [
-                    ("Button.label", {"sticky": "nsew"})]})]})]
+                ("Button.focus", {"sticky": "nsew", "children": [
+                    ("Button.padding", {"sticky": "nsew", "children": [
+                        ("Button.label", {"sticky": "nsew"})]})]})]})]
         st.layout("TButton", button("Pp.btn"))
         st.layout("Accent.TButton", button("Pp.acc"))
         st.layout("Subtle.TButton", button("Pp.subtle"))
@@ -428,7 +431,8 @@ class Theme:
         def check(el):
             return [("Checkbutton.padding", {"sticky": "nsew", "children": [
                 (el, {"side": "left", "sticky": ""}),
-                ("Checkbutton.label", {"side": "left", "sticky": "nsew"})]})]
+                ("Checkbutton.focus", {"side": "left", "sticky": "nsew", "children": [
+                    ("Checkbutton.label", {"sticky": "nsew"})]})]})]
         st.layout("TCheckbutton", check("Pp.check"))
         st.layout("Switch.TCheckbutton", check("Pp.switch"))
         st.layout("Vertical.TScrollbar", [("Vertical.Scrollbar.trough", {"sticky": "ns", "children": [
@@ -436,6 +440,10 @@ class Theme:
         st.layout("Horizontal.TScrollbar", [("Horizontal.Scrollbar.trough", {"sticky": "ew", "children": [
             ("Pp.hthumb", {"expand": "1", "sticky": "nswe"})]})])
         st.layout("Treeview", [("Treeview.treearea", {"sticky": "nsew"})])
+        for nav in ("Nav.TLabel", "NavActive.TLabel"):       # the tabs (gui_widgets.Nav)
+            st.layout(nav, [("Label.focus", {"sticky": "nsew", "children": [
+                ("Label.padding", {"sticky": "nsew", "children": [
+                    ("Label.label", {"sticky": "nsew"})]})]})])
         self._elements_made = True
 
     def _configure_styles(self):
@@ -450,6 +458,7 @@ class Theme:
         st.configure(".", background=c["bg"], foreground=c["text"], font=body,
                      bordercolor=c["divider"], darkcolor=c["bg"], lightcolor=c["bg"],
                      troughcolor=c["bg"], focuscolor=c["accent"],
+                     focusthickness=max(1, S(1)), focussolid=1,
                      selectbackground=c["accent"], selectforeground=c["on_accent"],
                      insertcolor=c["text"], fieldbackground=c["field"],
                      insertwidth=max(1, S(1)))

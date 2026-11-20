@@ -90,7 +90,9 @@ class ScrollFrame(ttk.Frame):
 
 class Nav(ttk.Frame):
     """Text tabs with an accent underline under the current one: the house
-    navigation (UniFi Stock Watcher, Slate)."""
+    navigation (UniFi Stock Watcher, Slate). Each tab takes the keyboard's
+    focus (Tab), Return or Space chooses it, and Left and Right move to the
+    next tab and choose it."""
 
     def __init__(self, parent, look, items: Sequence[Tuple[str, str]],
                  on_select: Callable[[str], None]) -> None:
@@ -104,12 +106,22 @@ class Nav(ttk.Frame):
         for i, (key, text) in enumerate(items):
             cell = ttk.Frame(self)
             cell.grid(row=0, column=i, padx=(0 if i == 0 else S(20), 0), sticky="s")
-            lab = ttk.Label(cell, text=text, style="Nav.TLabel", cursor="hand2")
+            lab = ttk.Label(cell, text=text, style="Nav.TLabel", cursor="hand2", takefocus=True)
             lab.pack(side="top")
             bar = ttk.Frame(cell, height=S(3), style="TFrame")
             bar.pack(side="top", fill="x")
             lab.bind("<Button-1>", lambda _e, k=key: self.select(k, notify=True))
+            for ev in ("<Return>", "<KP_Enter>", "<space>"):
+                lab.bind(ev, lambda _e, k=key: self.select(k, notify=True))
+            lab.bind("<Left>", lambda _e, k=key: self._step(k, -1))
+            lab.bind("<Right>", lambda _e, k=key: self._step(k, 1))
             self._labels[key], self._bars[key] = lab, bar
+
+    def _step(self, key: str, delta: int) -> None:
+        keys = list(self._labels)
+        nxt = keys[(keys.index(key) + delta) % len(keys)]
+        self._labels[nxt].focus_set()
+        self.select(nxt, notify=True)
 
     def select(self, key: str, notify: bool = False) -> None:
         self.current = key
@@ -124,13 +136,16 @@ class Nav(ttk.Frame):
 class TargetCard(ttk.Frame):
     """One monitored target in the list: a status dot, its name and state,
     and the destination's numbers. Click selects; right-click or the ⋯
-    button opens its menu."""
+    button opens its menu. From the keyboard the list works like a list box:
+    Tab reaches the selected card, Up and Down select the one above or below
+    (``on_step``), and the Menu key or Shift+F10 opens its menu."""
 
     DOTS = {"ok": "green", "alert": "red", "warn": "amber", "idle": "text3", "paused": "text3"}
 
     def __init__(self, parent, look, name: str, on_select: Callable[[str], None],
-                 on_menu: Callable[[str, int, int], None]) -> None:
-        super().__init__(parent, style="Tile.TFrame", padding=(look.S(12), look.S(8)))
+                 on_menu: Callable[[str, int, int], None],
+                 on_step: Optional[Callable[[str, int], None]] = None) -> None:
+        super().__init__(parent, style="Tile.TFrame", padding=(look.S(12), look.S(8)), takefocus=False)
         self.look, self.name = look, name
         S = look.S
         self.columnconfigure(1, weight=1)
@@ -147,6 +162,11 @@ class TargetCard(ttk.Frame):
         for w in (self, self.dot, self.title, self.stats):
             w.bind("<Button-1>", lambda _e: on_select(self.name))
             w.bind("<Button-3>", lambda e: on_menu(self.name, e.x_root, e.y_root))
+        if on_step is not None:
+            self.bind("<Up>", lambda _e: on_step(self.name, -1))
+            self.bind("<Down>", lambda _e: on_step(self.name, 1))
+        for ev in ("<Shift-F10>", "<App>"):
+            self.bind(ev, lambda _e: self._menu_from_button())
         self._state = None
 
     def _menu_from_button(self) -> None:
@@ -160,7 +180,8 @@ class TargetCard(ttk.Frame):
         self._state = key
         style = "Alert.Tile.TFrame" if state == "alert" else (
             "Selected.Tile.TFrame" if selected else "Tile.TFrame")
-        self.configure(style=style)
+        # Only the selected card is in the Tab order (Up and Down move on).
+        self.configure(style=style, takefocus=bool(selected))
         self.dot.configure(foreground=self.look.c[self.DOTS.get(state, "text3")])
         self.title.configure(text=title)
         self.stats.configure(text=stats)

@@ -155,6 +155,9 @@ CI starts the app on Ubuntu on every push: the window's self-test, a probe of lo
 
 - **⋯** on a card, or a right-click, has *Edit settings…*, *Pause*/*Resume*, *Stop*/*Start* and *Remove*.
   Right-click a hop for its details, or to copy its address, hostname or row. Ctrl+N goes back to the box.
+- **From the keyboard**: Tab moves through everything, with the focus outlined; Return or Space chooses a tab, and
+  Left and Right move between tabs. In the target list, Up and Down change the target and the Menu key (or
+  Shift+F10) opens its menu. Ctrl+1 to Ctrl+4 open Hops, Timeline, Map and Events, and Ctrl+, opens Settings.
 - **Settings** holds the defaults for new targets (probing, alerts, logging and webhooks) and the app's own
   options: theme, resuming your targets at start, Start with Windows, the notification area, notifications and
   updates.

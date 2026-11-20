@@ -349,6 +349,9 @@ class App:
         self._build_target_list(left)
         self._build_detail(right)
         self.root.bind_all("<Control-n>", lambda _e: self._focus_add())
+        for i, view in enumerate(("hops", "timeline", "map", "events"), 1):
+            self.root.bind_all(f"<Control-Key-{i}>", lambda _e, v=view: self._shortcut_view(v))
+        self.root.bind_all("<Control-comma>", lambda _e: self.nav.select("settings", notify=True))
 
     def _show_page(self, key: str, target: Optional[str] = None) -> None:
         # The Settings and History pages are built on first use: both are long.
@@ -898,6 +901,23 @@ class App:
     def _select_card(self, name: str) -> None:
         if name != self._active:
             self._activate(name)
+
+    def _step_card(self, name: str, delta: int) -> None:
+        """Up or Down in the target list: select the card above or below and
+        keep the keyboard on it."""
+        names = list(self._cards)
+        if name not in names:
+            return
+        nxt = names[max(0, min(len(names) - 1, names.index(name) + delta))]
+        self._select_card(nxt)
+        self._update_cards()
+        self._cards[nxt].focus_set()
+
+    def _shortcut_view(self, key: str) -> None:
+        """Ctrl+1-4: a target's Hops, Timeline, Map or Events view."""
+        if self.nav.current != "targets":
+            self.nav.select("targets", notify=True)
+        self.detail_nav.select(key, notify=True)
 
     def _on_user_select(self, _event: object) -> None:
         sel = self.tree.selection()
@@ -1468,7 +1488,7 @@ class App:
             card = self._cards.get(name)
             if card is None:
                 card = TargetCard(self.cards_scroll.inner, self.look, name,
-                                  self._select_card, self._target_menu)
+                                  self._select_card, self._target_menu, self._step_card)
                 card.pack(side="top", fill="x", pady=(0, S(8)))
                 self._cards[name] = card
             state = self._state_of(name, mon)
