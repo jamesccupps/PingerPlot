@@ -65,12 +65,13 @@ def quoted_probe(proto: int, src_port: int, dst_port: int,
 
 def router_reply(router_ip: str, itype: int, proto: int, src_port: int,
                  dst_port: int, dst_ip: str = DEST, outer_ihl: int = 5,
-                 inner_ihl: int = 5) -> bytes:
-    """A complete ICMP error as it lands on the capture socket."""
+                 inner_ihl: int = 5, to: str = LOCAL) -> bytes:
+    """A complete ICMP error as it lands on the capture socket, addressed
+    ``to`` this computer unless another host's."""
     body = icmp_error(itype, quoted_probe(proto, src_port, dst_port,
                                           dst_ip, ihl_words=inner_ihl))
     options = b"\x01" * ((outer_ihl - 5) * 4)
-    return ipv4(router_ip, LOCAL, PROTO_ICMP, options + body, outer_ihl)
+    return ipv4(router_ip, to, PROTO_ICMP, options + body, outer_ihl)
 
 
 class MockCapture:

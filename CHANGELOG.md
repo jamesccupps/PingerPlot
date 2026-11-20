@@ -21,6 +21,17 @@ All notable changes to PingerPlot are recorded here. The format follows
   every web address to its host (a webhook's secret is its path), and, run as
   administrator, won't write through a link.
 
+### Changed
+
+- **Full TCP/UDP traceroute no longer puts the network card in promiscuous
+  mode.** Its capture socket used the full receive-all mode, which switches
+  the card in and out of promiscuous mode every round, about 30 times a
+  trace, something security software can flag. It now uses the IP-level
+  mode, which sees only what's addressed to this computer, and an ICMP error
+  counts only if it was addressed to the address the probes leave from. A
+  Windows that refuses the IP-level mode gets the old one, and the error log
+  says so.
+
 ## [1.6.0] — 2026-11-17
 
 Where routers are, and where the trouble is, checked against real paths: the

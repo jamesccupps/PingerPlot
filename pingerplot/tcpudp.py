@@ -12,7 +12,11 @@ they send back. On Windows those errors are consumed by the network stack and
 are *not* delivered to a plain raw ICMP socket, so we open a raw capture socket
 with ``SIO_RCVALL`` (receive-all) and correlate each ICMP error to our probe by
 the source/destination ports echoed inside it. ``SIO_RCVALL`` requires
-Administrator rights.
+Administrator rights. It's opened in the IP-level mode, which sees the packets
+addressed to this computer and leaves the network card out of promiscuous
+mode (the full mode put it in and out of promiscuous mode every round, which
+security software can flag); an error is accepted only if it was addressed to
+the address the probes leave from.
 
 Reaching the destination is detected:
   * TCP  -> at the TCP layer: connect completes (SYN-ACK, port open) or is
@@ -27,6 +31,7 @@ from __future__ import annotations
 
 import ctypes
 import errno
+import logging
 import select
 import socket
 import sys
@@ -137,6 +142,14 @@ def _bind_source(sock: socket.socket, local_ip: str, strict: bool) -> bool:
     return True
 
 
+log = logging.getLogger("pingerplot.tcpudp")
+
+# Microsoft's RCVALL_VALUE: 1 (RCVALL_ON) is every frame on the segment, the
+# card in promiscuous mode; 3 is IP-level, only what the stack would accept.
+# Python's socket module names the first and not the second.
+RCVALL_IPLEVEL = getattr(socket, "RCVALL_IPLEVEL", 3)
+
+
 def _open_capture(local_ip: str) -> socket.socket:
     """Raw socket in receive-all mode so we see ICMP errors the stack would
     otherwise swallow. Raises OSError without Administrator rights, and
@@ -152,8 +165,18 @@ def _open_capture(local_ip: str) -> socket.socket:
         # which has had an ICMP backend since 1.3.0.
         raise OSError("raw ICMP capture (SIO_RCVALL) is available only on Windows")
     s = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_IP)
-    s.bind((local_ip, 0))
-    s.ioctl(socket.SIO_RCVALL, socket.RCVALL_ON)  # type: ignore[attr-defined]
+    try:
+        s.bind((local_ip, 0))
+        try:
+            s.ioctl(socket.SIO_RCVALL, RCVALL_IPLEVEL)  # type: ignore[attr-defined]
+        except OSError as exc:
+            # A stack without the IP-level mode: the full one still works,
+            # and the address check in _for_us keeps others' errors out.
+            log.warning("IP-level capture refused (%s); using the full receive-all mode", exc)
+            s.ioctl(socket.SIO_RCVALL, socket.RCVALL_ON)  # type: ignore[attr-defined]
+    except BaseException:
+        s.close()
+        raise
     s.setblocking(False)
     return s
 
@@ -254,7 +277,7 @@ def probe(
                     data, _addr = cap.recvfrom(2048)  # type: ignore[union-attr]
                 except OSError:
                     data = None
-                kind = _match(data, src_port, port, dest_ip, mode) if data else None
+                kind = _match(data, src_port, port, dest_ip, mode, local_ip) if data else None
                 if kind is not None:
                     responder = socket.inet_ntoa(data[12:16])  # source of the ICMP error
                     rtt = (time.perf_counter() - start) * 1000.0
@@ -400,7 +423,7 @@ def probe_path(
                         data, _ = cap.recvfrom(2048)
                     except (BlockingIOError, OSError):
                         break
-                    parsed = _parse(data)
+                    parsed = _parse(data) if _for_us(data, local_ip) else None
                     if parsed is None:
                         continue
                     kind, proto, sp, dp, odst = parsed
@@ -467,9 +490,24 @@ def _parse(packet: bytes):
             int.from_bytes(trans[2:4], "big"), socket.inet_ntoa(orig[16:20]))
 
 
-def _match(packet: bytes, src_port: int, dst_port: int, dest_ip: str, mode: str) -> Optional[str]:
-    """If ``packet`` is the ICMP error for *our* single probe (matching ports,
-    protocol, and the original destination IP), return "ttl"/"dest"; else None."""
+def _for_us(packet: bytes, local_ip: Optional[str]) -> bool:
+    """Whether ``packet`` was addressed to ``local_ip``, the address the probes
+    leave from (not known: any)."""
+    if not local_ip or local_ip == "0.0.0.0":
+        return True
+    try:
+        return len(packet) >= 20 and packet[16:20] == socket.inet_aton(local_ip)
+    except OSError:
+        return True
+
+
+def _match(packet: bytes, src_port: int, dst_port: int, dest_ip: str, mode: str,
+           local_ip: Optional[str] = None) -> Optional[str]:
+    """If ``packet`` is the ICMP error for *our* single probe (addressed to
+    ``local_ip``, matching ports, protocol, and the original destination IP),
+    return "ttl"/"dest"; else None."""
+    if not _for_us(packet, local_ip):
+        return None
     parsed = _parse(packet)
     if parsed is None:
         return None
