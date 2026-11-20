@@ -20,6 +20,11 @@ All notable changes to PingerPlot are recorded here. The format follows
   started, resumed its targets and quit, and why. It stays under 512 KB, cuts
   every web address to its host (a webhook's secret is its path), and, run as
   administrator, won't write through a link.
+- **Alerts say where the trouble is.** An alert's Events entry, and the
+  webhook, carry the Map's verdict ("Loss reaching the destination starts in
+  Chicago, US (hop 7, 12%)"), and the webhook payload has the places as data
+  in a new `where` list. Routers are placed by name, so the headless runner
+  says it too.
 
 ### Changed
 

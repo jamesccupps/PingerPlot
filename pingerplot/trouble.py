@@ -32,6 +32,7 @@ from typing import Callable, List, Optional, Sequence, Tuple, Union
 from .locating import distance_km
 
 MERGE_KM = 25.0
+NOTHING = "Nothing on the path stands out."
 
 
 @dataclass
@@ -125,5 +126,5 @@ def verdict(rows: Sequence[PlaceRow], silent: bool = False) -> str:
     if slow.delay_added >= 10.0:
         parts.append(f"the most delay is added in {slow.place} (+{slow.delay_added:.0f} ms)")
     if not parts:
-        return "Nothing on the path stands out."
+        return NOTHING
     return parts[0][0].upper() + parts[0][1:] + ("; " + parts[1] if len(parts) > 1 else "") + "."

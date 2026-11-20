@@ -14,8 +14,6 @@ routers are and whose, the map's "where the trouble is") are done; see the [CHAN
 
 ## Later, or if asked
 
-- **"Where is the problem?" in alerts and webhooks**: the Map's verdict (where loss reaching the destination starts,
-  where the delay is added) in the alert text and the webhook payload too.
 - **History in the headless runner's reports**: the History page's routes and per-place verdict from the command
   line, for a scheduled check.
 - **Webhook formats**: ntfy (title, priority, tags), Slack/Teams, or the current generic JSON; a *Send test* button;

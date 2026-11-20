@@ -181,7 +181,9 @@ CI starts the app on Ubuntu on every push: the window's self-test, a probe of lo
 Y ms, MOS at or below Z, over the last N probes. The window is what makes it "sustained": a single spike won't trip
 a 20-probe window. `0` turns a check off. An alert raises when it crosses the threshold and clears by itself when it
 recovers; both go into Events, the banner, a notification (**Settings → Show a notification for alerts**), the
-optional sound and the webhook.
+optional sound and the webhook. An alert's Events entry and webhook also say where on the path the trouble is, as
+the Map does ("Loss reaching the destination starts in Chicago, US (hop 7, 12%)"), with each router placed by its
+name; one whose name names no city stands for itself.
 
 Alerts judge the destination only, the one hop whose numbers aren't muddied by routers deprioritizing ICMP, and
 only once it has answered, so a target that simply blocks ICMP never false-alarms. The window counts only probes
@@ -190,7 +192,8 @@ held that TTL in the meantime, and its rate-limited "TTL exceeded" replies aren'
 table still shows per-TTL statistics across responders, as `mtr` does.
 
 **Webhook** (**Settings → Logging and webhooks**): an `https://` or `http://` address gets a JSON POST when an alert
-raises or clears. A delivery that fails is a warning in Events naming only the host, never the full address
+raises or clears: `app`, `event` (`alert` or `clear`), `target`, `target_ip`, `text` and `time`, and for an alert
+`where`, the places on the path worst first, each `{place, hops, delay_added_ms, loss_starts_pct}`. A delivery that fails is a warning in Events naming only the host, never the full address
 (Slack, Teams and ntfy put the secret in the path).
 
 ## Probe modes

@@ -28,9 +28,9 @@ def lock_watching_monitor(monkeypatch):
     held = []
     real = m._log_event
 
-    def _spy(kind, text):
+    def _spy(kind, text, **kw):
         held.append((kind, m._lock._is_owned()))
-        return real(kind, text)
+        return real(kind, text, **kw)
 
     monkeypatch.setattr(m, "_log_event", _spy)
     m._held = held

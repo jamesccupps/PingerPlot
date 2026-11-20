@@ -45,7 +45,7 @@ try:
 except ImportError:  # pragma: no cover - non-Windows
     winsound = None  # type: ignore[assignment]
 
-from . import __version__, history, icmp, tcpudp
+from . import __version__, history, icmp, places, tcpudp, trouble
 from .routes import RouteTracker
 from .model import (DEFAULT_HISTORY, Event, Hop, HopView, Sample, hop_from_session, mos,
                     host_name, mos_label, opt_str, plausible_time)
@@ -765,7 +765,9 @@ class Monitor:
         self.status = text
         self._notify()
 
-    def _log_event(self, kind: str, text: str) -> None:
+    def _log_event(self, kind: str, text: str, where: Optional[list] = None) -> None:
+        """``where``: for an alert, the path's places (trouble.PlaceRow), for
+        the webhook."""
         with self._lock:
             ev = Event(self._event_seq, time.time(), kind, text)
             self._event_seq += 1
@@ -775,7 +777,7 @@ class Monitor:
         if kind == "alert":
             self._beep()
         if kind in ("alert", "clear"):
-            self._fire_webhook(kind, text)
+            self._fire_webhook(kind, text, where)
 
     def _beep(self) -> None:
         if self.alert_sound and winsound is not None:
@@ -784,7 +786,7 @@ class Monitor:
             except Exception:
                 pass
 
-    def _fire_webhook(self, kind: str, text: str) -> None:
+    def _fire_webhook(self, kind: str, text: str, where: Optional[list] = None) -> None:
         """Notify a configured webhook (off the worker thread) when a
         destination alert raises or clears."""
         url = self.webhook_url
@@ -798,6 +800,10 @@ class Monitor:
             "text": text,
             "time": time.time(),
         }
+        if where is not None:
+            payload["where"] = [{"place": r.place, "hops": list(r.ttls),
+                                 "delay_added_ms": round(r.delay_added, 1),
+                                 "loss_starts_pct": round(r.loss_starts, 1)} for r in where[:8]]
         threading.Thread(target=self._deliver_webhook, args=(url, payload),
                          name="webhook", daemon=True).start()
 
@@ -1345,7 +1351,24 @@ class Monitor:
         if cleared is not None:
             self._log_event("clear", f"Cleared: {cleared}")
         elif fire:
-            self._log_event("alert", f"ALERT: {text}")
+            verdict, rows = self._where(key[0])
+            self._log_event("alert", f"ALERT: {text}" + (f". {verdict}" if verdict else ""), where=rows)
+
+    def _where(self, route_len: int):
+        """Where on the path the trouble is, for an alert: the Map's verdict
+        (trouble.py) and its rows. Places come from routers' names alone, as
+        the IP database is the window's and the headless runner has none; a
+        router whose name names no city stands for itself."""
+        with self._lock:
+            views = [HopView.of(h) for h in self._hops[:route_len]]
+
+        def label(v):
+            place = places.from_name(v.hostname)
+            return str(place) if place is not None else (v.hostname or v.address)
+
+        rows = trouble.rank(views, label)
+        verdict = trouble.verdict(rows, trouble.destination_silent(views))
+        return ("" if verdict == trouble.NOTHING else verdict), rows
 
     def _clear_all_alerts(self) -> None:
         self._retire_alerts(keep_ttl=None)
