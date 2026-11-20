@@ -165,8 +165,13 @@ class TargetCard(ttk.Frame):
         if on_step is not None:
             self.bind("<Up>", lambda _e: on_step(self.name, -1))
             self.bind("<Down>", lambda _e: on_step(self.name, 1))
-        for ev in ("<Shift-F10>", "<App>"):
-            self.bind(ev, lambda _e: self._menu_from_button())
+        # The Menu key is <App> on Windows and <Menu> on X11; Tk rejects a
+        # keysym its platform doesn't have.
+        for ev in ("<Shift-F10>", "<App>", "<Menu>"):
+            try:
+                self.bind(ev, lambda _e: self._menu_from_button())
+            except tk.TclError:
+                pass
         self._state = None
 
     def _menu_from_button(self) -> None:
