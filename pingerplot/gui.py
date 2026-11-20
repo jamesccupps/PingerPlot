@@ -240,7 +240,7 @@ class App:
         """The 'signal ripples' mark in the title bar, taskbar and Alt-Tab, kept
         on self so Tk doesn't garbage-collect it."""
         try:
-            self._app_icon = tk.PhotoImage(data=appicon.png_base64(64))
+            self._app_icon = tk.PhotoImage(master=self.root, data=appicon.png_base64(64))
             self.root.iconphoto(True, self._app_icon)
         except tk.TclError:
             pass
@@ -302,7 +302,7 @@ class App:
 
     # --- layout -----------------------------------------------------------------
     def _header_icon_image(self) -> tk.PhotoImage:
-        self._hdr_img = tk.PhotoImage(data=appicon.png_base64(self.s(30)))
+        self._hdr_img = tk.PhotoImage(master=self.root, data=appicon.png_base64(self.s(30)))
         return self._hdr_img
 
     def _build_header(self) -> None:
