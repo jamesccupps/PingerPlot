@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import logging
 import os
 import queue
 import sqlite3
@@ -263,6 +264,7 @@ class Recorder:
         return done.wait(timeout)
 
     def _report(self, text: str, kind: str = "warn") -> None:
+        logging.getLogger("pingerplot.history").log(logging.WARNING if kind == "warn" else logging.INFO, text)
         with self._lock:
             self.problem = text
             self.problem_kind = kind

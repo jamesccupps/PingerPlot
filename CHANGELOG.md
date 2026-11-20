@@ -12,6 +12,14 @@ All notable changes to PingerPlot are recorded here. The format follows
   `.github/workflows/pypi.yml` through Trusted Publishing. `pyproject.toml` now
   gives the license as an SPDX expression (`MIT`), the form setuptools requires
   from February 2027.
+- **An error log.** The installed app has no console, so an error in the
+  window or a background thread, and the warnings from updates, the tray icon
+  and Start with Windows, went nowhere: a copy that quit early or stopped
+  recording left no trace. They now go to `error.log` in the settings folder
+  (the headless runner's to `headless-error.log`), with when PingerPlot
+  started, resumed its targets and quit, and why. It stays under 512 KB, cuts
+  every web address to its host (a webhook's secret is its path), and, run as
+  administrator, won't write through a link.
 
 ## [1.6.0] — 2026-11-17
 

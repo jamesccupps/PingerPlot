@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import logging
 import math
 import os
 import re
@@ -922,6 +923,7 @@ class Monitor:
                 self._notify()
                 self._interruptible_sleep(self.interval - (time.perf_counter() - t0), gen)
         except Exception as exc:  # never let the worker die silently
+            logging.getLogger("pingerplot.monitor").exception("the monitor for %s stopped", self.target_input)
             self._set_status(f"Monitor error: {exc!r}", gen)
         finally:
             if gen == self._generation:   # don't clobber a newer run's flag

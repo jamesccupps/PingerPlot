@@ -145,7 +145,7 @@ class Updates:
             # The installer (or the staged copy) waits for this process to
             # exit, then starts the new version with --updated, which
             # resumes the targets saved here.
-            self.app._post(self.app._quit)
+            self.app._post(lambda: self.app._quit("closing to install the update"))
         threading.Thread(target=run, daemon=True, name="pingerplot-update").start()
 
     def _failed(self, msg: str) -> None:

@@ -323,7 +323,9 @@ problem…** opens a GitHub issue form with the version filled in, which you edi
 ## Where it keeps things
 
 - `%APPDATA%\PingerPlot\` holds `settings.json` (your targets, each with its settings, and the app's options),
-  `update.log`, the history in `history\history.sqlite3`, and `lookups.json` (where routers are, kept a month).
+  `update.log`, `error.log` (errors, and when PingerPlot started and quit; the headless runner's is
+  `headless-error.log`), the history in `history\history.sqlite3`, and `lookups.json` (where routers are, kept a
+  month).
   On Linux and macOS it's `$XDG_CONFIG_HOME/PingerPlot`, usually `~/.config/PingerPlot`.
 - A portable copy keeps them beside `PingerPlot.exe` instead. Delete `portable.txt` to make it use `%APPDATA%`.
 - On Linux, the menu and sign-in entries are `~/.local/share/applications/pingerplot.desktop` and
@@ -474,6 +476,7 @@ session if you want the probes logged.
 
 | What you see | Fix |
 |---|---|
+| Something went wrong, or PingerPlot quit or stopped recording | `error.log` in the settings folder (above) has the error and when PingerPlot started and quit. Web addresses in it are cut to their host, so it's safe to attach to an issue. |
 | Loss at a hop in the middle | Usually normal: that router rate-limits the replies it generates. Only loss that reaches the destination row is a problem. |
 | "Full TCP/UDP traceroute needs Administrator" | Click **Restart as administrator** beside it (or ⋯ → Restart as administrator), or use ICMP, or TCP with **Destination only**. From source, `launch.ps1 -Elevated`. |
 | "Full TCP/UDP traceroute is Windows-only for now" (Linux, macOS) | Use ICMP, or TCP with **Destination only**. |

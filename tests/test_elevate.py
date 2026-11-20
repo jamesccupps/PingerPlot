@@ -94,7 +94,7 @@ def test_the_wait_gives_up_after_its_timeout(monkeypatch):
 def test_a_restart_that_starts_quits_this_copy(app, monkeypatch):
     quit_called = []
     monkeypatch.setattr(winplatform, "relaunch_elevated", lambda: None)
-    monkeypatch.setattr(app, "_quit", lambda: quit_called.append(True))
+    monkeypatch.setattr(app, "_quit", lambda *why: quit_called.append(True))
     app._restart_elevated()
     assert quit_called
 
@@ -105,7 +105,7 @@ def test_a_restart_that_doesnt_says_why_and_keeps_running(app, monkeypatch):
     monkeypatch.setattr(winplatform, "relaunch_elevated",
                         lambda: "Windows didn't start it as administrator: the prompt was answered No.")
     monkeypatch.setattr(gui.messagebox, "showwarning", lambda *a, **k: shown.append(a[1]))
-    monkeypatch.setattr(app, "_quit", lambda: quit_called.append(True))
+    monkeypatch.setattr(app, "_quit", lambda *why: quit_called.append(True))
     app._restart_elevated()
     assert shown and "answered No" in shown[0] and not quit_called
 

@@ -23,7 +23,7 @@ import webbrowser
 from tkinter import filedialog, messagebox, ttk
 from typing import Dict, List, Optional
 
-from . import __version__, appicon, compare as cmpmod, geoip, history, icmp, settings
+from . import __version__, appicon, compare as cmpmod, errorlog, geoip, history, icmp, settings
 from . import theme as themes, tkthreads, tray as traymod, updater, winplatform, xdg
 from . import gui_hopinfo, gui_recording, investigate, locating, trouble
 from .gui_charts import BAD_MS, WARN_MS, Ink, draw_graph, draw_map, draw_timeline, fmt_ms, row_tag
@@ -690,7 +690,7 @@ class App:
         if why:
             messagebox.showwarning("PingerPlot", why, parent=self.root)
             return
-        self._quit()
+        self._quit("closing to restart as administrator")
 
     def _tray_toggle_autostart(self) -> None:
         self.autostart_var.set(not winplatform.autostart_enabled())
@@ -1009,7 +1009,8 @@ class App:
             return
         self._quit()
 
-    def _quit(self) -> None:
+    def _quit(self, why: str = "quit") -> None:
+        errorlog.note(f"PingerPlot {__version__}: {why}, {len(self._monitors)} target(s) open")
         if self._save_job is not None:
             self.root.after_cancel(self._save_job)
             self._save_job = None
@@ -1170,6 +1171,7 @@ class App:
                 # the 1.3.x behaviour.
                 self._start(name, self._default_options())
         self.target_var.set("")
+        errorlog.note(f"{len(self._monitors)} target(s) resumed")
 
     # --- export, sessions, comparison ------------------------------------------
     def _export(self) -> None:
@@ -1770,12 +1772,18 @@ def main() -> None:
     if instance.already_running and instance.signal_existing():
         return
     updated, failed = "--updated" in argv, "--update-failed" in argv
+    errorlog.install("gui")
+    errorlog.note(f"PingerPlot {__version__} started"
+                  + (" as administrator" if winplatform.is_elevated() else "")
+                  + (" after an update" if updated else " after a failed update" if failed else "")
+                  + (", restarted by the previous copy" if restarted else ""))
     if updated or failed:
         updater.cleanup_after_update(remove_old=updated)
         updater.ulog(f"update: {__version__} started" + (" after a failed update" if failed else ""))
     # The X11 window class, so a Linux desktop matches the window to its
     # menu entry (StartupWMClass) and its icon in the dock.
     root = tk.Tk(className=xdg.WM_CLASS)
+    root.report_callback_exception = errorlog.tk_callback
     app = App(root, use_tray=True, start_minimized="--minimized" in argv,
               resume=updated or failed or restarted)
     if updated:

@@ -23,7 +23,7 @@ import time
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
-from . import __version__, compare as _compare, history, icmp
+from . import __version__, compare as _compare, errorlog, history, icmp
 from .model import csv_safe, mos, mos_label
 from .monitor import Monitor, per_target_log_path
 
@@ -599,6 +599,10 @@ def main(argv=None) -> int:
 
     print(f"PingerPlot {__version__} headless - starting "
           f"{len(cfg['targets'])} target(s). Ctrl-C to stop.")
+    # Run by Task Scheduler, nothing reads the console: errors go to a file
+    # as well (errorlog.py), beside the window's.
+    errorlog.install("headless")
+    errorlog.note(f"PingerPlot {__version__} headless started with {len(cfg['targets'])} target(s)")
     # The same history database the window uses, so its History view shows
     # what this runner recorded. A "recording" object in the config tunes it.
     recorder = history.open_recorder(cfg, "headless")

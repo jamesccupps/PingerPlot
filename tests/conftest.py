@@ -26,3 +26,12 @@ def _never_the_real_settings_folder(tmp_path, monkeypatch):
     monkeypatch.delenv("PINGERPLOT_DATA_DIR", raising=False)
     monkeypatch.setenv("APPDATA", str(tmp_path))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+
+@pytest.fixture(autouse=True)
+def _no_error_log_left_behind():
+    """A test that installs the error log (headless.main does) mustn't leave
+    its handler or exception hooks for the next."""
+    yield
+    from pingerplot import errorlog
+    errorlog.uninstall()

@@ -193,7 +193,7 @@ def test_install_downloads_applies_and_quits(found, monkeypatch, tmp_path):
     calls, quit_ = [], []
     monkeypatch.setattr(updater, "download", lambda u, progress=None: (progress(1, 1), tmp_path)[1])
     monkeypatch.setattr(updater, "apply", lambda u, path: calls.append((u.version, path)))
-    monkeypatch.setattr(found, "_quit", lambda: quit_.append(True))
+    monkeypatch.setattr(found, "_quit", lambda *why: quit_.append(True))
     found.updates.install()
     end = time.monotonic() + 5
     while not quit_ and time.monotonic() < end:
