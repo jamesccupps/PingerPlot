@@ -40,6 +40,12 @@ All notable changes to PingerPlot are recorded here. The format follows
   ring (the custom layouts had dropped it), and the update bar's buttons are
   reachable.
 
+### Fixed
+
+- **Light corners on disabled buttons** (Pause, Stop and Edit settings with
+  no target selected), and on any button hovered or pressed: the theme
+  showed clam's grey behind the buttons' rounded corners in those states.
+
 ### Changed
 
 - **Full TCP/UDP traceroute no longer puts the network card in promiscuous

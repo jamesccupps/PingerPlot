@@ -494,6 +494,12 @@ class Theme:
                          padding=(S(8), S(5)), anchor="center", font=body, width=0)
             st.configure(f"{prefix}Icon.Subtle.TButton", background=surface, foreground=c["text2"],
                          padding=(S(6), S(5)), font=self.icon_font(0))
+            # The button images have transparent rounded corners, which show
+            # the widget's background; clam swaps that for its own greys when
+            # a button is disabled, hovered or pressed, which lit the corners.
+            for button in ("TButton", "Accent.TButton", "Subtle.TButton", "Icon.Subtle.TButton"):
+                st.map(f"{prefix}{button}",
+                       background=[("disabled", surface), ("pressed", surface), ("active", surface)])
             st.configure(f"{prefix}TCheckbutton", background=surface, foreground=c["text"],
                          padding=(0, S(2)), font=body)
             st.map(f"{prefix}TCheckbutton", background=[("active", surface)])
