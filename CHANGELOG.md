@@ -4,7 +4,11 @@ All notable changes to PingerPlot are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.7.0] — 2026-11-20
+
+An error log, alerts that say where the trouble is, trouble several targets
+share, keyboard access, a TCP/UDP capture that leaves the network card out of
+promiscuous mode, one copy at a time on Linux, and releases on PyPI.
 
 ### Added
 
@@ -912,6 +916,7 @@ have relied on — see **Changed** before comparing old exports with new ones.
 
 - Initial public release.
 
+[1.7.0]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.7.0
 [1.6.0]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.6.0
 [1.5.2]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.5.2
 [1.5.1]: https://github.com/jamesccupps/PingerPlot/releases/tag/v1.5.1
